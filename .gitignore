@@ -1,0 +1,51 @@
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+credentials/
+secrets/
+tokens/
+.garminconnect/
+.garth/
+
+# Personal health data, imported archives, photos, and backups
+data/
+imports/
+exports/
+backups/
+uploads/
+photos/
+*.fit
+*.tcx
+*.gpx
+*.zip
+*.csv
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Frontend
+node_modules/
+dist/
+build/
+coverage/
+
+# Local machine and logs
+.DS_Store
+*.log
+.idea/
+.vscode/
