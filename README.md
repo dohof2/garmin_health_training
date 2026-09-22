@@ -2,7 +2,10 @@
 
 A planned local application for personal health, training, and nutrition, built around Garmin history and user-defined goals.
 
-**Status: planning.** No application has been implemented yet.
+**Status: foundation implementation has started.** The repository now contains a
+local React/TypeScript interface, a Python/FastAPI backend, and a versioned SQLite
+schema. Garmin import, synchronization, dashboards, and AI features are not yet
+implemented.
 
 ## Project plan
 
@@ -30,7 +33,33 @@ React/TypeScript interface, Python/FastAPI backend, SQLite storage, local AI thr
 2. Validate Garmin archive formats, online integration, workout compatibility, and local model performance.
 3. Build the import/export and synchronization foundation, then graphs and the historical AI assistant.
 
-There are no install or run commands yet. Development begins after the planning review.
+## Local development
+
+Prerequisites: Python 3.13 and Node.js 24.
+
+```sh
+make setup
+make seed
+```
+
+`make seed` loads an idempotent, clearly labeled synthetic dataset containing
+three activities, four activity samples, and fourteen daily health metrics. It
+does not require Garmin credentials and does not overwrite non-synthetic data.
+
+Start the backend in one Terminal window:
+
+```sh
+make backend
+```
+
+Start the frontend in a second Terminal window:
+
+```sh
+make frontend
+```
+
+Then open `http://127.0.0.1:5173`. Run `make test` for the database migration
+test and TypeScript checks, or `make build` for a production frontend build.
 
 ## Personal data
 
