@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
+from typing import Iterator
 
 from .config import database_path
 
@@ -9,7 +11,8 @@ from .config import database_path
 MIGRATIONS_DIRECTORY = Path(__file__).resolve().parent / "migrations"
 
 
-def connect(path: Path | None = None) -> sqlite3.Connection:
+@contextmanager
+def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open the local SQLite database with safe application defaults."""
     target = path or database_path()
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -19,7 +22,14 @@ def connect(path: Path | None = None) -> sqlite3.Connection:
     connection.execute("PRAGMA foreign_keys = ON")
     connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA busy_timeout = 5000")
-    return connection
+    try:
+        yield connection
+        connection.commit()
+    except Exception:
+        connection.rollback()
+        raise
+    finally:
+        connection.close()
 
 
 def migrate(path: Path | None = None) -> list[str]:

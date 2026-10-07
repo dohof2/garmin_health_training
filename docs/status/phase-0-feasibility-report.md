@@ -1,7 +1,7 @@
 # Phase 0 Feasibility Report
 
-Date: 19 September 2026
-Status: Assessment completed with explicit validation gates. No application implementation, Garmin login, workout publication, or GitHub publication was performed.
+Date: 19 September 2026; Garmin archive evidence updated 6 October 2026
+Status: Initial assessment completed and real Garmin archive validated. Garmin login, workout publication, and GitHub publication have not been performed.
 
 ## Outcome
 
@@ -33,16 +33,18 @@ Installed runtime baseline: Python 3.13.15 from Python.org and Node.js 24.21.0 L
 
 ## T1.2 — Garmin archive inspection
 
-Status: unresolved external input, expected and non-blocking for foundation work.
+Status: complete on 6 October 2026.
 
-The full Garmin export has already been requested and is awaiting delivery. When it arrives, inspect it locally without committing it to Git. Required evidence remains:
+The original 200,606,293-byte Garmin ZIP is stored in the ignored local data
+directory. Its CRC test passed, all 285 JSON files parsed successfully, and the
+outer and eight nested archives contain no traversal paths or symbolic links.
+The export includes 1,054 unique summarized activities (30 January 2012 through
+29 September 2026 UTC), 3,050 daily summaries, 2,908 sleep records, and 55,448
+nested FIT files, plus GPX, TCX, training metrics, routes, workouts, gear, and
+other account data. The original file was not extracted or modified.
 
-- Archive parts, nested archives, formats, and extraction sizes.
-- Per-data-type date coverage for health and activities.
-- Representative JSON schemas and supported/unsupported files.
-- Counts and sampled values used to validate import accuracy.
-
-Garmin documents account/activity export options including original FIT data and TCX/GPX exports. Archive-specific support must still be based on the user's real export, not documentation assumptions. [Garmin export guidance](https://support.garmin.com/en-AU/?faq=W1TvTPW8JZ6LfJSfK512Q8)
+Detailed privacy-safe evidence, counts, date coverage, checksum, and importer
+implications are recorded in [`garmin-export-inventory.md`](garmin-export-inventory.md).
 
 ## T1.3 — Garmin Connect coverage assessment
 
@@ -107,7 +109,10 @@ Proceeding to the local foundation is reasonable. Phase 1 work can start with sy
 
 Open validation gates:
 
-1. **U1:** Inspect and validate the real Garmin export.
-2. **U2:** Test Garmin authentication and small read-only queries.
-3. **Local AI:** Run the Ollama benchmark in a normal user session outside the Codex sandbox.
-These gates block claims about real archive completeness, live account coverage, and usable local-model performance. They do not block database design, synthetic import fixtures, the dashboard framework, maintenance storage, or provider-neutral AI interfaces.
+1. **U2:** Test Garmin authentication and small read-only queries.
+2. **Local AI:** Run the Ollama benchmark in a normal user session outside the Codex sandbox.
+
+The U1 archive gate is complete. The remaining gates block claims about live
+account coverage and usable local-model performance. They do not block real
+archive importer implementation, database design, dashboards, maintenance
+storage, or provider-neutral AI interfaces.

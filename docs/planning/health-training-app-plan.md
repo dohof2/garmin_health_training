@@ -286,6 +286,9 @@ Avoid a firm delivery estimate until phase 0 resolves the biggest risks: Garmin 
 
 Open details for feasibility: hardware specifications, representative Garmin archive and Garmin Connect data-type coverage, and whether weekly calories should use a different definition from the proposed energy-expenditure view. Personal goals and training preferences will be collected in the app when relevant, not as prerequisites for this plan.
 
-**Garmin export status:** Requested by the user; awaiting Garmin delivery. No further export request is needed at present. Archive-specific validation can wait while independent implementation work proceeds once requested.
+**Garmin export status:** Received and inspected locally on 6 October 2026. The
+original ZIP is excluded from Git and passed integrity and archive-safety checks.
+Counts, coverage, and importer implications are recorded in
+[`../status/garmin-export-inventory.md`](../status/garmin-export-inventory.md).
 
 **Next step after review:** Begin feasibility work when requested. The repository and planning documents are prepared locally; application implementation and Garmin account connection have not started. GitHub publication is deferred.

@@ -8,11 +8,14 @@ Based on the [reviewed application plan](health-training-app-plan.md). All devel
 
 **You do not need to decide technical details or complete a personal-health questionnaire before development.** I can build the foundation, interface, parsers, calculations, and tests independently. Your archive and Garmin sign-in are needed to verify that the integration works with your actual data.
 
-**U1 status: export requested; awaiting Garmin delivery.** No action is needed from you on this item until the archive arrives. This does not block foundation or synthetic-data development once implementation is requested.
+**U1 status: complete.** The original Garmin ZIP is available locally, excluded
+from Git, and passed integrity, archive-safety, schema, count, and date-coverage
+inspection on 6 October 2026. See
+[`../status/garmin-export-inventory.md`](../status/garmin-export-inventory.md).
 
 | ID | Your input or action | When needed | What it blocks if unavailable |
 |---|---|---|---|
-| U1 | Provide a full Garmin account export, preferably as the original ZIP/parts. You can place it locally and give its path; it does not need to be uploaded into chat or GitHub. | Early import validation | Complete verification of your archive layout and history coverage; synthetic-data development can continue |
+| U1 | Provide a full Garmin account export, preferably as the original ZIP/parts. | ✅ Complete | The ignored local archive is now the source for importer implementation and validation |
 | U2 | Sign in to Garmin through the local connection flow and complete any verification/MFA yourself. Do not send passwords or codes in chat. | Live synchronization test | Actual account synchronization; manual import, dashboard, and offline analysis can continue |
 | U3 | Removed: Garmin Connect is the sole source. No device or sensor details are required for ingestion. | No input needed | Nothing |
 | U4 | Deferred: decide whether background operation is wanted in a later edition. The first edition has none and no automatic startup. | Future iteration only | Nothing in the first edition |
@@ -52,7 +55,7 @@ Existing decisions remain settled: computer first, bulk import first, account-wi
 
 **First useful release: M1–M3A**, after relevant feasibility checks. M4–M6 complete the initial full application. Background operation/automatic startup, phone access, WhatsApp, and AI-added dashboard graphs are later work. T11 is numbered separately to preserve existing task references, but executes alongside/after T6, before the daily-use release.
 
-Dependency sequence: data foundation → import/sync → dashboard and historical analysis → training and nutrition → daily-use validation. The architecture and synthetic-data UI can proceed while awaiting U1/U2. Food logging can be developed independently once storage is ready. This describes task dependencies, not authorization to launch parallel agents.
+Dependency sequence: data foundation → import/sync → dashboard and historical analysis → training and nutrition → daily-use validation. U1 is complete, so the importer can now be developed and verified against the real archive. Live Garmin synchronization still waits for U2. Food logging can be developed independently once storage is ready. This describes task dependencies, not authorization to launch parallel agents.
 
 Feasibility has separate gates: imports need a representative archive, live sync needs login, and local AI needs hardware benchmarking. A blocked gate must not stop unrelated work. An unavailable automatic integration remains an unmet requirement even when file import works; report the limitation and review options rather than declaring it complete.
 
@@ -233,6 +236,6 @@ Done when chat can log/query/correct records reliably, users can inspect the his
 
 ## 6. Suggested review
 
-Review the milestone order and the input table first. There is no need to answer the future training or nutrition questions now. **U1, your full Garmin export, has already been requested and is pending delivery.** Once it arrives, provide its local path. Garmin login is needed later for live validation. Hardware information can be inspected locally.
+Review the milestone order and the input table first. There is no need to answer the future training or nutrition questions now. **U1, the full Garmin export, is available and its initial inventory is complete.** Garmin login is needed later for live validation. Hardware information can be inspected locally.
 
 After this backlog is accepted and implementation is requested, I can start the foundation and synthetic-data work while the archive is being prepared. I will ask for user-only actions at the point they become necessary, continue independent work when possible, and keep unresolved requirements visible.
