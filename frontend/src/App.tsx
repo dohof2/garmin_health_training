@@ -209,6 +209,34 @@ type GarminConnection = {
   updated_at: string;
 };
 
+type UserProfile = {
+  display_name: string | null;
+  timezone: string | null;
+  preferred_distance_unit: "km" | "mi";
+  preferred_weight_unit: "kg" | "lb";
+  birth_date: string | null;
+  sex: string | null;
+  height_cm: number | null;
+  weight_kg: number | null;
+  updated_at: string | null;
+};
+
+type UserGoal = {
+  id: string | null;
+  goal_type: string;
+  title: string;
+  target_value: number | null;
+  target_unit: string | null;
+  target_date: string | null;
+  status: "active" | "paused" | "achieved";
+  notes: string | null;
+};
+
+type AppSettings = {
+  profile: UserProfile;
+  goals: UserGoal[];
+};
+
 type ConnectionState =
   | { kind: "checking" }
   | {
@@ -222,6 +250,7 @@ type ConnectionState =
       syncStatus: SyncStatus;
       syncPlan: SyncPlan;
       garminConnection: GarminConnection;
+      settings: AppSettings;
     }
   | { kind: "offline" };
 
@@ -352,6 +381,16 @@ const formatDuration = (seconds: number | null) => {
   return hours ? `${hours}h ${minutes}m` : `${minutes} min`;
 };
 
+const formatDistance = (meters: number, unit: "km" | "mi") =>
+  unit === "mi"
+    ? `${(meters / 1609.344).toFixed(1)} mi`
+    : `${(meters / 1000).toFixed(1)} km`;
+
+const formatSpeed = (metersPerSecond: number, unit: "km" | "mi") =>
+  unit === "mi"
+    ? `${(metersPerSecond * 2.236936).toFixed(1)} mph`
+    : `${(metersPerSecond * 3.6).toFixed(1)} km/h`;
+
 type DateRangeFilterProps = {
   start: string;
   end: string;
@@ -409,7 +448,13 @@ function DateRangeFilter({
   );
 }
 
-function ActivityDetailPanel({ activity }: { activity: ActivityDetail }) {
+function ActivityDetailPanel({
+  activity,
+  distanceUnit,
+}: {
+  activity: ActivityDetail;
+  distanceUnit: "km" | "mi";
+}) {
   const summary = activity.sample_summary;
   const details = [
     ["Duration", formatDuration(activity.duration_seconds)],
@@ -417,7 +462,7 @@ function ActivityDetailPanel({ activity }: { activity: ActivityDetail }) {
       "Distance",
       activity.distance_meters === null
         ? "Not recorded"
-        : `${(activity.distance_meters / 1000).toFixed(1)} km`,
+        : formatDistance(activity.distance_meters, distanceUnit),
     ],
     [
       "Calories",
@@ -453,7 +498,7 @@ function ActivityDetailPanel({ activity }: { activity: ActivityDetail }) {
       "Maximum speed",
       summary.maximum_speed_mps === null
         ? "Not recorded"
-        : `${(summary.maximum_speed_mps * 3.6).toFixed(1)} km/h`,
+        : formatSpeed(summary.maximum_speed_mps, distanceUnit),
     ],
   ];
 
@@ -504,6 +549,9 @@ export default function App() {
   const [garminMfaCode, setGarminMfaCode] = useState("");
   const [isConnectingGarmin, setIsConnectingGarmin] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+  const [settingsDraft, setSettingsDraft] = useState<AppSettings | null>(null);
+  const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
+  const [isSavingSettings, setIsSavingSettings] = useState(false);
   const scheduledSyncInFlight = useRef(false);
 
   useEffect(() => {
@@ -521,8 +569,9 @@ export default function App() {
       fetch("/api/sync/status", { signal: controller.signal }),
       fetch("/api/sync/plan", { signal: controller.signal }),
       fetch("/api/garmin/connection", { signal: controller.signal }),
+      fetch("/api/settings", { signal: controller.signal }),
     ])
-      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse, garminConnectionResponse]) => {
+      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse, garminConnectionResponse, settingsResponse]) => {
         if (
           !healthResponse.ok ||
           !summaryResponse.ok ||
@@ -532,11 +581,12 @@ export default function App() {
           !originalsResponse.ok ||
           !syncStatusResponse.ok ||
           !syncPlanResponse.ok ||
-          !garminConnectionResponse.ok
+          !garminConnectionResponse.ok ||
+          !settingsResponse.ok
         ) {
           throw new Error("Backend is unavailable");
         }
-        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection] = await Promise.all([
+        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection, settings] = await Promise.all([
           healthResponse.json() as Promise<HealthResponse>,
           summaryResponse.json() as Promise<HistorySummary>,
           weeklyResponse.json() as Promise<WeeklyCalories | null>,
@@ -546,6 +596,7 @@ export default function App() {
           syncStatusResponse.json() as Promise<SyncStatus>,
           syncPlanResponse.json() as Promise<SyncPlan>,
           garminConnectionResponse.json() as Promise<GarminConnection>,
+          settingsResponse.json() as Promise<AppSettings>,
         ]);
         setConnection({
           kind: "ready",
@@ -558,7 +609,9 @@ export default function App() {
           syncStatus,
           syncPlan,
           garminConnection,
+          settings,
         });
+        setSettingsDraft(settings);
         if (summary.activity_date_end) {
           setActivityRange((current) =>
             current.end
@@ -638,6 +691,7 @@ export default function App() {
   const syncPlanValue = connection.kind === "ready" ? connection.syncPlan : null;
   const garminConnectionValue =
     connection.kind === "ready" ? connection.garminConnection : null;
+  const preferredDistanceUnit = settingsDraft?.profile.preferred_distance_unit ?? "km";
   const dataModeLabel =
     summary?.data_mode === "synthetic"
       ? "Synthetic data · not Garmin data"
@@ -680,6 +734,92 @@ export default function App() {
     } catch {
       return "The local request failed.";
     }
+  };
+
+  const saveProfileSettings = async () => {
+    if (!settingsDraft) return;
+    setIsSavingSettings(true);
+    setSettingsMessage(null);
+    try {
+      const response = await fetch("/api/settings/profile", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settingsDraft.profile),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const profile = (await response.json()) as UserProfile;
+      setSettingsDraft((current) => current ? { ...current, profile } : current);
+      setConnection((current) => current.kind === "ready"
+        ? { ...current, settings: { ...current.settings, profile } }
+        : current);
+      setSettingsMessage("Profile settings saved locally.");
+    } catch (error: unknown) {
+      setSettingsMessage(error instanceof Error ? error.message : "Profile settings could not be saved.");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const saveGoalSettings = async () => {
+    if (!settingsDraft) return;
+    setIsSavingSettings(true);
+    setSettingsMessage(null);
+    try {
+      const response = await fetch("/api/settings/goals", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goals: settingsDraft.goals }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const goals = (await response.json()) as UserGoal[];
+      setSettingsDraft((current) => current ? { ...current, goals } : current);
+      setConnection((current) => current.kind === "ready"
+        ? { ...current, settings: { ...current.settings, goals } }
+        : current);
+      setSettingsMessage("Training goals saved locally.");
+    } catch (error: unknown) {
+      setSettingsMessage(error instanceof Error ? error.message : "Training goals could not be saved.");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const addGoal = () => {
+    setSettingsDraft((current) => current
+      ? {
+          ...current,
+          goals: [
+            ...current.goals,
+            {
+              id: null,
+              goal_type: "general",
+              title: "",
+              target_value: null,
+              target_unit: null,
+              target_date: null,
+              status: "active",
+              notes: null,
+            },
+          ],
+        }
+      : current);
+  };
+
+  const updateGoal = (index: number, update: Partial<UserGoal>) => {
+    setSettingsDraft((current) => current
+      ? {
+          ...current,
+          goals: current.goals.map((goal, goalIndex) =>
+            goalIndex === index ? { ...goal, ...update } : goal,
+          ),
+        }
+      : current);
+  };
+
+  const removeGoal = (index: number) => {
+    setSettingsDraft((current) => current
+      ? { ...current, goals: current.goals.filter((_, goalIndex) => goalIndex !== index) }
+      : current);
   };
 
   const saveDashboardCards = async (nextCards: DashboardCardLayout[]) => {
@@ -1134,12 +1274,19 @@ export default function App() {
 
   return (
     <main>
-      <header className="hero">
+      <nav className="app-navigation" aria-label="Main navigation">
+        <a href="#dashboard">Dashboard</a>
+        <a href="#activities">Activities</a>
+        <a href="#sync">Sync</a>
+        <a href="#data">Data</a>
+        <a href="#settings">Settings</a>
+      </nav>
+      <header className="hero" id="dashboard">
         <p className="eyebrow">Personal health workspace</p>
         <h1>Your training history,<br />kept close.</h1>
         <p className="intro">
-          The local foundation and first Garmin importer are ready. Your source
-          archive stays private while normalized history powers this dashboard.
+          Your imported history and live Garmin updates stay on this computer
+          while normalized records power the dashboard and future assistant.
         </p>
         <div className={`connection connection--${connection.kind}`}>
           <span aria-hidden="true" />
@@ -1147,7 +1294,7 @@ export default function App() {
         </div>
       </header>
 
-      <section className="sync" aria-labelledby="sync-title">
+      <section className="sync" id="sync" aria-labelledby="sync-title">
         <div className="section-heading sync-heading">
           <div>
             <p>Garmin synchronization</p>
@@ -1403,7 +1550,7 @@ export default function App() {
         </div>
       </section>
 
-      <section className="activities" aria-labelledby="activities-title">
+      <section className="activities" id="activities" aria-labelledby="activities-title">
         <div className="section-heading activities-heading">
           <div>
             <p>Activity history</p>
@@ -1447,7 +1594,7 @@ export default function App() {
                 formatDuration(activity.duration_seconds),
                 activity.distance_meters === null
                   ? null
-                  : `${(activity.distance_meters / 1000).toFixed(1)} km`,
+                  : formatDistance(activity.distance_meters, preferredDistanceUnit),
                 activity.calories_kcal === null
                   ? null
                   : `${Math.round(activity.calories_kcal).toLocaleString()} kcal`,
@@ -1476,7 +1623,10 @@ export default function App() {
                     <p className="activity-detail-message activity-message--error">{activityDetail.message}</p>
                   )}
                   {activityDetail.kind === "ready" && activityDetail.activity.id === activity.id && (
-                    <ActivityDetailPanel activity={activityDetail.activity} />
+                    <ActivityDetailPanel
+                      activity={activityDetail.activity}
+                      distanceUnit={preferredDistanceUnit}
+                    />
                   )}
                 </article>
               );
@@ -1485,7 +1635,7 @@ export default function App() {
         )}
       </section>
 
-      <section className="coverage" aria-labelledby="coverage-title">
+      <section className="coverage" id="data" aria-labelledby="coverage-title">
         <div className="section-heading">
           <div>
             <p>Import coverage</p>
@@ -1719,6 +1869,219 @@ export default function App() {
             ).toLocaleString()}.
           </p>
         )}
+      </section>
+
+      <section className="settings" id="settings" aria-labelledby="settings-title">
+        <div className="section-heading">
+          <div>
+            <p>Personal settings</p>
+            <h2 id="settings-title">Profile and training goals</h2>
+          </div>
+        </div>
+        {!settingsDraft ? (
+          <p className="settings-message">Settings are available when the local backend is running.</p>
+        ) : (
+          <div className="settings-layout">
+            <form
+              className="settings-panel"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveProfileSettings();
+              }}
+            >
+              <div className="settings-panel-heading">
+                <div>
+                  <span>Profile</span>
+                  <h3>Optional personal details</h3>
+                </div>
+                <button type="submit" disabled={isSavingSettings}>Save profile</button>
+              </div>
+              <p>These values stay in the local database and can guide later planning.</p>
+              <div className="settings-fields">
+                <label>
+                  Display name
+                  <input
+                    type="text"
+                    maxLength={80}
+                    value={settingsDraft.profile.display_name ?? ""}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, display_name: event.target.value || null },
+                    })}
+                  />
+                </label>
+                <label>
+                  Timezone
+                  <input
+                    type="text"
+                    value={settingsDraft.profile.timezone ?? browserTimeZone}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, timezone: event.target.value || null },
+                    })}
+                  />
+                </label>
+                <label>
+                  Distance unit
+                  <select
+                    value={settingsDraft.profile.preferred_distance_unit}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, preferred_distance_unit: event.target.value as "km" | "mi" },
+                    })}
+                  >
+                    <option value="km">Kilometres</option>
+                    <option value="mi">Miles</option>
+                  </select>
+                </label>
+                <label>
+                  Weight unit
+                  <select
+                    value={settingsDraft.profile.preferred_weight_unit}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, preferred_weight_unit: event.target.value as "kg" | "lb" },
+                    })}
+                  >
+                    <option value="kg">Kilograms</option>
+                    <option value="lb">Pounds</option>
+                  </select>
+                </label>
+                <label>
+                  Birth date
+                  <input
+                    type="date"
+                    value={settingsDraft.profile.birth_date ?? ""}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, birth_date: event.target.value || null },
+                    })}
+                  />
+                </label>
+                <label>
+                  Sex or gender
+                  <input
+                    type="text"
+                    maxLength={40}
+                    value={settingsDraft.profile.sex ?? ""}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, sex: event.target.value || null },
+                    })}
+                  />
+                </label>
+                <label>
+                  Height (cm)
+                  <input
+                    type="number"
+                    min="50"
+                    max="260"
+                    step="0.1"
+                    value={settingsDraft.profile.height_cm ?? ""}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, height_cm: event.target.value ? Number(event.target.value) : null },
+                    })}
+                  />
+                </label>
+                <label>
+                  Weight (kg)
+                  <input
+                    type="number"
+                    min="20"
+                    max="500"
+                    step="0.1"
+                    value={settingsDraft.profile.weight_kg ?? ""}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      profile: { ...settingsDraft.profile, weight_kg: event.target.value ? Number(event.target.value) : null },
+                    })}
+                  />
+                </label>
+              </div>
+            </form>
+
+            <form
+              className="settings-panel settings-panel--goals"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveGoalSettings();
+              }}
+            >
+              <div className="settings-panel-heading">
+                <div>
+                  <span>Goals</span>
+                  <h3>Training direction</h3>
+                </div>
+                <div className="settings-actions">
+                  <button className="secondary-action" type="button" onClick={addGoal}>Add goal</button>
+                  <button type="submit" disabled={isSavingSettings}>Save goals</button>
+                </div>
+              </div>
+              {settingsDraft.goals.length === 0 ? (
+                <p>No goals saved. Goals are optional and can be added when useful.</p>
+              ) : settingsDraft.goals.map((goal, index) => (
+                <fieldset className="goal-editor" key={goal.id ?? `new-${index}`}>
+                  <legend>Goal {index + 1}</legend>
+                  <div className="settings-fields">
+                    <label>
+                      Title
+                      <input
+                        type="text"
+                        required
+                        maxLength={120}
+                        value={goal.title}
+                        onChange={(event) => updateGoal(index, { title: event.target.value })}
+                      />
+                    </label>
+                    <label>
+                      Type
+                      <select value={goal.goal_type} onChange={(event) => updateGoal(index, { goal_type: event.target.value })}>
+                        <option value="general">General</option>
+                        <option value="cycling">Cycling</option>
+                        <option value="running">Running</option>
+                        <option value="strength">Strength</option>
+                        <option value="health">Health</option>
+                      </select>
+                    </label>
+                    <label>
+                      Target
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={goal.target_value ?? ""}
+                        onChange={(event) => updateGoal(index, { target_value: event.target.value ? Number(event.target.value) : null })}
+                      />
+                    </label>
+                    <label>
+                      Target unit
+                      <input type="text" maxLength={30} value={goal.target_unit ?? ""} onChange={(event) => updateGoal(index, { target_unit: event.target.value || null })} />
+                    </label>
+                    <label>
+                      Target date
+                      <input type="date" value={goal.target_date ?? ""} onChange={(event) => updateGoal(index, { target_date: event.target.value || null })} />
+                    </label>
+                    <label>
+                      Status
+                      <select value={goal.status} onChange={(event) => updateGoal(index, { status: event.target.value as UserGoal["status"] })}>
+                        <option value="active">Active</option>
+                        <option value="paused">Paused</option>
+                        <option value="achieved">Achieved</option>
+                      </select>
+                    </label>
+                  </div>
+                  <label className="goal-notes">
+                    Notes
+                    <textarea maxLength={1000} value={goal.notes ?? ""} onChange={(event) => updateGoal(index, { notes: event.target.value || null })} />
+                  </label>
+                  <button className="remove-goal" type="button" onClick={() => removeGoal(index)}>Remove goal</button>
+                </fieldset>
+              ))}
+            </form>
+          </div>
+        )}
+        {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
       </section>
 
       <section className="foundation" aria-labelledby="foundation-title">

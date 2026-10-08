@@ -2,7 +2,7 @@
 
 A planned local application for personal health, training, and nutrition, built around Garmin history and user-defined goals.
 
-**Status: foundation and full safe Garmin-history import are implemented.** The repository
+**Status: local foundation, full safe Garmin-history import, dashboard, and live synchronization are implemented.** The repository
 contains a local React/TypeScript interface, a Python/FastAPI backend, a versioned
 SQLite schema, and safe idempotent importers for Garmin activities, daily and
 sleep metrics, GPX/TCX tracks, detailed activity FIT samples, and compact FIT
@@ -14,19 +14,21 @@ Garmin calories-burned card, reusable 30/90/all date filtering, expandable
 activity details with explicit missing values, and a consolidated
 coverage/failure view backed by durable import checkpoints. Date-filtered CSV,
 versioned JSON, backup ZIP, restore preview, and preserved-original downloads
-are available from the Import / Export screen. The synchronization foundation
-and Sync now interface are implemented
-with full-gap daily checkpoints, overlap refresh, restart recovery, and
-historical reconciliation; private Garmin login and live retrieval are the
-remaining sync steps. Dashboard cards can be reordered, hidden, and
+are available from the Import / Export screen. Live synchronization uses
+private local Garmin authentication, per-data-type full-gap checkpoints, a
+three-day overlap, restart recovery, historical reconciliation, and original
+FIT detail retrieval for activities missing sensor samples. It currently
+refreshes activities, daily summaries, sleep, HRV, and weight/body-composition
+data. Dashboard cards can be reordered, hidden, and
 restored, with the saved layout persisted locally in SQLite. Activity calendar
 dates follow the browser's validated IANA timezone, including daylight-saving
-transitions; date-only Garmin health metrics retain their original dates. AI
-features remain future work.
+transitions; date-only Garmin health metrics retain their original dates.
+Optional local profile fields and multiple training goals can be edited from
+the Settings section. AI features remain future work.
 
 ## Project plan
 
-Read the [review plan](docs/planning/health-training-app-plan.md) for the requirements, architecture proposal, implementation phases, acceptance criteria, integration limitations, and open decisions. The [implementation backlog](docs/planning/implementation-tasks-and-your-input.md), [progress tracker](docs/status/progress_status.md), [feasibility report](docs/status/phase-0-feasibility-report.md), privacy-safe [Garmin export inventory](docs/status/garmin-export-inventory.md), and final [import coverage report](docs/status/import-coverage.md) are stored alongside it in logical documentation folders.
+Read the [review plan](docs/planning/health-training-app-plan.md) for the requirements, architecture proposal, implementation phases, acceptance criteria, integration limitations, and open decisions. The [implementation backlog](docs/planning/implementation-tasks-and-your-input.md), [progress tracker](docs/status/progress_status.md), [feasibility report](docs/status/phase-0-feasibility-report.md), [live-data coverage](docs/status/live-data-coverage.md), privacy-safe [Garmin export inventory](docs/status/garmin-export-inventory.md), and final [import coverage report](docs/status/import-coverage.md) are stored alongside it in logical documentation folders.
 
 ## Planned capabilities
 
@@ -42,7 +44,10 @@ Read the [review plan](docs/planning/health-training-app-plan.md) for the requir
 
 ## Proposed architecture
 
-React/TypeScript interface, Python/FastAPI backend, SQLite storage, local AI through Ollama, and a scoped local MCP server. These choices remain subject to the plan review and feasibility checks.
+React/TypeScript interface, Python/FastAPI backend, SQLite storage, a
+provider-neutral AI layer, and scoped read-only query tools. Ollama is installed
+and benchmarked locally; the final AI provider selection remains explicit
+before T6 integration.
 
 ## Next steps
 

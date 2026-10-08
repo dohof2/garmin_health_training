@@ -73,6 +73,8 @@ class FakeGarmin:
             "totalSteps": 8000,
             "totalKilocalories": 2200,
             "restingHeartRate": 52,
+            "bodyBatteryAtWakeTime": 72,
+            "avgWakingRespirationValue": 14.2,
         }
 
     def get_activities_by_date(self, start: str, end: str):
@@ -89,6 +91,54 @@ class FakeGarmin:
                 "lastUpdated": f"{end} 09:00:00",
             }
         ]
+
+    def get_sleep_data(self, calendar_date: str):
+        return {
+            "dailySleepDTO": {
+                "calendarDate": calendar_date,
+                "sleepTimeSeconds": 25_200,
+                "deepSleepSeconds": 3_600,
+                "lightSleepSeconds": 16_200,
+                "remSleepSeconds": 5_400,
+                "awakeSleepSeconds": 900,
+                "unmeasurableSleepSeconds": 0,
+                "sleepStartTimestampGMT": 1_759_882_400_000,
+                "sleepEndTimestampGMT": 1_759_907_600_000,
+                "averageRespirationValue": 14.1,
+                "avgSleepStress": 18,
+                "restingHeartRate": 51,
+                "sleepScores": {"overall": {"value": 82}},
+            },
+            "avgOvernightHrv": 47,
+            "bodyBatteryChange": 42,
+        }
+
+    def get_hrv_data(self, calendar_date: str):
+        return {
+            "hrvSummary": {
+                "calendarDate": calendar_date,
+                "weeklyAvg": 45,
+                "lastNightAvg": 47,
+                "lastNight5MinHigh": 68,
+            }
+        }
+
+    def get_weigh_ins(self, start: str, end: str):
+        return {
+            "dailyWeightSummaries": [
+                {
+                    "allWeightMetrics": [
+                        {
+                            "samplePk": 99,
+                            "timestampGMT": 1_759_903_200_000,
+                            "weight": 75_400,
+                            "bmi": 23.8,
+                            "bodyFat": 18.5,
+                        }
+                    ]
+                }
+            ]
+        }
 
 
 @contextmanager
@@ -173,8 +223,35 @@ class GarminConnectionTests(unittest.TestCase):
         self.assertEqual(activities[0]["started_at"], "2026-10-08T06:00:00Z")
         self.assertEqual(
             {metric["metric_type"] for metric in metrics},
-            {"steps", "total_calories", "resting_heart_rate"},
+            {
+                "steps",
+                "total_calories",
+                "resting_heart_rate",
+                "body_battery_at_wake",
+                "waking_respiration",
+            },
         )
+        self.assertTrue(all(metric["source_record_id"] == "daily:2026-10-08" for metric in metrics))
+
+    def test_live_provider_normalises_sleep_hrv_and_weight(self) -> None:
+        provider = GarminConnectProvider(FakeGarmin())
+        day = date(2026, 10, 8)
+
+        sleep = provider.fetch("sleep_metrics", day, day)
+        hrv = provider.fetch("hrv_metrics", day, day)
+        weight = provider.fetch("weight_metrics", day, day)
+
+        self.assertIn("sleep_score", {metric["metric_type"] for metric in sleep})
+        self.assertIn("sleep_hrv_average", {metric["metric_type"] for metric in sleep})
+        self.assertEqual(
+            {metric["metric_type"] for metric in hrv},
+            {"hrv_last_night_average", "hrv_last_night_5min_high", "hrv_weekly_average"},
+        )
+        self.assertEqual(
+            {metric["metric_type"] for metric in weight},
+            {"weight", "bmi", "body_fat"},
+        )
+        self.assertEqual(next(metric["value"] for metric in weight if metric["metric_type"] == "weight"), 75.4)
 
     def test_authentication_errors_are_sanitized(self) -> None:
         with tempfile.TemporaryDirectory() as temporary, _local_data(Path(temporary)):

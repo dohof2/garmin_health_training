@@ -1,11 +1,11 @@
 # Phase 0 Feasibility Report
 
-Date: 19 September 2026; Garmin archive evidence updated 6 October 2026
-Status: Initial assessment completed and real Garmin archive validated. Garmin login, workout publication, and GitHub publication have not been performed.
+Date: 19 September 2026; evidence updated 8 October 2026
+Status: Feasibility confirmed. The real archive, private Garmin login, live read-only synchronization, and local text/tool inference have been validated. Workout publication remains deliberately untested until T8.
 
 ## Outcome
 
-The planned local application is feasible on this computer. The machine has enough storage and memory for the application stack, SQLite data, historical imports, charts, and a small local model. The largest remaining risks are the real Garmin archive schemas, live Garmin Connect behavior, and representative Ollama inference outside the Codex sandbox.
+The planned local application is feasible on this computer. The machine has enough storage and memory for the application stack, SQLite data, historical imports, charts, and a small local model. The archive and live Garmin foundations now operate on the real account. The remaining AI decision is whether to use the local model, the OpenAI API, or a provider-selectable combination.
 
 Phase 0 does not authorize Phase 1 automatically. It records evidence and makes unresolved dependencies visible.
 
@@ -65,14 +65,18 @@ Limitations:
 - Documentation establishes candidate methods, not what this Garmin account actually exposes.
 - Endpoints may change without notice because the integration is unofficial.
 - Not all data types necessarily support efficient range or updated-since queries.
-- Account-specific fields, empty responses, correction detection, rate limits, and deletion semantics require read-only live testing.
-- Full data-type/date coverage remains a T1.4/U2 validation item.
+- The implemented account-specific coverage, archive-only categories, and source limits are recorded in [`live-data-coverage.md`](live-data-coverage.md).
+- Detailed epoch arrays for sleep, HRV, Body Battery, respiration, and SpO₂ remain a future expansion; scalar daily/nightly summaries are live.
 
 ## T1.4 — Live Garmin login and read-only query
 
-Status: intentionally not performed. This requires U2.
+Status: complete for login and live read-only access.
 
-The first live test must use the application's local sign-in flow. The user enters credentials and MFA privately; credentials or codes must never be sent through chat or stored in Git. Begin with a small read-only query and record authentication, token renewal, retry, rate-limit, and returned-field behavior.
+The application established a private local session without storing the password,
+saved owner-only tokens, and completed read-only account queries. Live synchronization
+now covers activities, daily summaries, sleep, HRV, and weight/body composition through
+8 October 2026. Simulated expiry, sign-out, and reconnect paths pass; observation of a
+naturally expired Garmin session remains an operational lifecycle check.
 
 ## T1.5 — Local model feasibility
 
@@ -85,15 +89,29 @@ The first live test must use the application's local sign-in flow. The user ente
 - Ollama verified the downloaded model digests before writing their manifests.
 - The resulting local Ollama directory occupies about 5.7 GB.
 
-### Test result and limitation
+### Normal-session text/tool benchmark
 
-Both models reached model initialization, but inference could not run inside the Codex sandbox. The temporary server could see 16 GiB system memory, but macOS did not expose a usable Metal command queue to the sandboxed process. Both model sizes failed on a tiny Metal buffer allocation, indicating an execution-environment restriction rather than a meaningful model-size comparison.
+Both downloaded models completed the same constrained JSON tool-selection prompt using
+Metal on the Apple M5. The 2B model took 6.00 seconds total, generated 159 tokens at
+54.56 tokens/second, and returned the requested valid tool object. The 4B model took
+12.07 seconds total, generated 383 tokens at 40.06 tokens/second, and also returned the
+requested valid tool object. Both emitted lengthy internal reasoning in the raw CLI
+stream, so production integration must use structured output parsing and must never
+execute unvalidated model text.
 
-The temporary benchmark server was stopped. Nothing is listening on port 11434, so no Ollama background server was left running by this assessment.
+The 2B model also accepted a local PNG through its multimodal path. That basic vision
+run took 29.39 seconds and generated at 54.27 tokens/second; its description of the
+small transparent application icon was weak, so this verifies execution rather than
+food-recognition quality. The temporary benchmark server was stopped; no background
+Ollama service was left by the assessment. The 2B model is the faster local prototype
+candidate. The 4B model is viable but slower on the bounded text test. Representative
+answer-quality and food-photo testing remain part of their corresponding feature work;
+no additional model is needed for the historical assistant foundation.
 
-Required follow-up: launch Ollama normally outside the Codex sandbox and run the same bounded text, structured-output, tool-selection, and vision tests. Record model load time, first-token latency, generation rate, peak memory pressure, answer accuracy, and whether another model is needed. Start with `qwen3.5:2b`; test 4B only if memory pressure remains acceptable.
-
-Do not treat either model as selected for production until this follow-up succeeds. Deterministic application code—not the model—must continue to perform health calculations and validated writes.
+Deterministic application code—not the model—must perform health calculations and
+validated writes. Final provider selection remains explicit because OpenAI offers
+stronger hosted capability but requires internet access and API billing, while Ollama
+keeps inference local with the measured quality/speed tradeoff.
 
 ## T1.6 — Workout support inspection
 
@@ -107,12 +125,6 @@ This is enough to justify building preview and mapping prototypes, but not to cl
 
 Proceeding to the local foundation is reasonable. Phase 1 work can start with synthetic fixtures and no account connection.
 
-Open validation gates:
-
-1. **U2:** Test Garmin authentication and small read-only queries.
-2. **Local AI:** Run the Ollama benchmark in a normal user session outside the Codex sandbox.
-
-The U1 archive gate is complete. The remaining gates block claims about live
-account coverage and usable local-model performance. They do not block real
-archive importer implementation, database design, dashboards, maintenance
-storage, or provider-neutral AI interfaces.
+The U1 archive and U2 live-account gates are complete. Local text/tool inference is
+viable. The next gate is a deliberate AI-provider choice before T6 model integration;
+provider-neutral read-only tools can be implemented independently of that decision.

@@ -40,9 +40,9 @@ def _seed(database: Path, coverage_date: str = "2026-01-01") -> None:
             INSERT INTO metric_readings(
                 id, source_name, source_record_id, metric_type, recorded_at,
                 value, unit, raw_json
-            ) VALUES ('imported-steps', 'garmin_export', 'steps-1', 'steps', ?, 1000, 'count', '{}')
+            ) VALUES ('imported-steps', 'garmin_export', ?, 'steps', ?, 1000, 'count', '{}')
             """,
-            (coverage_date,),
+            (f"daily:{coverage_date}", coverage_date),
         )
 
 
@@ -74,9 +74,9 @@ class SyncTests(unittest.TestCase):
                 result = run_sync(provider, through, database, overlap_days=0)
                 status = sync_status(database)
 
-                self.assertEqual(plan["total_intervals"], gap_days * 2)
+                self.assertEqual(plan["total_intervals"], gap_days * 2 + 3)
                 self.assertEqual(result["status"], "completed")
-                self.assertEqual(status["verified_empty_intervals"], gap_days * 2)
+                self.assertEqual(status["verified_empty_intervals"], gap_days * 2 + 3)
                 self.assertTrue(
                     all(item["coverage_end"] == through.isoformat() for item in status["checkpoints"])
                 )
@@ -174,6 +174,12 @@ class SyncTests(unittest.TestCase):
                 activities = connection.execute(
                     "SELECT source_record_id, name FROM activities ORDER BY source_record_id"
                 ).fetchall()
+                reconciled_ranges = connection.execute(
+                    """
+                    SELECT last_reconciled_start, last_reconciled_end
+                    FROM sync_checkpoints
+                    """
+                ).fetchall()
 
             self.assertEqual(reconciled["totals"]["created"], 1)
             self.assertEqual(reconciled["totals"]["updated"], 1)
@@ -184,6 +190,9 @@ class SyncTests(unittest.TestCase):
                 ("activity-old", "Corrected ride"),
                 ("late-activity", "Late upload"),
             ])
+            self.assertTrue(
+                all(tuple(row) == ("2026-01-01", "2026-01-12") for row in reconciled_ranges)
+            )
 
     def test_explicit_source_deletion_is_hidden_but_not_erased(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -255,6 +264,55 @@ class SyncTests(unittest.TestCase):
             self.assertEqual(
                 [tuple(row) for row in matches],
                 [("fit-only", "garmin_export", "garmin-activity-42", "Garmin title")],
+            )
+
+    def test_live_daily_metric_reconciles_archive_and_old_live_duplicates(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "sync.sqlite3"
+            _seed(database)
+            with connect(database) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO metric_readings(
+                        id, source_name, source_record_id, metric_type,
+                        recorded_at, value, unit, raw_json
+                    ) VALUES ('old-live', 'garmin_connect', '2026-01-01:totalSteps',
+                              'steps', '2026-01-01', 900, 'count', '{}')
+                    """
+                )
+            provider = SimulatedGarminProvider(
+                records={
+                    "daily_metrics": [
+                        {
+                            "source_record_id": "daily:2026-01-01",
+                            "metric_type": "steps",
+                            "recorded_at": "2026-01-01",
+                            "value": 1200,
+                            "unit": "count",
+                        }
+                    ]
+                }
+            )
+
+            run_sync(
+                provider,
+                date(2026, 1, 1),
+                database,
+                overlap_days=1,
+                reconcile_from=date(2026, 1, 1),
+            )
+            with connect(database) as connection:
+                rows = connection.execute(
+                    """
+                    SELECT source_name, source_record_id, value
+                    FROM metric_readings
+                    WHERE metric_type = 'steps' AND recorded_at = '2026-01-01'
+                    """
+                ).fetchall()
+
+            self.assertEqual(
+                [tuple(row) for row in rows],
+                [("garmin_export", "daily:2026-01-01", 1200.0)],
             )
 
     def test_live_activity_detail_imports_sensor_samples_once(self) -> None:

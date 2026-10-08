@@ -9,6 +9,7 @@ import zipfile
 from pathlib import Path
 
 from app.garmin_import import (
+    ArchiveLimits,
     GarminImportError,
     import_garmin_export,
     inspect_archive,
@@ -149,6 +150,46 @@ class GarminImportTests(unittest.TestCase):
 
             with self.assertRaises(GarminImportError):
                 inspect_archive(archive)
+
+    def test_invalid_outer_and_nested_archives_are_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            invalid_outer = root / "invalid.zip"
+            invalid_outer.write_bytes(b"not a zip file")
+            with self.assertRaisesRegex(GarminImportError, "not a valid ZIP"):
+                inspect_archive(invalid_outer)
+
+            invalid_nested = root / "invalid-nested.zip"
+            with zipfile.ZipFile(invalid_nested, "w") as output:
+                output.writestr("nested.zip", b"not a nested zip")
+            with self.assertRaisesRegex(GarminImportError, "nested ZIP is invalid"):
+                inspect_archive(invalid_nested)
+
+    def test_archive_size_entry_and_expansion_limits_are_enforced(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            root = Path(temporary_directory)
+            archive = root / "limited.zip"
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_STORED) as output:
+                output.writestr("one.json", "12345")
+                output.writestr("two.json", "67890")
+
+            with self.assertRaisesRegex(GarminImportError, "configured size limit"):
+                inspect_archive(archive, ArchiveLimits(max_archive_bytes=1))
+            with self.assertRaisesRegex(GarminImportError, "entry-count safety limit"):
+                inspect_archive(archive, ArchiveLimits(max_entries=1))
+            with self.assertRaisesRegex(GarminImportError, "expanded-size safety limit"):
+                inspect_archive(archive, ArchiveLimits(max_expanded_bytes=8))
+            with self.assertRaisesRegex(GarminImportError, "per-file safety limit"):
+                inspect_archive(archive, ArchiveLimits(max_member_bytes=4))
+
+    def test_high_compression_ratio_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            archive = Path(temporary_directory) / "compressed.zip"
+            with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as output:
+                output.writestr("large.json", "0" * 50_000)
+
+            with self.assertRaisesRegex(GarminImportError, "compression-ratio limit"):
+                inspect_archive(archive, ArchiveLimits(max_compression_ratio=2))
 
 
 if __name__ == "__main__":

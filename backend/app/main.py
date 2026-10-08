@@ -59,6 +59,7 @@ from .sync import (
     sync_plan,
     sync_status,
 )
+from .settings import get_settings, save_goals, save_profile
 from .wellness_import import (
     WellnessImportError,
     import_wellness_records,
@@ -103,6 +104,32 @@ class SyncScheduleRequest(BaseModel):
     enabled: bool
 
 
+class ProfileUpdate(BaseModel):
+    display_name: str | None = None
+    timezone: str | None = None
+    preferred_distance_unit: str = "km"
+    preferred_weight_unit: str = "kg"
+    birth_date: str | None = None
+    sex: str | None = None
+    height_cm: float | None = None
+    weight_kg: float | None = None
+
+
+class GoalUpdate(BaseModel):
+    id: str | None = None
+    goal_type: str = "general"
+    title: str
+    target_value: float | None = None
+    target_unit: str | None = None
+    target_date: str | None = None
+    status: str = "active"
+    notes: str | None = None
+
+
+class GoalsUpdate(BaseModel):
+    goals: list[GoalUpdate]
+
+
 def _temporary_download(path: Path, filename: str, media_type: str) -> FileResponse:
     return FileResponse(
         path,
@@ -120,6 +147,27 @@ def health() -> dict[str, object]:
         "schema": schema_status(),
         "version": app.version,
     }
+
+
+@app.get("/api/settings")
+def application_settings() -> dict[str, object]:
+    return get_settings()
+
+
+@app.put("/api/settings/profile")
+def update_profile(payload: ProfileUpdate) -> dict[str, object]:
+    try:
+        return save_profile(payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/settings/goals")
+def update_goals(payload: GoalsUpdate) -> list[dict[str, object]]:
+    try:
+        return save_goals([goal.model_dump() for goal in payload.goals])
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/history/summary")

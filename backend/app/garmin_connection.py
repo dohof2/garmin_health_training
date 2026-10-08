@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import os
 import threading
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Callable
 
@@ -275,6 +275,22 @@ DAILY_METRICS = {
     "moderateIntensityMinutes": ("moderate_intensity", "min"),
     "vigorousIntensityMinutes": ("vigorous_intensity", "min"),
     "averageStressLevel": ("average_stress", "score"),
+    "averageSpo2": ("average_spo2", "%"),
+    "lowestSpo2": ("lowest_spo2", "%"),
+    "avgWakingRespirationValue": ("waking_respiration", "breaths/min"),
+    "bodyBatteryAtWakeTime": ("body_battery_at_wake", "score"),
+    "bodyBatteryHighestValue": ("body_battery_high", "score"),
+    "bodyBatteryLowestValue": ("body_battery_low", "score"),
+    "bodyBatteryMostRecentValue": ("body_battery_latest", "score"),
+    "bodyBatteryChargedValue": ("body_battery_charged", "score"),
+    "bodyBatteryDrainedValue": ("body_battery_drained", "score"),
+    "floorsAscended": ("floors_ascended", "count"),
+    "floorsDescended": ("floors_descended", "count"),
+    "dailyStepGoal": ("step_goal", "count"),
+    "intensityMinutesGoal": ("intensity_minutes_goal", "min"),
+    "activeSeconds": ("active_duration", "s"),
+    "highlyActiveSeconds": ("highly_active_duration", "s"),
+    "sedentarySeconds": ("sedentary_duration", "s"),
 }
 
 
@@ -287,7 +303,7 @@ def _normalise_summary(record: dict[str, object], calendar_date: str) -> list[di
             continue
         metrics.append(
             {
-                "source_record_id": f"{calendar_date}:{source_field}",
+                "source_record_id": f"daily:{calendar_date}",
                 "metric_type": metric_type,
                 "recorded_at": calendar_date,
                 "value": value,
@@ -297,6 +313,131 @@ def _normalise_summary(record: dict[str, object], calendar_date: str) -> list[di
                 "source_updated_at": source_updated,
             }
         )
+    return metrics
+
+
+def _millisecond_timestamp(value: object) -> str | None:
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(float(value) / 1000, UTC).isoformat().replace("+00:00", "Z")
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _metric(
+    source_record_id: str,
+    metric_type: str,
+    recorded_at: str,
+    value: object,
+    unit: str,
+    period_start: str | None = None,
+    period_end: str | None = None,
+) -> dict[str, object] | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return {
+        "source_record_id": source_record_id,
+        "metric_type": metric_type,
+        "recorded_at": recorded_at,
+        "value": number,
+        "unit": unit,
+        "period_start": period_start or recorded_at,
+        "period_end": period_end or recorded_at,
+    }
+
+
+def _normalise_sleep(record: object, calendar_date: str) -> list[dict[str, object]]:
+    if not isinstance(record, dict):
+        return []
+    daily = record.get("dailySleepDTO")
+    if not isinstance(daily, dict):
+        return []
+    source_id = f"sleep:{calendar_date}"
+    period_start = _millisecond_timestamp(daily.get("sleepStartTimestampGMT"))
+    period_end = _millisecond_timestamp(daily.get("sleepEndTimestampGMT"))
+    fields = (
+        ("sleepTimeSeconds", "sleep_duration", "s"),
+        ("deepSleepSeconds", "deep_sleep", "s"),
+        ("lightSleepSeconds", "light_sleep", "s"),
+        ("remSleepSeconds", "rem_sleep", "s"),
+        ("awakeSleepSeconds", "awake_sleep", "s"),
+        ("unmeasurableSleepSeconds", "unmeasurable_sleep", "s"),
+        ("averageRespirationValue", "sleep_respiration", "breaths/min"),
+        ("avgSleepStress", "sleep_stress", "score"),
+        ("restingHeartRate", "sleep_resting_heart_rate", "bpm"),
+    )
+    metrics = [
+        metric
+        for field, metric_type, unit in fields
+        if (metric := _metric(source_id, metric_type, calendar_date, daily.get(field), unit, period_start, period_end))
+    ]
+    scores = daily.get("sleepScores")
+    overall = scores.get("overall") if isinstance(scores, dict) else None
+    score_value = overall.get("value") if isinstance(overall, dict) else None
+    if metric := _metric(source_id, "sleep_score", calendar_date, score_value, "score", period_start, period_end):
+        metrics.append(metric)
+    for field, metric_type, unit in (
+        ("avgOvernightHrv", "sleep_hrv_average", "ms"),
+        ("bodyBatteryChange", "sleep_body_battery_change", "score"),
+    ):
+        if metric := _metric(source_id, metric_type, calendar_date, record.get(field), unit, period_start, period_end):
+            metrics.append(metric)
+    return metrics
+
+
+def _normalise_hrv(record: object, calendar_date: str) -> list[dict[str, object]]:
+    if not isinstance(record, dict):
+        return []
+    summary = record.get("hrvSummary")
+    if not isinstance(summary, dict):
+        return []
+    source_id = f"hrv:{calendar_date}"
+    metrics: list[dict[str, object]] = []
+    for field, metric_type in (
+        ("lastNightAvg", "hrv_last_night_average"),
+        ("lastNight5MinHigh", "hrv_last_night_5min_high"),
+        ("weeklyAvg", "hrv_weekly_average"),
+    ):
+        if metric := _metric(source_id, metric_type, calendar_date, summary.get(field), "ms"):
+            metrics.append(metric)
+    return metrics
+
+
+def _normalise_weight(record: object, calendar_date: str) -> list[dict[str, object]]:
+    if not isinstance(record, dict):
+        return []
+    summaries = record.get("dailyWeightSummaries")
+    if not isinstance(summaries, list):
+        return []
+    metrics: list[dict[str, object]] = []
+    for summary in summaries:
+        if not isinstance(summary, dict):
+            continue
+        samples = summary.get("allWeightMetrics")
+        if not isinstance(samples, list):
+            continue
+        for index, sample in enumerate(samples):
+            if not isinstance(sample, dict):
+                continue
+            source_id = str(sample.get("samplePk") or f"weight:{calendar_date}:{index}")
+            recorded_at = _millisecond_timestamp(sample.get("timestampGMT")) or calendar_date
+            for field, metric_type, unit, divisor in (
+                ("weight", "weight", "kg", 1000),
+                ("bmi", "bmi", "kg/m2", 1),
+                ("bodyFat", "body_fat", "%", 1),
+                ("bodyWater", "body_water", "%", 1),
+                ("boneMass", "bone_mass", "kg", 1000),
+                ("muscleMass", "muscle_mass", "kg", 1000),
+            ):
+                raw = sample.get(field)
+                value = float(raw) / divisor if isinstance(raw, (int, float)) and not isinstance(raw, bool) else None
+                if metric := _metric(source_id, metric_type, recorded_at, value, unit):
+                    metrics.append(metric)
     return metrics
 
 
@@ -327,6 +468,23 @@ class GarminConnectProvider:
                     metrics.extend(_normalise_summary(summary, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
             return metrics
+        if data_type == "sleep_metrics":
+            metrics: list[dict[str, object]] = []
+            day = start_date
+            while day <= end_date:
+                metrics.extend(_normalise_sleep(self.client.get_sleep_data(day.isoformat()), day.isoformat()))
+                day = date.fromordinal(day.toordinal() + 1)
+            return metrics
+        if data_type == "hrv_metrics":
+            metrics: list[dict[str, object]] = []
+            day = start_date
+            while day <= end_date:
+                metrics.extend(_normalise_hrv(self.client.get_hrv_data(day.isoformat()), day.isoformat()))
+                day = date.fromordinal(day.toordinal() + 1)
+            return metrics
+        if data_type == "weight_metrics":
+            records = self.client.get_weigh_ins(start_date.isoformat(), end_date.isoformat())
+            return _normalise_weight(records, start_date.isoformat())
         raise SyncError(f"Unsupported Garmin data type: {data_type}")
 
     def fetch_activity_detail(self, source_record_id: str) -> bytes:

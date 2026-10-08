@@ -15,7 +15,13 @@ from .database import connect, migrate
 from .fit_import import _decode_fit, _sample_rows
 
 
-SYNC_DATA_TYPES = ("activities", "daily_metrics")
+SYNC_DATA_TYPES = (
+    "activities",
+    "daily_metrics",
+    "sleep_metrics",
+    "hrv_metrics",
+    "weight_metrics",
+)
 
 
 class SyncError(RuntimeError):
@@ -76,11 +82,33 @@ def _source_bounds(connection: object, data_type: str) -> tuple[str | None, str 
             FROM activities WHERE deleted_at IS NULL
             """
         ).fetchone()
+    elif data_type == "daily_metrics":
+        row = connection.execute(
+            """
+            SELECT MIN(substr(recorded_at, 1, 10)), MAX(substr(recorded_at, 1, 10))
+            FROM metric_readings WHERE source_record_id LIKE 'daily:%'
+            """
+        ).fetchone()
+    elif data_type == "sleep_metrics":
+        row = connection.execute(
+            """
+            SELECT MIN(substr(recorded_at, 1, 10)), MAX(substr(recorded_at, 1, 10))
+            FROM metric_readings WHERE source_record_id LIKE 'sleep:%'
+            """
+        ).fetchone()
+    elif data_type == "hrv_metrics":
+        row = connection.execute(
+            """
+            SELECT MIN(substr(recorded_at, 1, 10)), MAX(substr(recorded_at, 1, 10))
+            FROM metric_readings WHERE source_record_id LIKE 'hrv:%'
+            """
+        ).fetchone()
     else:
         row = connection.execute(
             """
             SELECT MIN(substr(recorded_at, 1, 10)), MAX(substr(recorded_at, 1, 10))
             FROM metric_readings
+            WHERE metric_type IN ('weight', 'bmi', 'body_fat', 'body_water', 'bone_mass', 'muscle_mass')
             """
         ).fetchone()
     return (row[0], row[1])
@@ -522,7 +550,7 @@ def _metric_values(record: dict[str, object]) -> dict[str, object]:
 
 def _upsert_metric(connection: object, record: dict[str, object]) -> str:
     values = _metric_values(record)
-    existing = connection.execute(
+    exact = connection.execute(
         """
         SELECT * FROM metric_readings
         WHERE source_record_id = ? AND metric_type = ?
@@ -531,6 +559,25 @@ def _upsert_metric(connection: object, record: dict[str, object]) -> str:
         """,
         (values["source_record_id"], values["metric_type"]),
     ).fetchone()
+    candidates: list[object] = []
+    if str(values["source_record_id"]).startswith(("daily:", "sleep:")):
+        candidates = connection.execute(
+            """
+            SELECT * FROM metric_readings
+            WHERE metric_type = ?
+              AND substr(recorded_at, 1, 10) = substr(?, 1, 10)
+              AND source_name IN ('garmin_export', 'garmin_connect')
+            ORDER BY CASE source_name WHEN 'garmin_export' THEN 0 ELSE 1 END, created_at
+            """,
+            (values["metric_type"], values["recorded_at"]),
+        ).fetchall()
+    existing = candidates[0] if candidates else exact
+    if existing is not None and len(candidates) > 1:
+        duplicate_ids = [row["id"] for row in candidates if row["id"] != existing["id"]]
+        connection.executemany(
+            "DELETE FROM metric_readings WHERE id = ?",
+            [(identifier,) for identifier in duplicate_ids],
+        )
     compared = (
         "recorded_at",
         "value",
@@ -540,17 +587,23 @@ def _upsert_metric(connection: object, record: dict[str, object]) -> str:
         "source_updated_at",
         "raw_json",
     )
-    if existing is not None and all(existing[key] == values[key] for key in compared):
+    if (
+        existing is not None
+        and existing["source_record_id"] == values["source_record_id"]
+        and all(existing[key] == values[key] for key in compared)
+    ):
         return "unchanged"
     if existing is not None:
         connection.execute(
             """
             UPDATE metric_readings SET
-                recorded_at = ?, value = ?, unit = ?, period_start = ?, period_end = ?,
+                source_record_id = ?, recorded_at = ?, value = ?, unit = ?, period_start = ?, period_end = ?,
                 source_updated_at = ?, raw_json = ?
             WHERE id = ?
             """,
-            tuple(values[key] for key in compared) + (existing["id"],),
+            (values["source_record_id"],)
+            + tuple(values[key] for key in compared)
+            + (existing["id"],),
         )
         return "updated"
     identifier = "garmin-connect-metric-" + hashlib.sha256(
@@ -634,7 +687,7 @@ def _commit_interval(
             UPDATE sync_checkpoints SET
                 coverage_end = ?, last_attempt_at = ?, last_success_at = ?,
                 last_source_updated_at = COALESCE(?, last_source_updated_at),
-                last_reconciled_start = CASE WHEN ? = 'reconciliation' THEN ? ELSE last_reconciled_start END,
+                last_reconciled_start = CASE WHEN ? = 'reconciliation' THEN COALESCE(last_reconciled_start, ?) ELSE last_reconciled_start END,
                 last_reconciled_end = CASE WHEN ? = 'reconciliation' THEN ? ELSE last_reconciled_end END,
                 status = 'syncing', error_message = NULL, updated_at = CURRENT_TIMESTAMP
             WHERE data_type = ?
@@ -745,8 +798,20 @@ def run_sync(
             )
             with connect(path) as connection:
                 connection.execute(
-                    "UPDATE sync_checkpoints SET status = 'syncing', error_message = NULL WHERE data_type = ?",
-                    (data_type,),
+                    """
+                    UPDATE sync_checkpoints SET
+                        status = 'syncing',
+                        error_message = NULL,
+                        last_reconciled_start = CASE WHEN ? IS NOT NULL THEN ? ELSE last_reconciled_start END,
+                        last_reconciled_end = CASE WHEN ? IS NOT NULL THEN NULL ELSE last_reconciled_end END
+                    WHERE data_type = ?
+                    """,
+                    (
+                        reconcile_from.isoformat() if reconcile_from else None,
+                        reconcile_from.isoformat() if reconcile_from else None,
+                        reconcile_from.isoformat() if reconcile_from else None,
+                        data_type,
+                    ),
                 )
             for offset in range((through_date - start).days + 1):
                 interval_date = start + timedelta(days=offset)
