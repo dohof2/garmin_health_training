@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 import time
 import uuid
+import zipfile
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Protocol
 
 from .database import connect, migrate
+from .fit_import import _decode_fit, _sample_rows
 
 
 SYNC_DATA_TYPES = ("activities", "daily_metrics")
@@ -202,6 +205,49 @@ def sync_plan(
     }
 
 
+def set_sync_schedule(enabled: bool, path: Path | None = None) -> dict[str, object]:
+    """Enable or disable daily synchronization while the app is open."""
+    migrate(path)
+    with connect(path) as connection:
+        connection.execute(
+            """
+            UPDATE sync_settings
+            SET schedule_enabled = ?, updated_at = CURRENT_TIMESTAMP
+            WHERE id = 1
+            """,
+            (int(enabled),),
+        )
+    return sync_status(path)
+
+
+def scheduled_sync_decision(
+    through_date: date, path: Path | None = None
+) -> dict[str, object]:
+    """Return whether the open app should run its at-most-daily catch-up."""
+    status = sync_status(path)
+    if not status["schedule_enabled"]:
+        return {"due": False, "reason": "disabled", "through_date": through_date.isoformat()}
+    if status["connection_status"] != "connected":
+        return {
+            "due": False,
+            "reason": "connection_required",
+            "through_date": through_date.isoformat(),
+        }
+    checkpoints = status["checkpoints"]
+    up_to_date = all(
+        checkpoint["status"] == "synced"
+        and checkpoint["last_success_at"]
+        and checkpoint["coverage_end"]
+        and date.fromisoformat(str(checkpoint["coverage_end"])) >= through_date
+        for checkpoint in checkpoints
+    )
+    return {
+        "due": not up_to_date,
+        "reason": "catch_up_required" if not up_to_date else "up_to_date",
+        "through_date": through_date.isoformat(),
+    }
+
+
 def _job_start(trigger: str, total: int, path: Path | None) -> str:
     job_id = f"sync-{uuid.uuid4()}"
     with connect(path) as connection:
@@ -227,6 +273,7 @@ def _activity_values(record: dict[str, object]) -> dict[str, object]:
     activity_type = str(record.get("activity_type") or "").strip()
     if not source_id or (not record.get("deleted") and (not started_at or not activity_type)):
         raise SyncError("Activity record is missing a source ID, timestamp, or type")
+    public_record = {key: value for key, value in record.items() if not key.startswith("_")}
     return {
         "source_record_id": source_id,
         "activity_type": activity_type,
@@ -240,8 +287,136 @@ def _activity_values(record: dict[str, object]) -> dict[str, object]:
         "elevation_gain_meters": record.get("elevation_gain_meters"),
         "source_updated_at": record.get("source_updated_at"),
         "deleted_at": _now() if record.get("deleted") else None,
-        "raw_json": json.dumps(record, separators=(",", ":"), sort_keys=True),
+        "raw_json": json.dumps(public_record, separators=(",", ":"), sort_keys=True),
     }
+
+
+def _activity_fingerprint_match(
+    connection: object, values: dict[str, object]
+) -> object | None:
+    """Match an archive-only activity when Garmin later supplies its stable ID."""
+    candidates: list[tuple[float, object]] = []
+    rows = connection.execute(
+        """
+        SELECT * FROM activities
+        WHERE deleted_at IS NULL
+          AND ABS((julianday(started_at) - julianday(?)) * 86400) <= 900
+        """,
+        (values["started_at"],),
+    ).fetchall()
+    for candidate in rows:
+        comparable = 0
+        score = abs(
+            float(
+                connection.execute(
+                    "SELECT (julianday(?) - julianday(?)) * 86400",
+                    (candidate["started_at"], values["started_at"]),
+                ).fetchone()[0]
+                or 0
+            )
+        )
+        for field, absolute_tolerance, relative_tolerance, weight in (
+            ("duration_seconds", 15.0, 0.03, 5.0),
+            ("distance_meters", 150.0, 0.03, 25.0),
+        ):
+            incoming = values[field]
+            stored = candidate[field]
+            if incoming is None or stored is None:
+                continue
+            comparable += 1
+            delta = abs(float(incoming) - float(stored))
+            if delta > max(absolute_tolerance, abs(float(stored)) * relative_tolerance):
+                break
+            score += delta / weight
+        else:
+            if comparable:
+                candidates.append((score, candidate))
+    candidates.sort(key=lambda item: item[0])
+    if not candidates:
+        return None
+    if len(candidates) > 1 and candidates[1][0] - candidates[0][0] < 1:
+        return None
+    return candidates[0][1]
+
+
+def _activity_needs_detail(
+    record: dict[str, object], path: Path | None = None
+) -> bool:
+    values = _activity_values(record)
+    with connect(path) as connection:
+        existing = connection.execute(
+            "SELECT * FROM activities WHERE source_record_id = ? LIMIT 1",
+            (values["source_record_id"],),
+        ).fetchone()
+        if existing is None:
+            existing = _activity_fingerprint_match(connection, values)
+        if existing is None:
+            return True
+        return (
+            connection.execute(
+                "SELECT COUNT(*) FROM activity_samples WHERE activity_id = ?",
+                (existing["id"],),
+            ).fetchone()[0]
+            == 0
+        )
+
+
+def _fit_content(payload: bytes) -> bytes:
+    if len(payload) > 50 * 1024 * 1024:
+        raise SyncError("Downloaded Garmin activity detail exceeds the 50 MiB limit")
+    stream = io.BytesIO(payload)
+    if not zipfile.is_zipfile(stream):
+        return payload
+    with zipfile.ZipFile(stream) as archive:
+        members = [
+            item
+            for item in archive.infolist()
+            if not item.is_dir()
+            and Path(item.filename).suffix.lower() == ".fit"
+            and Path(item.filename).name == item.filename
+        ]
+        if len(members) != 1:
+            raise SyncError("Garmin activity detail must contain exactly one safe FIT file")
+        if members[0].file_size > 50 * 1024 * 1024:
+            raise SyncError("Downloaded Garmin FIT file exceeds the 50 MiB limit")
+        return archive.read(members[0])
+
+
+def _upsert_activity_detail(
+    connection: object, source_record_id: str, payload: bytes
+) -> int:
+    activity = connection.execute(
+        "SELECT id FROM activities WHERE source_record_id = ? LIMIT 1",
+        (source_record_id,),
+    ).fetchone()
+    if activity is None:
+        raise SyncError("Activity detail could not be matched after summary import")
+    messages, errors = _decode_fit(_fit_content(payload))
+    if errors:
+        raise SyncError(f"Garmin FIT detail reported {len(errors)} decoder errors")
+    samples = _sample_rows(
+        str(activity["id"]),
+        list(messages.get("record_mesgs") or []),
+    )
+    connection.executemany(
+        """
+        INSERT INTO activity_samples(
+            activity_id, recorded_at, latitude, longitude,
+            elevation_meters, heart_rate_bpm, cadence_rpm,
+            power_watts, speed_mps
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(activity_id, recorded_at) DO UPDATE SET
+            latitude = excluded.latitude,
+            longitude = excluded.longitude,
+            elevation_meters = excluded.elevation_meters,
+            heart_rate_bpm = excluded.heart_rate_bpm,
+            cadence_rpm = excluded.cadence_rpm,
+            power_watts = excluded.power_watts,
+            speed_mps = excluded.speed_mps
+        """,
+        samples,
+    )
+    return len(samples)
 
 
 def _upsert_activity(connection: object, record: dict[str, object]) -> str:
@@ -255,6 +430,8 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
         """,
         (values["source_record_id"],),
     ).fetchone()
+    if existing is None and not record.get("deleted"):
+        existing = _activity_fingerprint_match(connection, values)
     if record.get("deleted") and existing is None:
         return "unchanged"
     if record.get("deleted") and existing["deleted_at"]:
@@ -305,18 +482,23 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
         "deleted_at",
         "raw_json",
     )
-    if all(existing[key] == values[key] for key in compared):
+    if existing["source_record_id"] == values["source_record_id"] and all(
+        existing[key] == values[key] for key in compared
+    ):
         return "unchanged"
     connection.execute(
         """
         UPDATE activities SET
+            source_record_id = ?,
             activity_type = ?, name = ?, started_at = ?, ended_at = ?, timezone = ?,
             duration_seconds = ?, distance_meters = ?, calories_kcal = ?,
             elevation_gain_meters = ?, source_updated_at = ?, deleted_at = ?,
             raw_json = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
-        tuple(values[key] for key in compared) + (existing["id"],),
+        (values["source_record_id"],)
+        + tuple(values[key] for key in compared)
+        + (existing["id"],),
     )
     return "updated"
 
@@ -406,7 +588,7 @@ def _commit_interval(
     old_coverage_end: date | None,
     path: Path | None,
 ) -> dict[str, int]:
-    counts = {"created": 0, "updated": 0, "unchanged": 0}
+    counts = {"created": 0, "updated": 0, "unchanged": 0, "detail_samples": 0}
     with connect(path) as connection:
         connection.execute("BEGIN IMMEDIATE")
         for record in records:
@@ -416,6 +598,13 @@ def _commit_interval(
                 else _upsert_metric(connection, record)
             )
             counts[result] += 1
+            detail = record.get("_detail_fit")
+            if data_type == "activities" and isinstance(detail, bytes):
+                counts["detail_samples"] += _upsert_activity_detail(
+                    connection,
+                    str(record["source_record_id"]),
+                    detail,
+                )
         day = interval_date.isoformat()
         connection.execute(
             """
@@ -524,15 +713,25 @@ def run_sync(
     )
     job_id = _job_start(trigger, int(plan["total_intervals"]), path)
     completed = 0
-    totals = {"created": 0, "updated": 0, "unchanged": 0, "received": 0}
+    totals = {
+        "created": 0,
+        "updated": 0,
+        "unchanged": 0,
+        "received": 0,
+        "detail_samples": 0,
+    }
     failures: list[dict[str, str]] = []
     try:
         with connect(path) as connection:
             connection.execute(
                 """
-                UPDATE sync_settings SET connection_status = 'connected', updated_at = CURRENT_TIMESTAMP
+                UPDATE sync_settings
+                SET connection_status = 'connected',
+                    last_scheduled_at = CASE WHEN ? = 'scheduled' THEN ? ELSE last_scheduled_at END,
+                    updated_at = CURRENT_TIMESTAMP
                 WHERE id = 1
-                """
+                """,
+                (trigger, _now()),
             )
         for data_plan in plan["data_types"]:
             if not data_plan["start_date"]:
@@ -560,6 +759,13 @@ def run_sync(
                 )
                 try:
                     records = provider.fetch(data_type, interval_date, interval_date)
+                    detail_fetcher = getattr(provider, "fetch_activity_detail", None)
+                    if data_type == "activities" and callable(detail_fetcher):
+                        for record in records:
+                            if not record.get("deleted") and _activity_needs_detail(record, path):
+                                record["_detail_fit"] = detail_fetcher(
+                                    str(record["source_record_id"])
+                                )
                     if request_delay_seconds:
                         time.sleep(request_delay_seconds)
                     counts = _commit_interval(
@@ -574,6 +780,7 @@ def run_sync(
                     totals["received"] += len(records)
                     for key in ("created", "updated", "unchanged"):
                         totals[key] += counts[key]
+                    totals["detail_samples"] += counts["detail_samples"]
                     old_end = max(old_end, interval_date) if old_end else interval_date
                     completed += 1
                     if interrupt_after is not None and completed >= interrupt_after:
@@ -640,6 +847,15 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
     last_job = dict(last_job_row) if last_job_row else None
     if last_job and last_job.get("checkpoint_json"):
         last_job["checkpoint"] = json.loads(str(last_job.pop("checkpoint_json")))
+    connection_ready = settings["connection_status"] == "connected"
+    if not connection_ready:
+        next_action = "Sign in locally to Garmin Connect to enable synchronization"
+    elif any(item["status"] == "failed" for item in _checkpoint_rows(path)):
+        next_action = "Retry synchronization; one or more data types remain pending"
+    elif settings["schedule_enabled"]:
+        next_action = "Daily catch-up is enabled while the app is open"
+    else:
+        next_action = "Synchronization is ready; daily open-session sync is off"
     return {
         "provider": settings["provider_name"],
         "connection_status": settings["connection_status"],
@@ -650,6 +866,6 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
         "checkpoints": _checkpoint_rows(path),
         "verified_empty_intervals": empty_intervals,
         "last_job": last_job,
-        "live_sync_ready": False,
-        "next_action": "Sign in locally to Garmin Connect to enable Sync now",
+        "live_sync_ready": connection_ready,
+        "next_action": next_action,
     }

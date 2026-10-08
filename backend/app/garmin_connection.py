@@ -64,10 +64,14 @@ def _set_connection_status(
         connection.execute(
             """
             UPDATE sync_checkpoints
-            SET status = CASE WHEN ? = 'connected' THEN status ELSE 'reconnect_required' END,
+            SET status = CASE
+                    WHEN ? = 'connected' AND status = 'reconnect_required' THEN 'pending'
+                    WHEN ? = 'connected' THEN status
+                    ELSE 'reconnect_required'
+                END,
                 error_message = ?, updated_at = CURRENT_TIMESTAMP
             """,
-            (status, error_message),
+            (status, status, error_message),
         )
 
 
@@ -324,3 +328,10 @@ class GarminConnectProvider:
                 day = date.fromordinal(day.toordinal() + 1)
             return metrics
         raise SyncError(f"Unsupported Garmin data type: {data_type}")
+
+    def fetch_activity_detail(self, source_record_id: str) -> bytes:
+        """Download Garmin's original FIT bundle for sensor-level samples."""
+        return self.client.download_activity(
+            source_record_id,
+            Garmin.ActivityDownloadFormat.ORIGINAL,
+        )

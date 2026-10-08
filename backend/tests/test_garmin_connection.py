@@ -18,6 +18,7 @@ from app.garmin_connection import (
     connection_state,
     disconnect,
     garmin_token_file,
+    load_client,
     read_only_probe,
 )
 from app.sync import SyncConnectionRequired
@@ -37,6 +38,7 @@ class _FakeTokenClient:
 class FakeGarmin:
     require_mfa = False
     fail_login = False
+    fail_saved_login = False
     instances: list["FakeGarmin"] = []
 
     def __init__(self, email=None, password=None, **kwargs):
@@ -49,6 +51,8 @@ class FakeGarmin:
     def login(self, tokenstore: str):
         if self.fail_login:
             raise GarminConnectAuthenticationError("secret response")
+        if self.fail_saved_login and not self.email:
+            raise GarminConnectAuthenticationError("expired saved token")
         if self.require_mfa and self.email:
             return "needs_mfa", None
         if not self.email and not (Path(tokenstore) / "garmin_tokens.json").is_file():
@@ -91,6 +95,7 @@ class FakeGarmin:
 def _local_data(root: Path):
     FakeGarmin.require_mfa = False
     FakeGarmin.fail_login = False
+    FakeGarmin.fail_saved_login = False
     FakeGarmin.instances.clear()
     with patch.dict(os.environ, {"HT_APP_DATA_DIR": str(root.resolve())}):
         yield
@@ -133,6 +138,30 @@ class GarminConnectionTests(unittest.TestCase):
             self.assertEqual(result["writes_performed"], 0)
             self.assertEqual(result["activities_today"], 1)
             self.assertNotIn("summary", result)
+
+    def test_saved_session_reuse_expiry_sign_out_and_reconnect(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary, _local_data(Path(temporary)):
+            begin_login("person@example.com", "password", client_factory=FakeGarmin)
+
+            restored = load_client(client_factory=FakeGarmin)
+            self.assertIsNone(restored.email)
+            self.assertEqual(connection_state()["status"], "connected")
+
+            FakeGarmin.fail_saved_login = True
+            with self.assertRaises(SyncConnectionRequired):
+                load_client(client_factory=FakeGarmin)
+            self.assertEqual(connection_state()["status"], "reconnect_required")
+
+            FakeGarmin.fail_saved_login = False
+            signed_out = disconnect(client_factory=FakeGarmin)
+            self.assertEqual(signed_out["status"], "not_connected")
+            self.assertFalse(garmin_token_file().exists())
+
+            reconnected = begin_login(
+                "person@example.com", "new-password", client_factory=FakeGarmin
+            )
+            self.assertEqual(reconnected["status"], "connected")
+            self.assertTrue(garmin_token_file().is_file())
 
     def test_live_provider_normalises_activity_and_daily_metrics(self) -> None:
         client = FakeGarmin()

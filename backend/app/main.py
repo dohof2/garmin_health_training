@@ -54,6 +54,8 @@ from .sync import (
     SyncError,
     recover_interrupted_sync_jobs,
     run_sync,
+    scheduled_sync_decision,
+    set_sync_schedule,
     sync_plan,
     sync_status,
 )
@@ -95,6 +97,10 @@ class GarminLoginRequest(BaseModel):
 
 class GarminMfaRequest(BaseModel):
     code: SecretStr
+
+
+class SyncScheduleRequest(BaseModel):
+    enabled: bool
 
 
 def _temporary_download(path: Path, filename: str, media_type: str) -> FileResponse:
@@ -186,6 +192,11 @@ def synchronization_status() -> dict[str, object]:
     return sync_status()
 
 
+@app.put("/api/sync/schedule")
+def synchronization_schedule(payload: SyncScheduleRequest) -> dict[str, object]:
+    return set_sync_schedule(payload.enabled)
+
+
 @app.get("/api/garmin/connection")
 def garmin_connection_status() -> dict[str, object]:
     return connection_state()
@@ -256,6 +267,30 @@ def synchronization_run(
             resolved_through_date,
             trigger="manual",
             reconcile_from=reconcile_from,
+            request_delay_seconds=0.25,
+        )
+    except SyncConnectionRequired as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except SyncAlreadyRunning as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SyncError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.post("/api/sync/scheduled")
+def scheduled_synchronization_run(
+    through_date: date | None = None,
+) -> dict[str, object]:
+    resolved_through_date = through_date or date.today()
+    decision = scheduled_sync_decision(resolved_through_date)
+    if not decision["due"]:
+        return {"status": "skipped", **decision}
+    try:
+        provider = GarminConnectProvider.from_saved_session()
+        return run_sync(
+            provider,
+            resolved_through_date,
+            trigger="scheduled",
             request_delay_seconds=0.25,
         )
     except SyncConnectionRequired as error:

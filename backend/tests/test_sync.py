@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
 from app.database import connect, migrate
 from app.history import list_activities
@@ -15,6 +16,8 @@ from app.sync import (
     SyncInterrupted,
     recover_interrupted_sync_jobs,
     run_sync,
+    scheduled_sync_decision,
+    set_sync_schedule,
     sync_plan,
     sync_status,
 )
@@ -209,6 +212,104 @@ class SyncTests(unittest.TestCase):
             self.assertIsNotNone(stored)
             self.assertEqual(list_activities(path=database), [])
 
+    def test_live_activity_id_reconciles_an_archive_only_fit_activity(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "sync.sqlite3"
+            _seed(database)
+            with connect(database) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO activities(
+                        id, source_name, source_record_id, activity_type, name,
+                        started_at, duration_seconds, distance_meters, raw_json
+                    ) VALUES ('fit-only', 'garmin_export', 'fit:hash', 'cycling',
+                              'FIT profile', '2026-01-02T07:00:00Z', 3600, 24000, '{}')
+                    """
+                )
+            live = {
+                "source_record_id": "garmin-activity-42",
+                "activity_type": "cycling",
+                "name": "Garmin title",
+                "started_at": "2026-01-02T07:00:00Z",
+                "duration_seconds": 3600.1,
+                "distance_meters": 24000.5,
+            }
+
+            result = run_sync(
+                SimulatedGarminProvider(records={"activities": [live]}),
+                date(2026, 1, 2),
+                database,
+                overlap_days=0,
+                reconcile_from=date(2026, 1, 2),
+            )
+            with connect(database) as connection:
+                matches = connection.execute(
+                    """
+                    SELECT id, source_name, source_record_id, name
+                    FROM activities WHERE substr(started_at, 1, 10) = '2026-01-02'
+                    """
+                ).fetchall()
+
+            self.assertEqual(result["totals"]["created"], 0)
+            self.assertEqual(result["totals"]["updated"], 1)
+            self.assertEqual(
+                [tuple(row) for row in matches],
+                [("fit-only", "garmin_export", "garmin-activity-42", "Garmin title")],
+            )
+
+    def test_live_activity_detail_imports_sensor_samples_once(self) -> None:
+        class DetailProvider(SimulatedGarminProvider):
+            detail_requests = 0
+
+            def fetch_activity_detail(self, source_record_id: str) -> bytes:
+                self.detail_requests += 1
+                return b"test-fit-content"
+
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "sync.sqlite3"
+            _seed(database)
+            activity = {
+                "source_record_id": "activity-2",
+                "activity_type": "cycling",
+                "name": "Sensor ride",
+                "started_at": "2026-01-02T07:00:00Z",
+                "duration_seconds": 60,
+                "distance_meters": 500,
+            }
+            provider = DetailProvider(records={"activities": [activity]})
+
+            def sample_rows(activity_id, _records):
+                return [
+                    (
+                        activity_id,
+                        "2026-01-02T07:00:01Z",
+                        None,
+                        None,
+                        100.0,
+                        145,
+                        82.0,
+                        210.0,
+                        8.0,
+                    )
+                ]
+
+            with (
+                patch("app.sync._decode_fit", return_value=({"record_mesgs": [{}]}, [])),
+                patch("app.sync._sample_rows", side_effect=sample_rows),
+            ):
+                first = run_sync(provider, date(2026, 1, 2), database, overlap_days=0)
+                repeated = run_sync(provider, date(2026, 1, 2), database, overlap_days=1)
+
+            with connect(database) as connection:
+                sample = connection.execute(
+                    "SELECT heart_rate_bpm, power_watts FROM activity_samples"
+                ).fetchone()
+
+            self.assertEqual(first["totals"]["detail_samples"], 1)
+            self.assertEqual(repeated["totals"]["detail_samples"], 0)
+            self.assertEqual(provider.detail_requests, 1)
+            self.assertEqual(tuple(sample), (145, 210.0))
+
     def test_single_job_lock_and_recovery_use_the_same_pipeline(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "sync.sqlite3"
@@ -236,6 +337,38 @@ class SyncTests(unittest.TestCase):
 
             self.assertEqual(result["trigger"], "scheduled")
             self.assertEqual(result["status"], "completed")
+
+    def test_open_session_schedule_runs_only_when_due(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "sync.sqlite3"
+            _seed(database)
+            provider = SimulatedGarminProvider(records={})
+
+            enabled = set_sync_schedule(True, database)
+            self.assertTrue(enabled["schedule_enabled"])
+            self.assertEqual(
+                scheduled_sync_decision(date(2026, 1, 2), database)["reason"],
+                "connection_required",
+            )
+
+            run_sync(provider, date(2026, 1, 2), database, overlap_days=0)
+            current = sync_status(database)
+            self.assertTrue(current["live_sync_ready"])
+            self.assertEqual(
+                scheduled_sync_decision(date(2026, 1, 2), database)["reason"],
+                "up_to_date",
+            )
+            self.assertEqual(
+                scheduled_sync_decision(date(2026, 1, 9), database)["reason"],
+                "catch_up_required",
+            )
+
+            disabled = set_sync_schedule(False, database)
+            self.assertFalse(disabled["schedule_enabled"])
+            self.assertEqual(
+                scheduled_sync_decision(date(2026, 1, 9), database)["reason"],
+                "disabled",
+            )
 
 
 if __name__ == "__main__":

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 type HealthResponse = {
   status: string;
@@ -178,7 +178,7 @@ type SyncStatus = {
     error_message?: string | null;
     checkpoint?: {
       trigger?: string;
-      totals?: { created: number; updated: number; unchanged: number; received: number };
+      totals?: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
       failures?: Array<{ data_type: string; date: string; error: string }>;
     };
   };
@@ -324,6 +324,17 @@ const shiftDate = (value: string, days: number) => {
   const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
+};
+
+const todayInBrowserTimeZone = () => {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: browserTimeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+  return `${value.year}-${value.month}-${value.day}`;
 };
 
 const sourceLabel = (sourceName: string) =>
@@ -493,6 +504,7 @@ export default function App() {
   const [garminMfaCode, setGarminMfaCode] = useState("");
   const [isConnectingGarmin, setIsConnectingGarmin] = useState(false);
   const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
+  const scheduledSyncInFlight = useRef(false);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -829,6 +841,62 @@ export default function App() {
     );
   };
 
+  const refreshSyncedData = async () => {
+    const [summaryResponse, weeklyResponse, statusResponse, planResponse, connectionResponse] =
+      await Promise.all([
+        fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
+        fetch("/api/history/weekly-calories"),
+        fetch("/api/sync/status"),
+        fetch("/api/sync/plan"),
+        fetch("/api/garmin/connection"),
+      ]);
+    if (
+      !summaryResponse.ok ||
+      !weeklyResponse.ok ||
+      !statusResponse.ok ||
+      !planResponse.ok ||
+      !connectionResponse.ok
+    ) {
+      throw new Error("Synced data could not be refreshed.");
+    }
+    const [refreshedSummary, refreshedWeekly, refreshedStatus, refreshedPlan, garminConnection] =
+      await Promise.all([
+        summaryResponse.json() as Promise<HistorySummary>,
+        weeklyResponse.json() as Promise<WeeklyCalories | null>,
+        statusResponse.json() as Promise<SyncStatus>,
+        planResponse.json() as Promise<SyncPlan>,
+        connectionResponse.json() as Promise<GarminConnection>,
+      ]);
+    setConnection((current) =>
+      current.kind === "ready"
+        ? {
+            ...current,
+            summary: refreshedSummary,
+            weeklyCalories: refreshedWeekly,
+            syncStatus: refreshedStatus,
+            syncPlan: refreshedPlan,
+            garminConnection,
+          }
+        : current,
+    );
+
+    if (activityRange.start && activityRange.end && activityRange.start <= activityRange.end) {
+      const parameters = new URLSearchParams({
+        limit: "50",
+        start_date: activityRange.start,
+        end_date: activityRange.end,
+        timezone: browserTimeZone,
+      });
+      const activitiesResponse = await fetch(`/api/activities?${parameters.toString()}`);
+      if (activitiesResponse.ok) {
+        setActivityState({
+          kind: "ready",
+          items: (await activitiesResponse.json()) as Activity[],
+        });
+      }
+    }
+  };
+
   const connectGarmin = async () => {
     setIsConnectingGarmin(true);
     setConnectionMessage(null);
@@ -918,28 +986,49 @@ export default function App() {
     }
   };
 
+  const setDailySync = async (enabled: boolean) => {
+    setIsSyncing(true);
+    setSyncMessage(null);
+    try {
+      const response = await fetch("/api/sync/schedule", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const refreshedStatus = (await response.json()) as SyncStatus;
+      setConnection((current) =>
+        current.kind === "ready"
+          ? { ...current, syncStatus: refreshedStatus }
+          : current,
+      );
+      setSyncMessage(
+        enabled
+          ? "Daily catch-up is enabled while this app is open."
+          : "Daily catch-up is paused; Sync now remains available.",
+      );
+    } catch (error: unknown) {
+      setSyncMessage(
+        error instanceof Error ? error.message : "The synchronization schedule could not be changed.",
+      );
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
   const runSyncNow = async () => {
     setIsSyncing(true);
     setSyncMessage(null);
     try {
       const response = await fetch("/api/sync/run", { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
-      const [statusResponse, planResponse] = await Promise.all([
-        fetch("/api/sync/status"),
-        fetch("/api/sync/plan"),
-      ]);
-      if (statusResponse.ok && planResponse.ok) {
-        const [refreshedStatus, refreshedPlan] = await Promise.all([
-          statusResponse.json() as Promise<SyncStatus>,
-          planResponse.json() as Promise<SyncPlan>,
-        ]);
-        setConnection((current) =>
-          current.kind === "ready"
-            ? { ...current, syncStatus: refreshedStatus, syncPlan: refreshedPlan }
-            : current,
-        );
-      }
-      setSyncMessage("Synchronization completed and checkpoints were refreshed.");
+      const result = (await response.json()) as {
+        totals: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
+      };
+      await refreshSyncedData();
+      setSyncMessage(
+        `Synchronization completed: ${result.totals.created.toLocaleString()} new, ${result.totals.updated.toLocaleString()} updated, ${result.totals.unchanged.toLocaleString()} unchanged, and ${(result.totals.detail_samples ?? 0).toLocaleString()} sensor samples imported.`,
+      );
     } catch (error: unknown) {
       setSyncMessage(
         error instanceof Error ? error.message : "Synchronization could not start.",
@@ -948,6 +1037,55 @@ export default function App() {
       setIsSyncing(false);
     }
   };
+
+  useEffect(() => {
+    if (
+      !syncStatusValue?.schedule_enabled ||
+      garminConnectionValue?.status !== "connected"
+    ) {
+      return;
+    }
+    let cancelled = false;
+    const checkScheduledSync = async () => {
+      if (scheduledSyncInFlight.current) return;
+      scheduledSyncInFlight.current = true;
+      try {
+        const response = await fetch(
+          `/api/sync/scheduled?through_date=${todayInBrowserTimeZone()}`,
+          { method: "POST" },
+        );
+        if (!response.ok) throw new Error(await readError(response));
+        const result = (await response.json()) as {
+          status: "completed" | "skipped";
+          reason?: string;
+          totals?: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
+        };
+        if (!cancelled && result.status === "completed") {
+          await refreshSyncedData();
+          setSyncMessage(
+            `Daily catch-up completed: ${result.totals?.created ?? 0} new, ${result.totals?.updated ?? 0} updated, and ${result.totals?.detail_samples ?? 0} sensor samples imported.`,
+          );
+        }
+      } catch (error: unknown) {
+        if (!cancelled) {
+          setSyncMessage(
+            error instanceof Error ? error.message : "Automatic catch-up could not run.",
+          );
+          await refreshGarminConnection();
+        }
+      } finally {
+        scheduledSyncInFlight.current = false;
+      }
+    };
+    const initialCheck = window.setTimeout(() => void checkScheduledSync(), 0);
+    const interval = window.setInterval(() => void checkScheduledSync(), 15 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(initialCheck);
+      window.clearInterval(interval);
+    };
+  }, [syncStatusValue?.schedule_enabled, garminConnectionValue?.status]);
+
   const cardRegistry: Record<DashboardCardId, PreviewCard> = {
     latest_steps: {
       id: "latest_steps",
@@ -1015,7 +1153,11 @@ export default function App() {
             <p>Garmin synchronization</p>
             <h2 id="sync-title">Catch up every missing day</h2>
           </div>
-          <button type="button" onClick={() => void runSyncNow()} disabled={isSyncing}>
+          <button
+            type="button"
+            onClick={() => void runSyncNow()}
+            disabled={isSyncing || garminConnectionValue?.status !== "connected"}
+          >
             {isSyncing ? "Starting…" : "Sync now"}
           </button>
         </div>
@@ -1046,7 +1188,9 @@ export default function App() {
           </div>
           <div>
             <span>Schedule</span>
-            <strong>Open app only</strong>
+            <strong>
+              {syncStatusValue?.schedule_enabled ? "Daily · app open" : "Off · app open only"}
+            </strong>
           </div>
         </div>
         {(garminConnectionValue?.status === "not_connected" ||
@@ -1121,6 +1265,14 @@ export default function App() {
             <button type="button" onClick={() => void probeGarmin()} disabled={isConnectingGarmin}>
               Run read-only check
             </button>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => void setDailySync(!syncStatusValue?.schedule_enabled)}
+              disabled={isSyncing}
+            >
+              {syncStatusValue?.schedule_enabled ? "Pause daily sync" : "Enable daily sync"}
+            </button>
             <button className="secondary-action" type="button" onClick={() => void disconnectGarmin()} disabled={isConnectingGarmin}>
               Sign out
             </button>
@@ -1149,15 +1301,16 @@ export default function App() {
             <span>
               {syncStatusValue.last_job.progress_current.toLocaleString()} of {syncStatusValue.last_job.progress_total?.toLocaleString() ?? "—"} intervals
               {syncStatusValue.last_job.checkpoint?.totals
-                ? ` · ${syncStatusValue.last_job.checkpoint.totals.created.toLocaleString()} new · ${syncStatusValue.last_job.checkpoint.totals.updated.toLocaleString()} updated · ${syncStatusValue.last_job.checkpoint.totals.unchanged.toLocaleString()} unchanged`
+                ? ` · ${syncStatusValue.last_job.checkpoint.totals.created.toLocaleString()} new · ${syncStatusValue.last_job.checkpoint.totals.updated.toLocaleString()} updated · ${syncStatusValue.last_job.checkpoint.totals.unchanged.toLocaleString()} unchanged · ${(syncStatusValue.last_job.checkpoint.totals.detail_samples ?? 0).toLocaleString()} sensor samples`
                 : ""}
             </span>
             {syncStatusValue.last_job.error_message && <small>{syncStatusValue.last_job.error_message}</small>}
           </div>
         )}
         <p className="sync-note">
-          The catch-up engine, independent checkpoints, retries, and historical reconciliation are ready.
-          Private Garmin sign-in is still required before network synchronization can run.
+          {garminConnectionValue?.status === "connected"
+            ? `Every run catches up all missing dates and rechecks the latest ${syncStatusValue?.overlap_days ?? 3} days. Daily sync runs only while this app is open.`
+            : "Private Garmin sign-in is required before synchronization can run."}
         </p>
         {syncMessage && <p className="sync-message" role="status">{syncMessage}</p>}
         {connectionMessage && <p className="sync-message" role="status">{connectionMessage}</p>}
