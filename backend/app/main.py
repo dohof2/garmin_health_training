@@ -3,12 +3,16 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date
 from pathlib import Path
+from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel, SecretStr
+from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
-from starlette.responses import FileResponse
+from starlette.responses import FileResponse, StreamingResponse
 
+from .ai_chat import chat_stream
+from .ai_providers import provider_status, save_ai_settings
+from .ai_tools import execute_tool, tool_definitions
 from .dashboard import dashboard_card_layout, save_dashboard_card_layout
 from .database import migrate, schema_status
 from .extended_archive_import import (
@@ -130,6 +134,27 @@ class GoalsUpdate(BaseModel):
     goals: list[GoalUpdate]
 
 
+class AISettingsUpdate(BaseModel):
+    active_provider: str
+    ollama_model: str
+    openai_model: str
+
+
+class AIToolExecutionRequest(BaseModel):
+    arguments: dict[str, object]
+
+
+class AIChatMessage(BaseModel):
+    role: Literal["user", "assistant"]
+    content: str = Field(min_length=1, max_length=4_000)
+
+
+class AIChatRequest(BaseModel):
+    message: str = Field(min_length=1, max_length=4_000)
+    history: list[AIChatMessage] = Field(default_factory=list, max_length=20)
+    timezone: str | None = Field(default=None, max_length=100)
+
+
 def _temporary_download(path: Path, filename: str, media_type: str) -> FileResponse:
     return FileResponse(
         path,
@@ -168,6 +193,47 @@ def update_goals(payload: GoalsUpdate) -> list[dict[str, object]]:
         return save_goals([goal.model_dump() for goal in payload.goals])
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/settings/ai")
+def update_ai_settings(payload: AISettingsUpdate) -> dict[str, object]:
+    try:
+        return save_ai_settings(payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/ai/providers/status")
+def ai_provider_status() -> dict[str, object]:
+    return provider_status()
+
+
+@app.get("/api/ai/tools")
+def ai_tool_catalog() -> list[dict[str, object]]:
+    return tool_definitions()
+
+
+@app.post("/api/ai/tools/{tool_name}")
+def run_ai_tool(
+    tool_name: str, payload: AIToolExecutionRequest
+) -> dict[str, object]:
+    try:
+        return execute_tool(tool_name, payload.arguments)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/ai/chat")
+def ai_chat(payload: AIChatRequest) -> StreamingResponse:
+    return StreamingResponse(
+        chat_stream(
+            payload.message,
+            [item.model_dump() for item in payload.history],
+            payload.timezone,
+        ),
+        media_type="application/x-ndjson",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
+    )
 
 
 @app.get("/api/history/summary")

@@ -26,12 +26,13 @@ class DatabaseMigrationTests(unittest.TestCase):
                     "007_garmin_nutrition_daily.sql",
                     "008_extended_archive_records.sql",
                     "009_sync_foundation.sql",
+                    "010_ai_provider_settings.sql",
                 ],
             )
             self.assertEqual(migrate(database), [])
 
             status = schema_status(database)
-            self.assertEqual(status["migrations"], 9)
+            self.assertEqual(status["migrations"], 10)
             self.assertGreaterEqual(status["tables"], 15)
 
             with closing(sqlite3.connect(database)) as connection:
@@ -58,6 +59,7 @@ class DatabaseMigrationTests(unittest.TestCase):
             self.assertIn("sync_settings", tables)
             self.assertIn("sync_checkpoints", tables)
             self.assertIn("sync_intervals", tables)
+            self.assertIn("ai_settings", tables)
 
     def test_fit_tracking_allows_duplicate_content_at_distinct_paths(self) -> None:
         with tempfile.TemporaryDirectory() as temporary_directory:

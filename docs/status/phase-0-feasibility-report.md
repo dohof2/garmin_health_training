@@ -109,9 +109,10 @@ answer-quality and food-photo testing remain part of their corresponding feature
 no additional model is needed for the historical assistant foundation.
 
 Deterministic application code—not the model—must perform health calculations and
-validated writes. Final provider selection remains explicit because OpenAI offers
-stronger hosted capability but requires internet access and API billing, while Ollama
-keeps inference local with the measured quality/speed tradeoff.
+validated writes. The selected design supports both providers behind one manual
+selector: OpenAI offers stronger hosted capability but requires internet access and
+API billing, while Ollama keeps inference local with the measured quality/speed
+tradeoff. There is no automatic fallback to the paid provider.
 
 ## T1.6 — Workout support inspection
 
@@ -126,5 +127,6 @@ This is enough to justify building preview and mapping prototypes, but not to cl
 Proceeding to the local foundation is reasonable. Phase 1 work can start with synthetic fixtures and no account connection.
 
 The U1 archive and U2 live-account gates are complete. Local text/tool inference is
-viable. The next gate is a deliberate AI-provider choice before T6 model integration;
-provider-neutral read-only tools can be implemented independently of that decision.
+viable. The provider choice is settled as a manual, provider-selectable combination
+of OpenAI and Qwen through Ollama. Provider-neutral read-only tools remain the next
+T6 implementation step.

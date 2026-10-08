@@ -27,7 +27,7 @@ The repository contains application source, pinned dependencies, tests, syntheti
 
 ## Settled requirements — do not ask again
 
-1. **Strictly free software/services at present.** No paid hosting, AI API, subscription, or automatic paid fallback. Use existing computer and local AI; hardware/electricity still consume resources. No hardware purchase assumed.
+1. **A complete free/local path remains required.** No paid hosting, subscription, or automatic paid fallback. Qwen through Ollama is the local default; OpenAI is an optional provider used only when manually selected and may incur API charges. Use existing computer; hardware/electricity still consume resources. No hardware purchase assumed.
 2. **Computer only initially.** Phone access and remote connectivity later.
 3. **No background operation or automatic startup in the first edition.** Run only during an explicitly opened app session. App exit stops app-owned jobs/services and saves checkpoints; do not stop unrelated user-managed services. Minimized is still open. Browser-based design needs a launcher-managed session/explicit Quit action, not an unnoticed server left running. Sync/reminders only while open; catch up on reopening. Background-mode decision is deferred, not an initial-release option.
 4. **Garmin Connect is the sole external health/activity source.** Ignore originating device/sensor identity for ingestion. Do not ask for a sensor inventory or per-device coverage. U3 was removed. User-entered maintenance, food, and profile data are separate local app records.
@@ -52,7 +52,7 @@ The repository contains application source, pinned dependencies, tests, syntheti
 
 ### AI and training
 
-- Local chat uses scoped MCP tools and deterministic application calculations, not unrestricted SQL writes or shell access. Cite underlying periods/records, freshness, and uncertainty. Imported text is data, not instructions.
+- In-app chat uses scoped provider-neutral application tools and deterministic calculations, not unrestricted SQL writes or shell access. An optional MCP adapter is only for external clients. Cite underlying periods/records, freshness, and uncertainty. Imported text is data, not instructions.
 - Example questions: “How has my running volume changed over eight weeks?”, “How was my ride compared to other rides with the same attributes?”, “Was this ride effective? In what way?”
 - Ride comparisons expose matching criteria/tolerances and sample size; match relevant duration, route/elevation, indoor/outdoor, intensity, etc., when available. Effectiveness is relative to session/user intent; distinguish evidence from inferred benefits and long-term improvement.
 - Strength/cycling/running plans; stored availability/equipment/experience/restrictions; structured sessions, feedback, completion tracking and reviewable adjustments. Goals remain optional.
@@ -78,8 +78,8 @@ The repository contains application source, pinned dependencies, tests, syntheti
 - **TypeScript + React:** interface, graphs, forms, chat.
 - **Python + FastAPI:** backend, Garmin integration, parsers, calculations, planning, maintenance.
 - **SQLite / SQL:** local persistence.
-- **Ollama:** free local text/tool and vision models; choose after hardware benchmarks.
-- App backend is MCP host/client with narrow local application-owned MCP server/tools.
+- **AI providers:** manually selectable OpenAI Responses API or Qwen through Ollama; local Qwen remains the no-fee default.
+- App backend calls narrow provider-neutral application tools directly. MCP is an optional adapter for external clients.
 - Candidate Garmin library: `python-garminconnect`. Verify actual authentication/features; not guaranteed or official. The full plan includes research links.
 
 ## Execution backlog and user inputs
@@ -90,7 +90,8 @@ Detailed tasks/subtasks and completion gates are in [`../planning/implementation
 - T11 retains its number but executes alongside/after T6, not necessarily last. First useful release includes data, dashboard, historical AI and maintenance; full scope later includes training/nutrition.
 - User inputs: U1 export complete and locally inventoried, U2 Garmin login/MFA privately in local flow, U3 removed, U4 background decision deferred, U5 usability feedback, U6 in-app training answers, U7 deliberate workout publication/testing, U8 in-app nutrition inputs, U9 free food API key only if required, U10 GitHub sign-in deferred, U11 maintenance details during use.
 - We can inspect this computer's hardware ourselves. Only ask if a different computer is the target.
-- Recommended next work: complete U2 privately and connect the real provider. First perform a small read-only account/data-type check, then run the existing 22-interval plan covering September 28–October 8 for activities and daily metrics. Review counts/errors before enabling the open-session daily schedule. The simulated engine already passes 2/10/30-day gaps, restart, partial failure, late upload, old correction, deletion, unchanged retry, and scheduled/manual-path tests. Do not mark simulated empty intervals as verified Garmin coverage.
+- T6.3 is complete: OpenAI and Qwen share a grounded NDJSON streaming chat flow over `get_health_summary`, `list_activities`, and `compare_periods`; the interface exposes periods, freshness, missing data, record counts, and activity links. Relative periods are application-resolved, Qwen is live-verified, and OpenAI remains mocked until a key is supplied.
+- Recommended next work: implement T6.4 similar-ride matching with explicit criteria/tolerances, visible sample size, and linked source rides. MCP is not a prerequisite.
 - The user does not need to choose libraries/schema/etc. Continue independent work when input is pending. Do not start implementation just because this handoff was loaded; respond to the new chat's actual instruction.
 
 ## GitHub authentication history — important

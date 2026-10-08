@@ -5,6 +5,7 @@ from datetime import date
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
+from .ai_providers import get_ai_settings
 from .database import connect, migrate
 
 
@@ -77,6 +78,7 @@ def _profile_row(connection: object) -> dict[str, object]:
 
 def get_settings(path: Path | None = None) -> dict[str, object]:
     migrate(path)
+    ai_settings = get_ai_settings(path)
     with connect(path) as connection:
         goals = [
             dict(row)
@@ -91,7 +93,11 @@ def get_settings(path: Path | None = None) -> dict[str, object]:
                 """
             )
         ]
-        return {"profile": _profile_row(connection), "goals": goals}
+        return {
+            "profile": _profile_row(connection),
+            "goals": goals,
+            "ai": ai_settings,
+        }
 
 
 def save_profile(profile: dict[str, object], path: Path | None = None) -> dict[str, object]:

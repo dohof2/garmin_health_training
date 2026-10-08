@@ -24,7 +24,12 @@ restored, with the saved layout persisted locally in SQLite. Activity calendar
 dates follow the browser's validated IANA timezone, including daylight-saving
 transitions; date-only Garmin health metrics retain their original dates.
 Optional local profile fields and multiple training goals can be edited from
-the Settings section. AI features remain future work.
+the Settings section. The AI provider foundation now supports manual selection
+between local Qwen through Ollama and the OpenAI Responses API; grounded chat
+now streams answers through either provider. Three provider-neutral read-only
+tools supply deterministic health summaries, filtered activities with sensor
+evidence, and period comparisons, while the interface shows periods, freshness,
+record counts, missing data, and activity evidence links.
 
 ## Project plan
 
@@ -40,20 +45,32 @@ Read the [review plan](docs/planning/health-training-app-plan.md) for the requir
 - Plan personalized strength, cycling, and running sessions and publish supported workouts to Garmin Connect.
 - Review food-photo estimates and log calories, protein, fat, and carbohydrates.
 - Track daily nutrition targets and status, with optional messaging later.
-- Use local storage, local AI, and MCP tools, targeting zero recurring service fees.
+- Use local storage and provider-neutral application tools, with local AI available for zero recurring service fees and MCP optional for external AI clients.
 
 ## Proposed architecture
 
 React/TypeScript interface, Python/FastAPI backend, SQLite storage, a
 provider-neutral AI layer, and scoped read-only query tools. Ollama is installed
-and benchmarked locally; the final AI provider selection remains explicit
-before T6 integration.
+and benchmarked locally. Both Qwen through Ollama and OpenAI are supported behind
+one selectable interface; provider switching is manual, so there is no automatic
+fallback to a paid API. The in-app assistant calls application tools directly;
+an MCP adapter is optional and only needed for external AI clients.
+
+For OpenAI, launch the backend from a terminal where `OPENAI_API_KEY` is set.
+The key is read from the process environment and is not saved in SQLite or
+returned by the API. The integration uses the official OpenAI Python SDK and
+Responses API.
+
+The read-only tool catalog is available locally at `GET /api/ai/tools`. Tools
+execute through `POST /api/ai/tools/{tool_name}` with an `arguments` object.
+Only registered operations and fields are accepted; models never receive SQL,
+shell, or filesystem access.
 
 ## Next steps
 
-1. Review the plan and answer its personalization and hardware questions.
-2. Validate Garmin archive formats, online integration, workout compatibility, and local model performance.
-3. Build the import/export and synchronization foundation, then graphs and the historical AI assistant.
+1. Add similar-ride matching with visible criteria, tolerances, sample size, and linked rides.
+2. Add goal-aware ride assessment with explicit assumptions when session intent is missing.
+3. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is already verified locally.
 
 ## Local development
 

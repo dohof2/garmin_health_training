@@ -32,13 +32,13 @@ inspection on 6 October 2026. See
 ## 2. What I will handle without asking you to choose
 
 - Project structure, free libraries, database design, migrations, import parsers, and API design.
-- Local model selection based on measured speed and memory, with no paid fallback.
+- Local model selection based on measured speed and memory; OpenAI remains an explicit manual choice, never an automatic paid fallback.
 - Dashboard components and the ability to add more graphs later.
 - Reliable synchronization, deduplication, retries, and error reporting.
-- MCP tools, evidence-backed calculations, and safe separation of queries from actions.
+- Provider-neutral application tools, evidence-backed calculations, safe separation of queries from actions, and an optional MCP adapter for external clients.
 - Automated tests, local packaging, documentation, and backup/restore validation.
 
-Existing decisions remain settled: computer first, bulk import first, account-wide Garmin sync afterward, optional goals, saved training answers, strictly free services, and acceptance of evaluating the community Garmin integration. I will not ask you to approve these again. Environment permission prompts may still be necessary for specific downloads or access outside the project.
+Existing decisions remain settled: computer first, bulk import first, account-wide Garmin sync afterward, optional goals, saved training answers, a complete local no-fee path, optional manually selected OpenAI access, and acceptance of evaluating the community Garmin integration. I will not ask you to approve these again. Environment permission prompts may still be necessary for specific downloads or access outside the project.
 
 ## 3. Milestones and dependencies
 
@@ -131,12 +131,12 @@ Done when synchronization covers the entire outstanding gap rather than a fixed 
 
 Done when the three initial views are accurate and another supported graph can be added without rebuilding the dashboard.
 
-### T6 — Add the historical AI assistant and MCP
+### T6 — Add the historical AI assistant and optional MCP adapter
 
 | Subtask | Work | Your involvement |
 |---|---|---|
-| T6.1 | Connect the chosen local model; load it on demand and implement clear unavailable/slow-model states. | None |
-| T6.2 | Implement scoped MCP query tools and deterministic calculations over requested date ranges. | None |
+| T6.1 | Connect both selectable providers: OpenAI Responses API and Qwen through Ollama. Keep switching manual, load the local model on demand, and implement clear unavailable/slow-model states. | OpenAI API key supplied through the backend environment when cloud use is wanted |
+| T6.2 | Implement scoped, provider-neutral application query tools and deterministic calculations over requested date ranges. Optionally expose selected tools through a local MCP adapter later. | None |
 | T6.3 | Add streaming chat, source links, freshness, uncertainty, and refusal to invent missing values. | None |
 | T6.4 | Implement similar-ride selection with visible criteria/tolerances and adjustable filters. | None; user can refine comparisons in the app |
 | T6.5 | Assess ride effectiveness against recorded/session goals, with conditional answers when purpose is unknown. | Optional session intent in chat |
@@ -199,7 +199,7 @@ Done when everyday recovery works and no ongoing paid service is needed. Verify 
 
 Depends on T2 storage and T3 export/backup services; AI prompt execution depends on T6. It does not depend on the Garmin export, Garmin login, or device/sensor inventory. Include this module in T10's final backup and daily-use checks.
 
-**Execution method:** Store authoritative records in the existing local SQLite database. AI prompts call structured, validated MCP tools; those tools write records, not CSV text. Provide CSV import/export for spreadsheet use and portability. A CSV export is a snapshot. This is the proposed storage choice for review; it adds no paid dependency.
+**Execution method:** Store authoritative records in the existing local SQLite database. AI prompts call structured, validated application tools directly; those tools write records, not CSV text. An optional MCP adapter can expose selected tools to external AI clients without becoming an in-app dependency. Provide CSV import/export for spreadsheet use and portability. A CSV export is a snapshot. This is the proposed storage choice for review; it adds no paid dependency.
 
 | Subtask | Work | Your involvement |
 |---|---|---|

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from os import environ
 from pathlib import Path
+from unittest.mock import patch
 
+from app.ai_providers import get_ai_settings, provider_status, save_ai_settings
 from app.settings import get_settings, save_goals, save_profile
 
 
@@ -15,6 +18,7 @@ class SettingsTests(unittest.TestCase):
             defaults = get_settings(database)["profile"]
             self.assertEqual(defaults["preferred_distance_unit"], "km")
             self.assertEqual(defaults["preferred_weight_unit"], "kg")
+            self.assertEqual(get_settings(database)["ai"]["active_provider"], "ollama")
 
             saved = save_profile(
                 {
@@ -82,6 +86,46 @@ class SettingsTests(unittest.TestCase):
                     ],
                     database,
                 )
+
+    def test_ai_provider_selection_supports_ollama_and_openai(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "settings.sqlite3"
+            defaults = get_ai_settings(database)
+            self.assertEqual(defaults["ollama_model"], "qwen3.5:2b")
+            self.assertEqual(defaults["openai_model"], "gpt-6-astra")
+
+            saved = save_ai_settings(
+                {
+                    "active_provider": "openai",
+                    "ollama_model": "qwen3.5:4b",
+                    "openai_model": "gpt-6-astra",
+                },
+                database,
+            )
+            self.assertEqual(saved["active_provider"], "openai")
+            self.assertEqual(saved["ollama_model"], "qwen3.5:4b")
+
+            with self.assertRaisesRegex(ValueError, "ollama or openai"):
+                save_ai_settings(
+                    {
+                        "active_provider": "unknown",
+                        "ollama_model": "qwen3.5:2b",
+                        "openai_model": "gpt-6-astra",
+                    },
+                    database,
+                )
+
+    @patch("app.ai_providers._ollama_models", return_value={"qwen3.5:2b"})
+    def test_provider_status_never_exposes_openai_key(self, _models: object) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / "settings.sqlite3"
+            with patch.dict(environ, {"OPENAI_API_KEY": "secret-test-key"}):
+                status = provider_status(database)
+
+            providers = status["providers"]
+            self.assertTrue(providers["ollama"]["available"])
+            self.assertTrue(providers["openai"]["configured"])
+            self.assertNotIn("secret-test-key", str(status))
 
 
 if __name__ == "__main__":

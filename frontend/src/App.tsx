@@ -232,9 +232,67 @@ type UserGoal = {
   notes: string | null;
 };
 
+type AiProviderName = "ollama" | "openai";
+
+type AiSettings = {
+  active_provider: AiProviderName;
+  ollama_model: string;
+  openai_model: string;
+  updated_at: string;
+};
+
+type AiProviderStatus = {
+  active_provider: AiProviderName;
+  providers: Record<AiProviderName, {
+    configured: boolean;
+    available: boolean;
+    model: string;
+    detail: string;
+  }>;
+};
+
+type ChatEvidence = {
+  tool: string;
+  period?: { start: string; end: string };
+  period_a?: { start: string; end: string };
+  period_b?: { start: string; end: string };
+  freshness?: {
+    latest_recorded_at?: string | null;
+    latest_started_at?: string | null;
+    sources?: string[];
+  };
+  record_count?: number;
+  total_matches?: number;
+  returned_count?: number;
+  truncated?: boolean;
+  missing_metric_types?: string[];
+  records?: Array<{
+    id: string;
+    activity_type: string;
+    local_date: string;
+    url: string;
+  }>;
+  limitations?: string[];
+};
+
+type ChatMessage = {
+  id: string;
+  role: "user" | "assistant";
+  content: string;
+  evidence: ChatEvidence[];
+};
+
+type ChatStreamEvent =
+  | { type: "start"; provider: AiProviderName; model: string }
+  | { type: "tool"; evidence: ChatEvidence }
+  | { type: "delta"; text: string }
+  | { type: "complete"; provider: AiProviderName; model: string; evidence: ChatEvidence[] }
+  | { type: "error"; message: string };
+
 type AppSettings = {
   profile: UserProfile;
   goals: UserGoal[];
+  ai: AiSettings;
 };
 
 type ConnectionState =
@@ -251,6 +309,7 @@ type ConnectionState =
       syncPlan: SyncPlan;
       garminConnection: GarminConnection;
       settings: AppSettings;
+      aiProviderStatus: AiProviderStatus;
     }
   | { kind: "offline" };
 
@@ -552,6 +611,16 @@ export default function App() {
   const [settingsDraft, setSettingsDraft] = useState<AppSettings | null>(null);
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
+  const [chatInput, setChatInput] = useState("");
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatStatus, setChatStatus] = useState<{
+    kind: "idle" | "streaming" | "error";
+    provider?: AiProviderName;
+    model?: string;
+    slow?: boolean;
+    message?: string;
+  }>({ kind: "idle" });
+  const chatAbortController = useRef<AbortController | null>(null);
   const scheduledSyncInFlight = useRef(false);
 
   useEffect(() => {
@@ -570,8 +639,9 @@ export default function App() {
       fetch("/api/sync/plan", { signal: controller.signal }),
       fetch("/api/garmin/connection", { signal: controller.signal }),
       fetch("/api/settings", { signal: controller.signal }),
+      fetch("/api/ai/providers/status", { signal: controller.signal }),
     ])
-      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse, garminConnectionResponse, settingsResponse]) => {
+      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse, garminConnectionResponse, settingsResponse, aiStatusResponse]) => {
         if (
           !healthResponse.ok ||
           !summaryResponse.ok ||
@@ -582,11 +652,12 @@ export default function App() {
           !syncStatusResponse.ok ||
           !syncPlanResponse.ok ||
           !garminConnectionResponse.ok ||
-          !settingsResponse.ok
+          !settingsResponse.ok ||
+          !aiStatusResponse.ok
         ) {
           throw new Error("Backend is unavailable");
         }
-        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection, settings] = await Promise.all([
+        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection, settings, aiProviderStatus] = await Promise.all([
           healthResponse.json() as Promise<HealthResponse>,
           summaryResponse.json() as Promise<HistorySummary>,
           weeklyResponse.json() as Promise<WeeklyCalories | null>,
@@ -597,6 +668,7 @@ export default function App() {
           syncPlanResponse.json() as Promise<SyncPlan>,
           garminConnectionResponse.json() as Promise<GarminConnection>,
           settingsResponse.json() as Promise<AppSettings>,
+          aiStatusResponse.json() as Promise<AiProviderStatus>,
         ]);
         setConnection({
           kind: "ready",
@@ -610,6 +682,7 @@ export default function App() {
           syncPlan,
           garminConnection,
           settings,
+          aiProviderStatus,
         });
         setSettingsDraft(settings);
         if (summary.activity_date_end) {
@@ -692,6 +765,10 @@ export default function App() {
   const garminConnectionValue =
     connection.kind === "ready" ? connection.garminConnection : null;
   const preferredDistanceUnit = settingsDraft?.profile.preferred_distance_unit ?? "km";
+  const activeAiProvider = settingsDraft?.ai.active_provider ?? "ollama";
+  const activeAiStatus = connection.kind === "ready"
+    ? connection.aiProviderStatus.providers[activeAiProvider]
+    : null;
   const dataModeLabel =
     summary?.data_mode === "synthetic"
       ? "Synthetic data · not Garmin data"
@@ -782,6 +859,150 @@ export default function App() {
     } finally {
       setIsSavingSettings(false);
     }
+  };
+
+  const saveAISettings = async () => {
+    if (!settingsDraft) return;
+    setIsSavingSettings(true);
+    setSettingsMessage(null);
+    try {
+      const response = await fetch("/api/settings/ai", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settingsDraft.ai),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const ai = (await response.json()) as AiSettings;
+      const statusResponse = await fetch("/api/ai/providers/status");
+      if (!statusResponse.ok) throw new Error(await readError(statusResponse));
+      const aiProviderStatus = (await statusResponse.json()) as AiProviderStatus;
+      setSettingsDraft((current) => current ? { ...current, ai } : current);
+      setConnection((current) => current.kind === "ready"
+        ? {
+            ...current,
+            settings: { ...current.settings, ai },
+            aiProviderStatus,
+          }
+        : current);
+      setSettingsMessage(`AI provider saved: ${ai.active_provider === "openai" ? "OpenAI" : "Qwen through Ollama"}.`);
+    } catch (error: unknown) {
+      setSettingsMessage(error instanceof Error ? error.message : "AI settings could not be saved.");
+    } finally {
+      setIsSavingSettings(false);
+    }
+  };
+
+  const sendChatMessage = async (suggestedMessage?: string) => {
+    const message = (suggestedMessage ?? chatInput).trim();
+    if (!message || chatStatus.kind === "streaming") return;
+
+    const userMessage: ChatMessage = {
+      id: crypto.randomUUID(),
+      role: "user",
+      content: message,
+      evidence: [],
+    };
+    const assistantId = crypto.randomUUID();
+    const assistantMessage: ChatMessage = {
+      id: assistantId,
+      role: "assistant",
+      content: "",
+      evidence: [],
+    };
+    const history = chatMessages
+      .filter((item) => item.content.trim())
+      .slice(-20)
+      .map(({ role, content }) => ({ role, content }));
+    setChatMessages((current) => [...current, userMessage, assistantMessage]);
+    setChatInput("");
+    setChatStatus({ kind: "streaming", slow: false });
+
+    const controller = new AbortController();
+    chatAbortController.current = controller;
+    const slowTimer = window.setTimeout(() => {
+      setChatStatus((current) => current.kind === "streaming"
+        ? { ...current, slow: true }
+        : current);
+    }, 10_000);
+
+    const applyEvent = (event: ChatStreamEvent) => {
+      if (event.type === "start") {
+        setChatStatus({
+          kind: "streaming",
+          provider: event.provider,
+          model: event.model,
+          slow: false,
+        });
+      } else if (event.type === "tool") {
+        setChatMessages((current) => current.map((item) => item.id === assistantId
+          ? { ...item, evidence: [...item.evidence, event.evidence] }
+          : item));
+      } else if (event.type === "delta") {
+        setChatMessages((current) => current.map((item) => item.id === assistantId
+          ? { ...item, content: item.content + event.text }
+          : item));
+      } else if (event.type === "complete") {
+        setChatStatus({
+          kind: "idle",
+          provider: event.provider,
+          model: event.model,
+        });
+      } else if (event.type === "error") {
+        setChatMessages((current) => current.map((item) => item.id === assistantId
+          ? { ...item, content: item.content || event.message }
+          : item));
+        setChatStatus({ kind: "error", message: event.message });
+      }
+    };
+
+    try {
+      const response = await fetch("/api/ai/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message, history, timezone: browserTimeZone }),
+        signal: controller.signal,
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      if (!response.body) throw new Error("The assistant response could not be streamed.");
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      while (true) {
+        const { done, value } = await reader.read();
+        buffer += decoder.decode(value, { stream: !done });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) applyEvent(JSON.parse(line) as ChatStreamEvent);
+        }
+        if (done) break;
+      }
+      if (buffer.trim()) applyEvent(JSON.parse(buffer) as ChatStreamEvent);
+      setChatStatus((current) => current.kind === "streaming"
+        ? { kind: "idle", provider: current.provider, model: current.model }
+        : current);
+    } catch (error: unknown) {
+      if (error instanceof DOMException && error.name === "AbortError") {
+        setChatMessages((current) => current.map((item) => item.id === assistantId
+          ? { ...item, content: item.content || "Response stopped." }
+          : item));
+        setChatStatus({ kind: "idle" });
+      } else {
+        const messageText = error instanceof Error ? error.message : "The assistant could not respond.";
+        setChatMessages((current) => current.map((item) => item.id === assistantId
+          ? { ...item, content: item.content || messageText }
+          : item));
+        setChatStatus({ kind: "error", message: messageText });
+      }
+    } finally {
+      window.clearTimeout(slowTimer);
+      chatAbortController.current = null;
+    }
+  };
+
+  const stopChatResponse = () => {
+    chatAbortController.current?.abort();
   };
 
   const addGoal = () => {
@@ -1278,6 +1499,7 @@ export default function App() {
         <a href="#dashboard">Dashboard</a>
         <a href="#activities">Activities</a>
         <a href="#sync">Sync</a>
+        <a href="#assistant">Assistant</a>
         <a href="#data">Data</a>
         <a href="#settings">Settings</a>
       </nav>
@@ -1286,7 +1508,7 @@ export default function App() {
         <h1>Your training history,<br />kept close.</h1>
         <p className="intro">
           Your imported history and live Garmin updates stay on this computer
-          while normalized records power the dashboard and future assistant.
+          while normalized records power the dashboard and grounded assistant.
         </p>
         <div className={`connection connection--${connection.kind}`}>
           <span aria-hidden="true" />
@@ -1633,6 +1855,120 @@ export default function App() {
             })}
           </div>
         )}
+      </section>
+
+      <section className="assistant" id="assistant" aria-labelledby="assistant-title">
+        <div className="section-heading assistant-heading">
+          <div>
+            <p>Grounded history assistant</p>
+            <h2 id="assistant-title">Ask your Garmin data</h2>
+          </div>
+          <div className={`assistant-provider ${activeAiStatus?.available ? "assistant-provider--ready" : "assistant-provider--attention"}`}>
+            <strong>{activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
+            <span>{activeAiStatus?.available ? "Ready" : "Setup needed"}</span>
+          </div>
+        </div>
+        <p className="assistant-intro">
+          The assistant can only read through validated health-summary, activity,
+          and period-comparison tools. Calculations come from application code,
+          and every data answer shows the records or periods used.
+        </p>
+        <p className="assistant-privacy">
+          {activeAiProvider === "openai"
+            ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
+            : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
+          {" "}Chat messages are currently kept only in this page session.
+        </p>
+
+        <div className="chat-shell">
+          {chatMessages.length === 0 ? (
+            <div className="chat-empty">
+              <strong>Try a grounded question</strong>
+              <div className="chat-suggestions">
+                <button type="button" onClick={() => void sendChatMessage("Summarize my steps and sleep over the last seven days.")}>Last seven days</button>
+                <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
+                <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
+              </div>
+            </div>
+          ) : (
+            <div className="chat-messages" aria-live="polite">
+              {chatMessages.map((message) => (
+                <article className={`chat-message chat-message--${message.role}`} key={message.id}>
+                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
+                  <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
+                  {message.evidence.length > 0 && (
+                    <div className="chat-evidence">
+                      {message.evidence.map((evidence, index) => (
+                        <div key={`${message.id}-${evidence.tool}-${index}`}>
+                          <strong>{evidence.tool.replaceAll("_", " ")}</strong>
+                          {evidence.period && <span>{formatLongDate(evidence.period.start)} – {formatLongDate(evidence.period.end)}</span>}
+                          {evidence.period_a && evidence.period_b && (
+                            <span>
+                              {formatLongDate(evidence.period_a.start)}–{formatLongDate(evidence.period_a.end)} vs. {formatLongDate(evidence.period_b.start)}–{formatLongDate(evidence.period_b.end)}
+                            </span>
+                          )}
+                          {typeof evidence.record_count === "number" && <small>{evidence.record_count.toLocaleString()} metric records</small>}
+                          {typeof evidence.total_matches === "number" && (
+                            <small>{evidence.total_matches.toLocaleString()} matching activities{evidence.truncated ? ` · ${evidence.returned_count} shown` : ""}</small>
+                          )}
+                          {(evidence.freshness?.latest_recorded_at || evidence.freshness?.latest_started_at) && (
+                            <small>Fresh through {formatLongDate(evidence.freshness.latest_recorded_at ?? evidence.freshness.latest_started_at ?? "")}</small>
+                          )}
+                          {evidence.records && evidence.records.length > 0 && (
+                            <div className="evidence-links">
+                              {evidence.records.slice(0, 6).map((record) => (
+                                <a href={`${record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} key={record.id} target="_blank" rel="noreferrer">
+                                  {record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
+                                </a>
+                              ))}
+                            </div>
+                          )}
+                          {evidence.missing_metric_types && evidence.missing_metric_types.length > 0 && (
+                            <small>Not recorded: {evidence.missing_metric_types.join(", ")}</small>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+
+          <form
+            className="chat-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendChatMessage();
+            }}
+          >
+            <label htmlFor="chat-question">Question about your stored data</label>
+            <textarea
+              id="chat-question"
+              maxLength={4000}
+              placeholder="For example: How has my running volume changed over the last eight weeks?"
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              disabled={chatStatus.kind === "streaming"}
+            />
+            <div className="chat-actions">
+              <span>
+                {chatStatus.kind === "streaming"
+                  ? chatStatus.slow
+                    ? "Still working—local models can take longer."
+                    : `Using ${chatStatus.model ?? "the selected model"}…`
+                  : chatStatus.kind === "error"
+                    ? chatStatus.message
+                    : "Missing measurements are never filled with guesses."}
+              </span>
+              {chatStatus.kind === "streaming" ? (
+                <button className="secondary-action" type="button" onClick={stopChatResponse}>Stop</button>
+              ) : (
+                <button type="submit" disabled={!chatInput.trim() || connection.kind !== "ready"}>Ask</button>
+              )}
+            </div>
+          </form>
+        </div>
       </section>
 
       <section className="coverage" id="data" aria-labelledby="coverage-title">
@@ -1999,6 +2335,86 @@ export default function App() {
                   />
                 </label>
               </div>
+            </form>
+
+            <form
+              className="settings-panel settings-panel--ai"
+              onSubmit={(event) => {
+                event.preventDefault();
+                void saveAISettings();
+              }}
+            >
+              <div className="settings-panel-heading">
+                <div>
+                  <span>AI providers</span>
+                  <h3>OpenAI and local Qwen</h3>
+                </div>
+                <button type="submit" disabled={isSavingSettings}>Save AI settings</button>
+              </div>
+              <p>
+                Choose which provider the assistant uses. Switching is manual, so the app
+                never falls back to a paid API without your choice.
+              </p>
+              <div className="settings-fields settings-fields--ai">
+                <label>
+                  Active provider
+                  <select
+                    value={settingsDraft.ai.active_provider}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      ai: {
+                        ...settingsDraft.ai,
+                        active_provider: event.target.value as AiProviderName,
+                      },
+                    })}
+                  >
+                    <option value="ollama">Qwen through Ollama</option>
+                    <option value="openai">OpenAI API</option>
+                  </select>
+                </label>
+                <label>
+                  Ollama model
+                  <input
+                    type="text"
+                    maxLength={100}
+                    value={settingsDraft.ai.ollama_model}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      ai: { ...settingsDraft.ai, ollama_model: event.target.value },
+                    })}
+                  />
+                </label>
+                <label>
+                  OpenAI model
+                  <input
+                    type="text"
+                    maxLength={100}
+                    value={settingsDraft.ai.openai_model}
+                    onChange={(event) => setSettingsDraft({
+                      ...settingsDraft,
+                      ai: { ...settingsDraft.ai, openai_model: event.target.value },
+                    })}
+                  />
+                </label>
+              </div>
+              {connection.kind === "ready" && (
+                <div className="ai-provider-status" aria-label="AI provider readiness">
+                  {(["ollama", "openai"] as const).map((provider) => {
+                    const status = connection.aiProviderStatus.providers[provider];
+                    return (
+                      <div key={provider} className={status.available ? "ai-provider-ready" : "ai-provider-attention"}>
+                        <strong>{provider === "ollama" ? "Qwen / Ollama" : "OpenAI"}</strong>
+                        <span>{status.available ? "Ready" : "Setup needed"}</span>
+                        <small>{status.detail}</small>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+              <p className="ai-key-note">
+                OpenAI keys are read from <code>OPENAI_API_KEY</code> in the backend environment
+                and are never saved in this database or displayed here.
+              </p>
             </form>
 
             <form

@@ -3,7 +3,7 @@
 Date: 19 September 2026  
 Status: Revised with your review decisions. Application implementation has not started.
 
-**Goal:** Build a local application personalized to your health, training, nutrition, schedule, and goals. It should combine Garmin history, useful graphs, an AI assistant, training planning, and food tracking using strictly free software and services for the current version, with no paid subscriptions, servers, or AI APIs.
+**Goal:** Build a local application personalized to your health, training, nutrition, schedule, and goals. It should combine Garmin history, useful graphs, an AI assistant, training planning, and food tracking with a complete local, zero-recurring-fee path. OpenAI is an optional manually selected provider, not a required service or automatic paid fallback.
 
 ## 1. Proposed experience
 
@@ -21,12 +21,12 @@ Start with a browser-based app running on your own computer. The first edition r
 | Manual import and export | First-use Garmin archive import, individual-file imports, and portable data exports | Validate actual archive layouts and report unsupported or incomplete records |
 | Maintenance and accessory replacement log | Record, correct, and query equipment history through AI chat; import/export CSV | Recommended storage: local SQLite, with portable CSV exports |
 | Graphs of the data you want | Customizable dashboard, date filters, comparisons, activity details | Show the metrics available through Garmin Connect |
-| AI questions about current and historical data | Chat connected to verified local data queries through MCP | Model performance depends on your computer |
+| AI questions about current and historical data | Chat connected directly to verified application query tools; optionally expose those tools through MCP for external AI clients | Model performance depends on the selected provider and your computer |
 | Personalized strength, cycling, and running plans | Profile, training calendar, structured sessions, feedback, and adaptive proposals | Requires your goals, availability, experience, and constraints |
 | Schedule sessions in Garmin Connect | Preview, publish, schedule, and verify supported workouts | Test each sport and your device; calendar entry does not guarantee device delivery |
 | Food logging from pictures | Food recognition, portion estimate, nutrient lookup, editable meal log | Pictures cannot reliably reveal exact portions or hidden ingredients |
 | Daily nutrition goals and live status | Daily targets, consumed/remaining totals, optional reminders | Targets are estimates; WhatsApp is an optional integration |
-| Free servers and MCP | Local server, SQLite, local model, and a narrow local MCP server | Existing hardware and electricity still have costs; free cloud tiers have limits |
+| Free servers and optional MCP | Local server, SQLite, local model, and an optional narrow local MCP adapter | Existing hardware and electricity still have costs; free cloud tiers have limits |
 
 ### Garmin decision
 
@@ -222,23 +222,24 @@ These are design choices to review, not installed components.
 | Database | SQLite with migrations | Simple single-user local storage |
 | Files | Local application data folder | Photos, imports, and recoverable exports |
 | In-session jobs | Persistent job records plus a scheduler active only during the open app session | Sync, retries, and catch-up; stop on app exit and resume pending work on reopening |
-| AI runtime | Ollama with a locally runnable text/tool model and vision model | Avoid recurring inference fees; benchmark before model selection |
-| MCP | One application-owned local MCP server | Narrow, validated access to data and actions |
+| AI runtime | Selectable OpenAI Responses API or Qwen through local Ollama | OpenAI needs internet/API billing; Ollama preserves offline, zero-API-fee use |
+| Application tools | Provider-neutral, application-owned query/action registry | Narrow, validated access to data and actions for the in-app assistant |
+| MCP | Optional local adapter over selected application tools | Needed only if an external AI client must use the app's tools |
 | Secrets | Operating-system credential store | Garmin session tokens and optional API keys |
 
 Ollama supports image input with compatible vision models, but food recognition quality and speed need testing on your hardware. [Ollama vision documentation](https://github.com/ollama/ollama/blob/main/docs/capabilities/vision.mdx)
 
-The app backend acts as the AI host/MCP client. Its local MCP server calls the same application services used by the interface. Proposed tools include `get_health_summary`, `compare_periods`, `list_activities`, `get_nutrition_status`, `draft_training_week`, `save_confirmed_meal`, and `publish_approved_workout`. Write actions require validated inputs and the relevant user action recorded by the application.
+The app backend acts as the AI host and invokes a provider-neutral registry of application tools directly. Proposed tools include `get_health_summary`, `compare_periods`, `list_activities`, `get_nutrition_status`, `draft_training_week`, `save_confirmed_meal`, and `publish_approved_workout`. Write actions require validated inputs and the relevant user action recorded by the application. An optional local MCP adapter may later expose selected tools to external AI clients without duplicating business logic.
 
-MCP connects an assistant to tools and data; it does not provide a model, free hosting, or Garmin authorization. Begin with a local process transport and avoid exposing MCP to the public internet. [MCP architecture](https://modelcontextprotocol.io/specification/2025-03-26/architecture/index)
+MCP is not required for the in-app assistant because the backend can call its own tools directly. It is only an interoperability layer for connecting an external assistant to those tools and data; it does not provide a model, free hosting, or Garmin authorization. If added, begin with a local process transport and do not expose it to the public internet. [MCP architecture](https://modelcontextprotocol.io/specification/2025-03-26/architecture/index)
 
 Core records: user profile and saved questionnaire answers, optional goals and their history, dashboard configurations, daily metrics, activities and samples, strength sets, workouts and steps, scheduled sessions, meal items, nutrient references, daily targets, equipment labels, maintenance/replacement events and revisions, chat evidence, sync jobs, and action history.
 
-Maintenance MCP tools: `log_maintenance`, `list_maintenance`, `update_maintenance`, `undo_maintenance_change`, and `export_maintenance_csv`. They use validated application services and operation IDs so a retried tool call cannot duplicate an entry. A repeated real-world maintenance event remains a separate record; do not deduplicate solely by text similarity.
+Maintenance application tools: `log_maintenance`, `list_maintenance`, `update_maintenance`, `undo_maintenance_change`, and `export_maintenance_csv`. They use validated application services and operation IDs so a retried tool call cannot duplicate an entry. A repeated real-world maintenance event remains a separate record; do not deduplicate solely by text similarity. The optional MCP adapter may expose these tools later.
 
 ## 6. Cost, privacy, and availability
 
-**Confirmed constraint: strictly free software and services at present.** No paid server, AI API, subscription, or automatic paid fallback. Run on existing hardware; no hardware purchase is assumed. Benchmark local models. If performance is insufficient, test smaller models or reduce workload rather than switch to a paid service. Existing hardware and electricity still consume resources.
+**Confirmed baseline: the app must remain fully usable without recurring service fees.** Qwen through Ollama is the free local path. OpenAI is also supported as an explicitly selected optional provider and may incur API charges; the app never switches to it automatically. No paid server, subscription, or automatic paid fallback is required. Run on existing hardware; no hardware purchase is assumed. Existing hardware and electricity still consume resources.
 
 - The app can display stored data offline. Garmin updates and external food lookups need internet access.
 - Synchronization and local reminders run only while the computer is awake and the app session is open. No reminders or synchronization occur while the app is closed. Catch up from saved checkpoints on reopening; do not require the app to have been open within the last 24 hours.
@@ -255,7 +256,7 @@ Maintenance MCP tools: `log_maintenance`, `list_maintenance`, `update_maintenanc
 | 0 — Decisions and feasibility | Confirm hardware; inspect a full Garmin export; test Garmin Connect data coverage and per-sport publishing; benchmark free local AI and in-session resource use | Capability matrix documents archive/data-type coverage and limitations; resource measurements document first-edition performance; no paid dependencies |
 | 1 — Data foundation | Local app, storage, profile, full-history manual import, manual exports, daily sync, Sync now button, retries | Supported archive/file fixtures import correctly; repeat imports and subsequent sync create no duplicates; source totals match sampled Garmin days; jobs resume; export/restore preserves records and relationships |
 | 2 — Graphs | Steps, last activity, weekly calories; reusable cards and saved configuration | Basic metrics handle dates, units, and missing data; layout survives restart/restore; adding a supported card requires no dashboard redesign |
-| 3 — AI history assistant | MCP tools, grounded answers, ride comparisons/assessments, optional goal and profile updates through chat | Answers match independent calculations and expose evidence; goals can be skipped; form/chat edits share the same persisted profile |
+| 3 — AI history assistant | Internal application tools, grounded answers, ride comparisons/assessments, optional goal and profile updates through chat; optional MCP adapter later | Answers match independent calculations and expose evidence; goals can be skipped; form/chat edits share the same persisted profile |
 | 3A — Maintenance log | Chat-based maintenance/replacement entries, history screen, corrections/undo, CSV import/export | Clear prompts save accurately; ambiguous prompts ask targeted questions; retries/reimports do not duplicate entries; CSV and backup round trips preserve records |
 | 4 — Training and Garmin | Just-in-time training questions, saved answers, weekly planning, feedback, calendar, publishing | Missing context is requested before personalized advice and reused afterward; supported sports pass publication tests without duplicate sessions |
 | 5 — Food and nutrition | Photo review, nutrient lookup, manual logging, target calculation | Known-portion meals assess estimate quality; edits and daily totals calculate correctly; uncertainty stays visible |
@@ -279,7 +280,7 @@ Avoid a firm delivery estimate until phase 0 resolves the biggest risks: Garmin 
 | 4. Dashboard | Start with steps, last activity, and weekly calories. Expand iteratively; design for future AI-added graphs. |
 | 5. Training preferences | Ask for necessary information before personalized training advice; save and reuse the answers. |
 | 6. Access | Computer first, phone connectivity later. |
-| 7. Budget | Strictly free at present; no paid fallback. |
+| 7. Budget | Complete local no-fee path; optional OpenAI use only by manual selection, with no paid fallback. |
 | 8. Messaging | In-app status and local reminders are sufficient initially, interpreting the user's “yes.” |
 | 9. Garmin route | Community integration and its potential maintenance needs are accepted for evaluation. |
 | 10. Maintenance log | Add AI-prompt logging of maintenance and accessory replacements. Recommended implementation: SQLite as the authoritative log with CSV import/export; no upfront equipment inventory required. |
