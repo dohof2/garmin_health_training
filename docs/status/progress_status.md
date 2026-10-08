@@ -1,8 +1,8 @@
 # Garmin Health & Training App — Progress Status
 
 Last updated: 8 October 2026
-Overall status: **The local data foundation and first dashboard are operational; live Garmin authentication and retrieval remain.**
-Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, portable export/backup, and restore preview are operational. The offline T4 synchronization foundation now has separate activity/daily-metric checkpoints, full-gap daily intervals, verified empty-day tracking, overlap refresh, selectable historical reconciliation, atomic commits, retry/restart recovery, single-job locking, explicit deletion handling, and the open-session Sync now UI. Real Garmin sign-in and retrieval remain intentionally deferred until U2; AI features have not started.
+Overall status: **The local data foundation, first dashboard, and private live Garmin connection are operational; the first catch-up sync remains.**
+Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, portable export/backup, and restore preview are operational. The T4 synchronization foundation has separate activity/daily-metric checkpoints, full-gap daily intervals, verified empty-day tracking, overlap refresh, selectable historical reconciliation, atomic commits, retry/restart recovery, single-job locking, explicit deletion handling, and the open-session Sync now UI. Private Garmin authentication now stores owner-only session tokens locally, and a live read-only request returned 91 daily-summary fields successfully. The prepared 22-interval catch-up sync has not yet run; AI features have not started.
 
 This is the quick status reference. Detailed requirements and acceptance criteria remain in [`../planning/health-training-app-plan.md`](../planning/health-training-app-plan.md) and [`../planning/implementation-tasks-and-your-input.md`](../planning/implementation-tasks-and-your-input.md).
 
@@ -20,8 +20,8 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 | Milestone | Scope | Status | Current note |
 |---|---|---|---|
-| M0 — Feasibility evidence | T1 | 🟡 Partial | Hardware, runtime, and real Garmin archive checks complete; Garmin login and normal-session Ollama benchmark remain |
-| M1 — Local data foundation | T2–T4 | 🟡 Partial | Import/export and the tested synchronization engine/UI are complete; live Garmin authentication and retrieval remain |
+| M0 — Feasibility evidence | T1 | 🟡 Partial | Hardware, runtime, archive, Garmin login, and live read-only query checks complete; normal-session Ollama benchmark remains |
+| M1 — Local data foundation | T2–T4 | 🟡 Partial | Import/export, private live authentication, and the tested synchronization engine/UI are complete; first live catch-up verification remains |
 | M2 — First dashboard | T5 | 🟡 Partial | Technical implementation and timezone/DST verification are complete; gradual U5 usability feedback remains |
 | M3 — Historical AI assistant | T6 | ⬜ Not started | Provider-neutral design planned; no AI integration implemented |
 | M3A — Maintenance history | T11 | ⬜ Not started | SQLite-authoritative design with CSV portability is planned |
@@ -37,8 +37,8 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 |---|---|---|---|
 | T1.1 | Inspect OS, processor, memory, storage, and runtimes | ✅ Complete | M5 MacBook Air, 16 GiB memory, adequate storage; Python 3.13.15, Node.js 24.21.0 LTS, npm 11.19.0, SQLite, Git, and developer tools verified |
 | T1.2 | Inventory the real Garmin export | ✅ Complete | Original ZIP integrity and archive safety verified; 1,054 activities, 3,050 daily summaries, 2,908 sleep records, and 55,448 nested FIT files inventoried in `garmin-export-inventory.md` |
-| T1.3 | Define Garmin Connect coverage by data type/date | 🟡 Partial | Candidate library coverage researched; account-specific availability and historical behavior require U2 read-only validation |
-| T1.4 | Test Garmin login and a small read-only query | ⏳ Waiting for user input | Requires U2 private local login/MFA; no credentials should be sent in chat |
+| T1.3 | Define Garmin Connect coverage by data type/date | 🟡 Partial | Activities and daily-summary access are confirmed for the account; broader historical behavior will be measured during the first catch-up sync |
+| T1.4 | Test Garmin login and a small read-only query | ✅ Complete | Private local login succeeded; the saved-token session passed a live read-only check with 91 daily-summary fields and zero activities for the current day |
 | T1.5 | Benchmark free local text/tool and vision models | 🟡 Partial | Ollama 0.34.2 verified; official Qwen 3.5 2B/4B models downloaded, but normal-session inference benchmark remains because the Codex sandbox cannot create a Metal command queue |
 | T1.6 | Inspect running, cycling, and strength workout support | ✅ Complete | Library surface and sample payload capabilities inspected without publishing; real external validation remains T8/U7 |
 | T1.7 | Produce feasibility report and record scope risks | ✅ Complete | `phase-0-feasibility-report.md` created and synchronized |
@@ -50,7 +50,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | T2.1 | Set up backend/frontend, commands, pinned dependencies, and synthetic fixtures | ✅ Complete | React/TypeScript, FastAPI, pinned lock files, commands, and an idempotent fixture with 3 activities, 4 samples, and 14 metrics are tested |
 | T2.2 | Create schema and migrations | ✅ Complete | Eight repeatable migrations create 28 tables, including dedicated and extended import records, file checkpoints, and full archive classification |
 | T2.3 | Add shared date/time/unit handling, validation, and calculations | 🟡 Partial | Importer validates timestamps/numbers and converts activity milliseconds, centimeters, and kilojoules; shared IANA-timezone calendar conversion and Monday–Sunday boundaries are tested across DST, while broader unit rules remain |
-| T2.4 | Add local files, credential-store integration, redacted logs, and localhost-only access | 🟡 Partial | Database uses the ignored local `data/` directory and both servers bind to `127.0.0.1`; credential storage and log redaction remain |
+| T2.4 | Add local files, credential-store integration, redacted logs, and localhost-only access | ✅ Complete | Database and Garmin session tokens use ignored local `data/`; tokens are owner-only, passwords are not persisted, authentication errors are sanitized, and both servers bind to `127.0.0.1` |
 | T2.5 | Build navigation, empty/error states, and optional profile/goal settings | 🟡 Partial | Initial responsive application shell and backend-offline state exist; navigation and settings remain |
 
 ### T3 — Implement bulk import and manual export
@@ -62,15 +62,15 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | T3.3 | Normalize records, preserve provenance/originals, and deduplicate | 🟡 Partial | Implemented formats retain provenance, normalize units/times, and upsert idempotently; 13 cross-file hydration duplicates, XML matches, and duplicate FIT paths are reconciled; future sync reconciliation remains |
 | T3.4 | Preview, progress, cancel/resume, partial failures, and coverage report | 🟡 Partial | All import stages have previews/checkpoints and a ten-category coverage/failure UI plus 298-file audit; background progress and user cancellation remain |
 | T3.5 | CSV/JSON exports, original-file downloads, full backup, and restore preview | ✅ Complete | Date-filtered spreadsheet-safe CSV and streaming versioned JSON are available; backups use consistent SQLite snapshots, always exclude secrets, optionally include private originals, and pass checksum/schema/integrity/relationship preview; 1,051 preserved FIT/TCX/GPX files are downloadable without regeneration |
-| T3.6 | Test repeated imports, corrupt files, large archives, and ambiguous matches | 🟡 Partial | Forty-two automated tests cover idempotency, unsafe paths, conversion, matching, compact timestamps, coordinates, deduplication, identity sanitization, catalog accounting, migrations, weekly calorie gaps, timezone/DST boundaries, activity ranges/details, dashboard persistence, spreadsheet safety, backup round trips, restore validation, and synchronization recovery; more corrupt/oversized fixtures remain |
+| T3.6 | Test repeated imports, corrupt files, large archives, and ambiguous matches | 🟡 Partial | Forty-seven automated tests cover idempotency, unsafe paths, conversion, matching, compact timestamps, coordinates, deduplication, identity sanitization, catalog accounting, migrations, dashboard/history behavior, backup/restore, synchronization recovery, private token handling, MFA, read-only probing, and provider normalization; more corrupt/oversized fixtures remain |
 | T3.7 | Import and sample-check the user's full Garmin history | ✅ Complete | All in-scope categories imported; every outer file classified; repeated runs write zero rows; identity-key scan, SQLite integrity, and foreign keys pass; detailed evidence is in `import-coverage.md` |
 
 ### T4 — Implement Garmin synchronization
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T4.1 | Account connection, renewal, sign-out, and reconnect prompts | 🟡 Partial | Connection/reconnect states and the private sign-in gate exist; real local login, renewal, and sign-out require U2 this evening |
-| T4.2 | Retrieve supported account-wide health/activity data | 🟡 Partial | Provider-neutral normalization and reconciliation are tested for activities/daily metrics; actual Garmin endpoint coverage follows U2 |
+| T4.1 | Account connection, renewal, sign-out, and reconnect prompts | 🟡 Partial | Private sign-in and saved-session reuse work against the live account; owner-only token storage, MFA, sign-out, and reconnect paths exist, while renewal/expiry behavior still needs a real lifecycle test |
+| T4.2 | Retrieve supported account-wide health/activity data | 🟡 Partial | Live daily-summary and activity endpoints pass a read-only check; provider normalization is tested, and the first historical catch-up remains to verify counts and coverage |
 | T4.3 | Add Sync now, progress, counts, errors, and retry | ✅ Complete | Prominent Sync now/status UI, durable job progress/results, last-success/error state, and retry-safe execution exist; disconnected use produces a clear sign-in prompt |
 | T4.4 | Per-data-type checkpoints, full-gap catch-up, overlap, locking, and recovery | ✅ Complete | Independent daily checkpoints, atomic interval commits, configurable overlap/request pacing, single-job locking, and interrupted-job recovery are tested |
 | T4.5 | Open-session-only scheduling and catch-up after reopening | 🟡 Partial | Schedule scope/configuration and shared manual/scheduled pipeline exist; enabling the daily in-session trigger waits for a live provider and never runs while the app is closed |
@@ -161,7 +161,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | ID | User input or action | Status | When it is needed |
 |---|---|---|---|
 | U1 | Full Garmin account export local path | ✅ Complete | Original ZIP is in the ignored local import directory and passed integrity/safety inspection |
-| U2 | Private Garmin login/MFA through the local app | ⏳ Not needed yet | Live read-only coverage and later sync testing |
+| U2 | Private Garmin login/MFA through the local app | ✅ Complete | Login was entered only in the local app; a reusable private token session and live read-only query were verified |
 | U3 | Device/sensor inventory | ✅ Removed | Garmin Connect is the sole external data source; no inventory required |
 | U4 | Background-operation decision | 🔒 Deferred | Later edition only; first edition has none |
 | U5 | Dashboard usability feedback | ⏳ Ready when convenient | The first working desktop/mobile dashboard is available; feedback can be provided gradually |
@@ -185,4 +185,4 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 ## Immediate next action
 
-Complete U2 privately this evening: connect the live Garmin provider, verify account data-type coverage with a small read-only request, then run the prepared 22-interval catch-up plan (September 28–October 8 for activities and daily metrics) and compare returned counts before enabling the open-session daily schedule.
+Run the prepared 22-interval catch-up plan (September 28–October 8 for activities and daily metrics), compare returned and stored counts, verify independent checkpoints and database integrity, then enable the open-session daily schedule.

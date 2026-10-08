@@ -201,6 +201,14 @@ type SyncPlan = {
   }>;
 };
 
+type GarminConnection = {
+  status: "not_connected" | "connected" | "reconnect_required" | "mfa_required";
+  has_saved_session: boolean;
+  mfa_pending: boolean;
+  token_storage: "local_private_file";
+  updated_at: string;
+};
+
 type ConnectionState =
   | { kind: "checking" }
   | {
@@ -213,6 +221,7 @@ type ConnectionState =
       originalActivities: OriginalActivityInventory;
       syncStatus: SyncStatus;
       syncPlan: SyncPlan;
+      garminConnection: GarminConnection;
     }
   | { kind: "offline" };
 
@@ -479,6 +488,11 @@ export default function App() {
   const [restoreState, setRestoreState] = useState<RestoreState>({ kind: "idle" });
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [isSyncing, setIsSyncing] = useState(false);
+  const [garminEmail, setGarminEmail] = useState("");
+  const [garminPassword, setGarminPassword] = useState("");
+  const [garminMfaCode, setGarminMfaCode] = useState("");
+  const [isConnectingGarmin, setIsConnectingGarmin] = useState(false);
+  const [connectionMessage, setConnectionMessage] = useState<string | null>(null);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -494,8 +508,9 @@ export default function App() {
       fetch("/api/exports/original-activities", { signal: controller.signal }),
       fetch("/api/sync/status", { signal: controller.signal }),
       fetch("/api/sync/plan", { signal: controller.signal }),
+      fetch("/api/garmin/connection", { signal: controller.signal }),
     ])
-      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse]) => {
+      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse, garminConnectionResponse]) => {
         if (
           !healthResponse.ok ||
           !summaryResponse.ok ||
@@ -504,11 +519,12 @@ export default function App() {
           !coverageResponse.ok ||
           !originalsResponse.ok ||
           !syncStatusResponse.ok ||
-          !syncPlanResponse.ok
+          !syncPlanResponse.ok ||
+          !garminConnectionResponse.ok
         ) {
           throw new Error("Backend is unavailable");
         }
-        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan] = await Promise.all([
+        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection] = await Promise.all([
           healthResponse.json() as Promise<HealthResponse>,
           summaryResponse.json() as Promise<HistorySummary>,
           weeklyResponse.json() as Promise<WeeklyCalories | null>,
@@ -517,6 +533,7 @@ export default function App() {
           originalsResponse.json() as Promise<OriginalActivityInventory>,
           syncStatusResponse.json() as Promise<SyncStatus>,
           syncPlanResponse.json() as Promise<SyncPlan>,
+          garminConnectionResponse.json() as Promise<GarminConnection>,
         ]);
         setConnection({
           kind: "ready",
@@ -528,6 +545,7 @@ export default function App() {
           originalActivities,
           syncStatus,
           syncPlan,
+          garminConnection,
         });
         if (summary.activity_date_end) {
           setActivityRange((current) =>
@@ -606,6 +624,8 @@ export default function App() {
     connection.kind === "ready" ? connection.originalActivities : null;
   const syncStatusValue = connection.kind === "ready" ? connection.syncStatus : null;
   const syncPlanValue = connection.kind === "ready" ? connection.syncPlan : null;
+  const garminConnectionValue =
+    connection.kind === "ready" ? connection.garminConnection : null;
   const dataModeLabel =
     summary?.data_mode === "synthetic"
       ? "Synthetic data · not Garmin data"
@@ -785,6 +805,119 @@ export default function App() {
     }
   };
 
+  const refreshGarminConnection = async () => {
+    const [connectionResponse, statusResponse, planResponse] = await Promise.all([
+      fetch("/api/garmin/connection"),
+      fetch("/api/sync/status"),
+      fetch("/api/sync/plan"),
+    ]);
+    if (!connectionResponse.ok || !statusResponse.ok || !planResponse.ok) return;
+    const [garminConnection, refreshedStatus, refreshedPlan] = await Promise.all([
+      connectionResponse.json() as Promise<GarminConnection>,
+      statusResponse.json() as Promise<SyncStatus>,
+      planResponse.json() as Promise<SyncPlan>,
+    ]);
+    setConnection((current) =>
+      current.kind === "ready"
+        ? {
+            ...current,
+            garminConnection,
+            syncStatus: refreshedStatus,
+            syncPlan: refreshedPlan,
+          }
+        : current,
+    );
+  };
+
+  const connectGarmin = async () => {
+    setIsConnectingGarmin(true);
+    setConnectionMessage(null);
+    try {
+      const response = await fetch("/api/garmin/connection/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: garminEmail, password: garminPassword }),
+      });
+      setGarminPassword("");
+      if (!response.ok) throw new Error(await readError(response));
+      const result = (await response.json()) as { status: string; message: string };
+      setConnectionMessage(result.message);
+      await refreshGarminConnection();
+    } catch (error: unknown) {
+      setGarminPassword("");
+      setConnectionMessage(
+        error instanceof Error ? error.message : "Garmin sign-in failed.",
+      );
+    } finally {
+      setIsConnectingGarmin(false);
+    }
+  };
+
+  const submitGarminMfa = async () => {
+    setIsConnectingGarmin(true);
+    setConnectionMessage(null);
+    try {
+      const response = await fetch("/api/garmin/connection/mfa", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code: garminMfaCode }),
+      });
+      setGarminMfaCode("");
+      if (!response.ok) throw new Error(await readError(response));
+      const result = (await response.json()) as { message: string };
+      setConnectionMessage(result.message);
+      await refreshGarminConnection();
+    } catch (error: unknown) {
+      setGarminMfaCode("");
+      setConnectionMessage(
+        error instanceof Error ? error.message : "Garmin verification failed.",
+      );
+    } finally {
+      setIsConnectingGarmin(false);
+    }
+  };
+
+  const probeGarmin = async () => {
+    setIsConnectingGarmin(true);
+    setConnectionMessage(null);
+    try {
+      const response = await fetch("/api/garmin/connection/probe", { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const result = (await response.json()) as {
+        summary_available: boolean;
+        summary_fields: number;
+        activities_today: number;
+      };
+      setConnectionMessage(
+        `Read-only check passed: ${result.summary_fields} daily-summary fields and ${result.activities_today} activities today.`,
+      );
+      await refreshGarminConnection();
+    } catch (error: unknown) {
+      setConnectionMessage(
+        error instanceof Error ? error.message : "Garmin read-only check failed.",
+      );
+      await refreshGarminConnection();
+    } finally {
+      setIsConnectingGarmin(false);
+    }
+  };
+
+  const disconnectGarmin = async () => {
+    setIsConnectingGarmin(true);
+    try {
+      const response = await fetch("/api/garmin/connection", { method: "DELETE" });
+      if (!response.ok) throw new Error(await readError(response));
+      setConnectionMessage("Saved Garmin session removed.");
+      await refreshGarminConnection();
+    } catch (error: unknown) {
+      setConnectionMessage(
+        error instanceof Error ? error.message : "Garmin sign-out failed.",
+      );
+    } finally {
+      setIsConnectingGarmin(false);
+    }
+  };
+
   const runSyncNow = async () => {
     setIsSyncing(true);
     setSyncMessage(null);
@@ -890,9 +1023,11 @@ export default function App() {
           <div>
             <span>Connection</span>
             <strong>
-              {syncStatusValue?.connection_status === "connected"
+              {garminConnectionValue?.status === "connected"
                 ? "Connected"
-                : syncStatusValue?.connection_status === "reconnect_required"
+                : garminConnectionValue?.status === "mfa_required"
+                  ? "Verification required"
+                  : garminConnectionValue?.status === "reconnect_required"
                   ? "Reconnect required"
                   : "Not connected yet"}
             </strong>
@@ -914,6 +1049,83 @@ export default function App() {
             <strong>Open app only</strong>
           </div>
         </div>
+        {(garminConnectionValue?.status === "not_connected" ||
+          garminConnectionValue?.status === "reconnect_required") && (
+          <form
+            className="garmin-login"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void connectGarmin();
+            }}
+          >
+            <div>
+              <strong>Private Garmin sign-in</strong>
+              <span>Credentials go directly to the localhost backend and are not saved.</span>
+            </div>
+            <label>
+              <span>Email</span>
+              <input
+                type="email"
+                autoComplete="username"
+                value={garminEmail}
+                onChange={(event) => setGarminEmail(event.target.value)}
+                required
+              />
+            </label>
+            <label>
+              <span>Password</span>
+              <input
+                type="password"
+                autoComplete="current-password"
+                value={garminPassword}
+                onChange={(event) => setGarminPassword(event.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" disabled={isConnectingGarmin}>
+              {isConnectingGarmin ? "Connecting…" : "Connect Garmin"}
+            </button>
+          </form>
+        )}
+        {garminConnectionValue?.status === "mfa_required" && (
+          <form
+            className="garmin-login garmin-mfa"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void submitGarminMfa();
+            }}
+          >
+            <div>
+              <strong>Garmin verification required</strong>
+              <span>Enter the one-time code Garmin sent you.</span>
+            </div>
+            <label>
+              <span>Verification code</span>
+              <input
+                type="text"
+                inputMode="numeric"
+                autoComplete="one-time-code"
+                value={garminMfaCode}
+                onChange={(event) => setGarminMfaCode(event.target.value)}
+                required
+              />
+            </label>
+            <button type="submit" disabled={isConnectingGarmin}>
+              {isConnectingGarmin ? "Verifying…" : "Verify code"}
+            </button>
+          </form>
+        )}
+        {garminConnectionValue?.status === "connected" && (
+          <div className="garmin-connected-actions">
+            <span>Saved session is available locally.</span>
+            <button type="button" onClick={() => void probeGarmin()} disabled={isConnectingGarmin}>
+              Run read-only check
+            </button>
+            <button className="secondary-action" type="button" onClick={() => void disconnectGarmin()} disabled={isConnectingGarmin}>
+              Sign out
+            </button>
+          </div>
+        )}
         <div className="sync-checkpoints">
           {syncStatusValue?.checkpoints.map((checkpoint) => (
             <div key={checkpoint.data_type}>
@@ -948,6 +1160,7 @@ export default function App() {
           Private Garmin sign-in is still required before network synchronization can run.
         </p>
         {syncMessage && <p className="sync-message" role="status">{syncMessage}</p>}
+        {connectionMessage && <p className="sync-message" role="status">{connectionMessage}</p>}
       </section>
 
       <section className="preview" aria-labelledby="preview-title">

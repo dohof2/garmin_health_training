@@ -146,6 +146,67 @@ h1 {
   margin-top: 10px;
 }
 
+.garmin-login,
+.garmin-connected-actions {
+  align-items: end;
+  background: rgba(129, 185, 151, 0.06);
+  border: 1px solid rgba(129, 185, 151, 0.17);
+  border-radius: 12px;
+  display: grid;
+  gap: 12px;
+  grid-template-columns: minmax(220px, 1.4fr) minmax(180px, 1fr) minmax(180px, 1fr) auto;
+  margin-top: 10px;
+  padding: 16px;
+}
+
+.garmin-login > div {
+  align-self: center;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.garmin-login > div span,
+.garmin-connected-actions > span {
+  color: #81968a;
+  font-size: 0.76rem;
+}
+
+.garmin-login label {
+  color: #8fa397;
+  display: flex;
+  flex-direction: column;
+  font-size: 0.68rem;
+  gap: 5px;
+  text-transform: uppercase;
+}
+
+.garmin-login input {
+  background: rgba(235, 246, 238, 0.055);
+  border: 1px solid rgba(198, 221, 206, 0.18);
+  border-radius: 9px;
+  color: #dce9df;
+  font: inherit;
+  font-size: 0.84rem;
+  min-width: 0;
+  padding: 9px 10px;
+}
+
+.garmin-mfa {
+  grid-template-columns: minmax(220px, 1fr) minmax(200px, 1fr) auto;
+}
+
+.garmin-connected-actions {
+  align-items: center;
+  grid-template-columns: 1fr auto auto;
+}
+
+.garmin-connected-actions .secondary-action {
+  background: transparent;
+  border-color: rgba(228, 135, 107, 0.25);
+  color: #dba18f;
+}
+
 .sync-checkpoints small {
   color: #73877b;
   font-size: 0.75rem;
@@ -882,6 +943,13 @@ article span {
   .export-grid,
   .import-results,
   .cards {
+    grid-template-columns: 1fr;
+  }
+
+  .garmin-login,
+  .garmin-mfa,
+  .garmin-connected-actions {
+    align-items: stretch;
     grid-template-columns: 1fr;
   }
 

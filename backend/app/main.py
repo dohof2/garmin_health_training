@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 from starlette.background import BackgroundTask
 from starlette.responses import FileResponse
 
@@ -32,6 +32,14 @@ from .garmin_import import (
     import_garmin_export,
     preview_garmin_export,
 )
+from .garmin_connection import (
+    GarminConnectProvider,
+    begin_login,
+    complete_mfa,
+    connection_state,
+    disconnect,
+    read_only_probe,
+)
 from .history import (
     get_activity,
     history_summary,
@@ -41,7 +49,11 @@ from .history import (
 )
 from .import_coverage import import_coverage
 from .sync import (
+    SyncAlreadyRunning,
+    SyncConnectionRequired,
+    SyncError,
     recover_interrupted_sync_jobs,
+    run_sync,
     sync_plan,
     sync_status,
 )
@@ -74,6 +86,15 @@ class DashboardCardUpdate(BaseModel):
 
 class DashboardLayoutUpdate(BaseModel):
     cards: list[DashboardCardUpdate]
+
+
+class GarminLoginRequest(BaseModel):
+    email: str
+    password: SecretStr
+
+
+class GarminMfaRequest(BaseModel):
+    code: SecretStr
 
 
 def _temporary_download(path: Path, filename: str, media_type: str) -> FileResponse:
@@ -165,6 +186,44 @@ def synchronization_status() -> dict[str, object]:
     return sync_status()
 
 
+@app.get("/api/garmin/connection")
+def garmin_connection_status() -> dict[str, object]:
+    return connection_state()
+
+
+@app.post("/api/garmin/connection/login")
+def garmin_login(payload: GarminLoginRequest) -> dict[str, object]:
+    try:
+        return begin_login(payload.email, payload.password.get_secret_value())
+    except (ValueError, SyncConnectionRequired) as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+
+
+@app.post("/api/garmin/connection/mfa")
+def garmin_mfa(payload: GarminMfaRequest) -> dict[str, object]:
+    try:
+        return complete_mfa(payload.code.get_secret_value())
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except SyncConnectionRequired as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+
+
+@app.post("/api/garmin/connection/probe")
+def garmin_probe() -> dict[str, object]:
+    try:
+        return read_only_probe()
+    except SyncConnectionRequired as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except SyncError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
+
+
+@app.delete("/api/garmin/connection")
+def garmin_disconnect() -> dict[str, object]:
+    return disconnect()
+
+
 @app.get("/api/sync/plan")
 def synchronization_plan(
     through_date: date | None = None,
@@ -180,11 +239,31 @@ def synchronization_plan(
 
 
 @app.post("/api/sync/run")
-def synchronization_run() -> dict[str, object]:
-    raise HTTPException(
-        status_code=401,
-        detail="Garmin Connect is not signed in. Complete the private local sign-in to enable Sync now.",
-    )
+def synchronization_run(
+    through_date: date | None = None,
+    reconcile_from: date | None = None,
+) -> dict[str, object]:
+    resolved_through_date = through_date or date.today()
+    if reconcile_from and reconcile_from > resolved_through_date:
+        raise HTTPException(
+            status_code=400,
+            detail="reconcile_from must be on or before through_date",
+        )
+    try:
+        provider = GarminConnectProvider.from_saved_session()
+        return run_sync(
+            provider,
+            resolved_through_date,
+            trigger="manual",
+            reconcile_from=reconcile_from,
+            request_delay_seconds=0.25,
+        )
+    except SyncConnectionRequired as error:
+        raise HTTPException(status_code=401, detail=str(error)) from error
+    except SyncAlreadyRunning as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    except SyncError as error:
+        raise HTTPException(status_code=502, detail=str(error)) from error
 
 
 @app.get("/api/exports/csv/{dataset}")
