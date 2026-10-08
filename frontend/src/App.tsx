@@ -26,6 +26,8 @@ type HistorySummary = {
     distance_meters: number | null;
     calories_kcal: number | null;
     source_name: string;
+    local_date: string;
+    timezone_used: string | null;
   };
   latest_steps: null | {
     value: number;
@@ -47,6 +49,8 @@ type Activity = {
   calories_kcal: number | null;
   elevation_gain_meters: number | null;
   source_name: string;
+  local_date: string;
+  timezone_used: string | null;
 };
 
 type ActivityDetail = Activity & {
@@ -85,6 +89,25 @@ type WeeklyCalories = {
   active_kcal: number;
   resting_kcal: number;
   source_name: "garmin_export";
+};
+
+type DashboardCardId = "latest_steps" | "last_activity" | "weekly_calories";
+
+type DashboardCardLayout = {
+  id: DashboardCardId;
+  card_type: string;
+  label: string;
+  position: number;
+  is_visible: boolean;
+};
+
+type PreviewCard = {
+  id: DashboardCardId;
+  label: string;
+  value: string;
+  detail: string;
+  subdetail?: string;
+  tooltip: string;
 };
 
 type ImportCoverage = {
@@ -126,6 +149,58 @@ type ImportCoverage = {
   };
 };
 
+type SyncCheckpoint = {
+  data_type: string;
+  coverage_start: string | null;
+  coverage_end: string | null;
+  seeded_from_import: number;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  status: "pending" | "syncing" | "synced" | "failed" | "reconnect_required";
+  error_message: string | null;
+};
+
+type SyncStatus = {
+  provider: string;
+  connection_status: "not_connected" | "connected" | "reconnect_required";
+  schedule_enabled: boolean;
+  schedule_scope: "open_app_session_only";
+  overlap_days: number;
+  supports_updated_since: boolean;
+  checkpoints: SyncCheckpoint[];
+  verified_empty_intervals: number;
+  last_job: null | {
+    id: string;
+    status: string;
+    progress_current: number;
+    progress_total: number | null;
+    finished_at: string | null;
+    error_message?: string | null;
+    checkpoint?: {
+      trigger?: string;
+      totals?: { created: number; updated: number; unchanged: number; received: number };
+      failures?: Array<{ data_type: string; date: string; error: string }>;
+    };
+  };
+  live_sync_ready: boolean;
+  next_action: string;
+};
+
+type SyncPlan = {
+  through_date: string;
+  total_intervals: number;
+  limitation: string;
+  data_types: Array<{
+    data_type: string;
+    start_date: string | null;
+    end_date: string | null;
+    days: number;
+    overlap_days: number;
+    kind: string;
+    coverage_end: string | null;
+  }>;
+};
+
 type ConnectionState =
   | { kind: "checking" }
   | {
@@ -133,7 +208,11 @@ type ConnectionState =
       health: HealthResponse;
       summary: HistorySummary;
       weeklyCalories: WeeklyCalories | null;
+      dashboardCards: DashboardCardLayout[];
       coverage: ImportCoverage;
+      originalActivities: OriginalActivityInventory;
+      syncStatus: SyncStatus;
+      syncPlan: SyncPlan;
     }
   | { kind: "offline" };
 
@@ -176,6 +255,29 @@ type ImportState =
   | { kind: "complete"; preview: GarminPreview; result: GarminImportResult }
   | { kind: "error"; message: string };
 
+type OriginalActivityInventory = {
+  files: number;
+  bytes: number;
+  formats: Record<string, number>;
+  available: boolean;
+};
+
+type RestorePreview = {
+  ready: true;
+  schema_version: number;
+  created_at: string | null;
+  table_counts: Record<string, number>;
+  originals: { included: boolean; count: number };
+  credentials_included: false;
+  message: string;
+};
+
+type RestoreState =
+  | { kind: "idle" }
+  | { kind: "loading"; filename: string }
+  | { kind: "ready"; filename: string; preview: RestorePreview }
+  | { kind: "error"; message: string };
+
 const foundations = [
   {
     label: "Interface",
@@ -193,6 +295,9 @@ const foundations = [
     detail: "Versioned schema stored only on this computer",
   },
 ];
+
+const browserTimeZone =
+  Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC";
 
 const formatShortDate = (value: string) =>
   new Intl.DateTimeFormat(undefined, { month: "short", day: "numeric" }).format(
@@ -346,7 +451,9 @@ function ActivityDetailPanel({ activity }: { activity: ActivityDetail }) {
       </div>
       <p>
         {summary.sample_count.toLocaleString()} detailed samples · {sourceLabel(activity.source_name)}
-        {activity.timezone ? ` · ${activity.timezone}` : " · timezone not recorded"}
+        {activity.timezone_used
+          ? ` · dates shown in ${activity.timezone_used}`
+          : " · timezone not recorded"}
       </p>
     </div>
   );
@@ -365,32 +472,63 @@ export default function App() {
   const [activityDetail, setActivityDetail] = useState<ActivityDetailState>({
     kind: "closed",
   });
+  const [isCustomizingCards, setIsCustomizingCards] = useState(false);
+  const [isSavingCards, setIsSavingCards] = useState(false);
+  const [cardLayoutError, setCardLayoutError] = useState<string | null>(null);
+  const [includeOriginalsInBackup, setIncludeOriginalsInBackup] = useState(false);
+  const [restoreState, setRestoreState] = useState<RestoreState>({ kind: "idle" });
+  const [syncMessage, setSyncMessage] = useState<string | null>(null);
+  const [isSyncing, setIsSyncing] = useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
 
     Promise.all([
       fetch("/api/health", { signal: controller.signal }),
-      fetch("/api/history/summary", { signal: controller.signal }),
+      fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`, {
+        signal: controller.signal,
+      }),
       fetch("/api/history/weekly-calories", { signal: controller.signal }),
+      fetch("/api/dashboard/cards", { signal: controller.signal }),
       fetch("/api/imports/coverage", { signal: controller.signal }),
+      fetch("/api/exports/original-activities", { signal: controller.signal }),
+      fetch("/api/sync/status", { signal: controller.signal }),
+      fetch("/api/sync/plan", { signal: controller.signal }),
     ])
-      .then(async ([healthResponse, summaryResponse, weeklyResponse, coverageResponse]) => {
+      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse]) => {
         if (
           !healthResponse.ok ||
           !summaryResponse.ok ||
           !weeklyResponse.ok ||
-          !coverageResponse.ok
+          !cardsResponse.ok ||
+          !coverageResponse.ok ||
+          !originalsResponse.ok ||
+          !syncStatusResponse.ok ||
+          !syncPlanResponse.ok
         ) {
           throw new Error("Backend is unavailable");
         }
-        const [health, summary, weeklyCalories, coverage] = await Promise.all([
+        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan] = await Promise.all([
           healthResponse.json() as Promise<HealthResponse>,
           summaryResponse.json() as Promise<HistorySummary>,
           weeklyResponse.json() as Promise<WeeklyCalories | null>,
+          cardsResponse.json() as Promise<DashboardCardLayout[]>,
           coverageResponse.json() as Promise<ImportCoverage>,
+          originalsResponse.json() as Promise<OriginalActivityInventory>,
+          syncStatusResponse.json() as Promise<SyncStatus>,
+          syncPlanResponse.json() as Promise<SyncPlan>,
         ]);
-        setConnection({ kind: "ready", health, summary, weeklyCalories, coverage });
+        setConnection({
+          kind: "ready",
+          health,
+          summary,
+          weeklyCalories,
+          dashboardCards,
+          coverage,
+          originalActivities,
+          syncStatus,
+          syncPlan,
+        });
         if (summary.activity_date_end) {
           setActivityRange((current) =>
             current.end
@@ -426,6 +564,7 @@ export default function App() {
       limit: "50",
       start_date: activityRange.start,
       end_date: activityRange.end,
+      timezone: browserTimeZone,
     });
     setActivityState((current) => ({ kind: "loading", items: current.items }));
     setActivityDetail({ kind: "closed" });
@@ -460,7 +599,13 @@ export default function App() {
   const summary = connection.kind === "ready" ? connection.summary : null;
   const weeklyCalories =
     connection.kind === "ready" ? connection.weeklyCalories : null;
+  const dashboardCards =
+    connection.kind === "ready" ? connection.dashboardCards : [];
   const coverage = connection.kind === "ready" ? connection.coverage : null;
+  const originalActivities =
+    connection.kind === "ready" ? connection.originalActivities : null;
+  const syncStatusValue = connection.kind === "ready" ? connection.syncStatus : null;
+  const syncPlanValue = connection.kind === "ready" ? connection.syncPlan : null;
   const dataModeLabel =
     summary?.data_mode === "synthetic"
       ? "Synthetic data · not Garmin data"
@@ -481,7 +626,9 @@ export default function App() {
 
     setActivityDetail({ kind: "loading", activityId });
     try {
-      const response = await fetch(`/api/activities/${encodeURIComponent(activityId)}`);
+      const response = await fetch(
+        `/api/activities/${encodeURIComponent(activityId)}?timezone=${encodeURIComponent(browserTimeZone)}`,
+      );
       if (!response.ok) throw new Error("Activity details could not be loaded.");
       const activity = (await response.json()) as ActivityDetail;
       setActivityDetail({ kind: "ready", activity });
@@ -497,10 +644,65 @@ export default function App() {
   const readError = async (response: Response) => {
     try {
       const payload = (await response.json()) as { detail?: string };
-      return payload.detail ?? "The Garmin import request failed.";
+      return payload.detail ?? "The local request failed.";
     } catch {
-      return "The Garmin import request failed.";
+      return "The local request failed.";
     }
+  };
+
+  const saveDashboardCards = async (nextCards: DashboardCardLayout[]) => {
+    if (connection.kind !== "ready") return;
+    setIsSavingCards(true);
+    setCardLayoutError(null);
+    try {
+      const response = await fetch("/api/dashboard/cards", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          cards: nextCards.map(({ id, position, is_visible }) => ({
+            id,
+            position,
+            is_visible,
+          })),
+        }),
+      });
+      if (!response.ok) throw new Error("The dashboard layout could not be saved.");
+      const savedCards = (await response.json()) as DashboardCardLayout[];
+      setConnection((current) =>
+        current.kind === "ready"
+          ? { ...current, dashboardCards: savedCards }
+          : current,
+      );
+    } catch (error: unknown) {
+      setCardLayoutError(
+        error instanceof Error ? error.message : "The dashboard layout could not be saved.",
+      );
+    } finally {
+      setIsSavingCards(false);
+    }
+  };
+
+  const setCardVisibility = (id: DashboardCardId, isVisible: boolean) => {
+    void saveDashboardCards(
+      dashboardCards.map((card) =>
+        card.id === id ? { ...card, is_visible: isVisible } : card,
+      ),
+    );
+  };
+
+  const moveCard = (id: DashboardCardId, direction: -1 | 1) => {
+    const currentIndex = dashboardCards.findIndex((card) => card.id === id);
+    const targetIndex = currentIndex + direction;
+    if (currentIndex < 0 || targetIndex < 0 || targetIndex >= dashboardCards.length) return;
+
+    const reordered = [...dashboardCards];
+    [reordered[currentIndex], reordered[targetIndex]] = [
+      reordered[targetIndex],
+      reordered[currentIndex],
+    ];
+    void saveDashboardCards(
+      reordered.map((card, position) => ({ ...card, position })),
+    );
   };
 
   const previewGarmin = async () => {
@@ -529,7 +731,7 @@ export default function App() {
       setImportState({ kind: "complete", preview, result });
 
       const [summaryResponse, weeklyResponse, coverageResponse] = await Promise.all([
-        fetch("/api/history/summary"),
+        fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
         fetch("/api/history/weekly-calories"),
         fetch("/api/imports/coverage"),
       ]);
@@ -557,8 +759,65 @@ export default function App() {
       });
     }
   };
-  const previewCards = [
-    {
+
+  const exportRange = new URLSearchParams();
+  if (activityRange.start) exportRange.set("start_date", activityRange.start);
+  if (activityRange.end) exportRange.set("end_date", activityRange.end);
+  const exportQuery = exportRange.toString() ? `?${exportRange.toString()}` : "";
+
+  const previewBackupRestore = async (file: File | null) => {
+    if (!file) return;
+    setRestoreState({ kind: "loading", filename: file.name });
+    try {
+      const response = await fetch("/api/restores/preview", {
+        method: "POST",
+        headers: { "Content-Type": file.type || "application/zip" },
+        body: file,
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const preview = (await response.json()) as RestorePreview;
+      setRestoreState({ kind: "ready", filename: file.name, preview });
+    } catch (error: unknown) {
+      setRestoreState({
+        kind: "error",
+        message: error instanceof Error ? error.message : "Restore preview failed.",
+      });
+    }
+  };
+
+  const runSyncNow = async () => {
+    setIsSyncing(true);
+    setSyncMessage(null);
+    try {
+      const response = await fetch("/api/sync/run", { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const [statusResponse, planResponse] = await Promise.all([
+        fetch("/api/sync/status"),
+        fetch("/api/sync/plan"),
+      ]);
+      if (statusResponse.ok && planResponse.ok) {
+        const [refreshedStatus, refreshedPlan] = await Promise.all([
+          statusResponse.json() as Promise<SyncStatus>,
+          planResponse.json() as Promise<SyncPlan>,
+        ]);
+        setConnection((current) =>
+          current.kind === "ready"
+            ? { ...current, syncStatus: refreshedStatus, syncPlan: refreshedPlan }
+            : current,
+        );
+      }
+      setSyncMessage("Synchronization completed and checkpoints were refreshed.");
+    } catch (error: unknown) {
+      setSyncMessage(
+        error instanceof Error ? error.message : "Synchronization could not start.",
+      );
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+  const cardRegistry: Record<DashboardCardId, PreviewCard> = {
+    latest_steps: {
+      id: "latest_steps",
       label: "Latest steps",
       value: summary?.latest_steps
         ? Math.round(summary.latest_steps.value).toLocaleString()
@@ -569,18 +828,20 @@ export default function App() {
         : undefined,
       tooltip: "The most recent daily step total available from the stored history.",
     },
-    {
+    last_activity: {
+      id: "last_activity",
       label: "Last activity",
       value: summary?.latest_activity?.name ?? "—",
       detail: summary?.latest_activity
         ? summary.latest_activity.activity_type.replaceAll("_", " ")
         : "No activities loaded",
       subdetail: summary?.latest_activity
-        ? `${sourceLabel(summary.latest_activity.source_name)} · ${formatLongDate(summary.latest_activity.started_at)}`
+        ? `${sourceLabel(summary.latest_activity.source_name)} · ${formatLongDate(summary.latest_activity.local_date)} · ${summary.latest_activity.timezone_used ?? "timezone unavailable"}`
         : undefined,
-      tooltip: "The most recently started activity available from the stored history.",
+      tooltip: "The most recently started activity, dated in the browser's local timezone.",
     },
-    {
+    weekly_calories: {
+      id: "weekly_calories",
       label: "Weekly calories burned",
       value: weeklyCalories
         ? `${Math.round(weeklyCalories.total_kcal).toLocaleString()} kcal`
@@ -595,7 +856,10 @@ export default function App() {
         ? `Missing daily totals: ${weeklyCalories.missing_dates.map(formatLongDate).join(", ")}. Missing days are not counted as zero.`
         : "Total calories burned, split into Garmin active and resting calories.",
     },
-  ];
+  };
+  const previewCards = dashboardCards
+    .filter((card) => card.is_visible)
+    .map((card) => cardRegistry[card.id]);
 
   return (
     <main>
@@ -612,17 +876,155 @@ export default function App() {
         </div>
       </header>
 
+      <section className="sync" aria-labelledby="sync-title">
+        <div className="section-heading sync-heading">
+          <div>
+            <p>Garmin synchronization</p>
+            <h2 id="sync-title">Catch up every missing day</h2>
+          </div>
+          <button type="button" onClick={() => void runSyncNow()} disabled={isSyncing}>
+            {isSyncing ? "Starting…" : "Sync now"}
+          </button>
+        </div>
+        <div className="sync-status-grid">
+          <div>
+            <span>Connection</span>
+            <strong>
+              {syncStatusValue?.connection_status === "connected"
+                ? "Connected"
+                : syncStatusValue?.connection_status === "reconnect_required"
+                  ? "Reconnect required"
+                  : "Not connected yet"}
+            </strong>
+          </div>
+          <div>
+            <span>Catch-up plan</span>
+            <strong>
+              {syncPlanValue
+                ? `${syncPlanValue.total_intervals.toLocaleString()} daily checks`
+                : "Loading…"}
+            </strong>
+          </div>
+          <div>
+            <span>Late-data overlap</span>
+            <strong>{syncStatusValue ? `${syncStatusValue.overlap_days} days` : "—"}</strong>
+          </div>
+          <div>
+            <span>Schedule</span>
+            <strong>Open app only</strong>
+          </div>
+        </div>
+        <div className="sync-checkpoints">
+          {syncStatusValue?.checkpoints.map((checkpoint) => (
+            <div key={checkpoint.data_type}>
+              <span>{checkpoint.data_type.replaceAll("_", " ")}</span>
+              <strong>
+                {checkpoint.coverage_end
+                  ? `Imported through ${formatLongDate(checkpoint.coverage_end)}`
+                  : "No imported coverage"}
+              </strong>
+              <small>
+                {checkpoint.last_success_at
+                  ? `Last online success ${formatLongDate(checkpoint.last_success_at)}`
+                  : "Online verification pending"}
+              </small>
+            </div>
+          ))}
+        </div>
+        {syncStatusValue?.last_job && (
+          <div className={`sync-last-job sync-last-job--${syncStatusValue.last_job.status}`}>
+            <strong>Last sync: {syncStatusValue.last_job.status}</strong>
+            <span>
+              {syncStatusValue.last_job.progress_current.toLocaleString()} of {syncStatusValue.last_job.progress_total?.toLocaleString() ?? "—"} intervals
+              {syncStatusValue.last_job.checkpoint?.totals
+                ? ` · ${syncStatusValue.last_job.checkpoint.totals.created.toLocaleString()} new · ${syncStatusValue.last_job.checkpoint.totals.updated.toLocaleString()} updated · ${syncStatusValue.last_job.checkpoint.totals.unchanged.toLocaleString()} unchanged`
+                : ""}
+            </span>
+            {syncStatusValue.last_job.error_message && <small>{syncStatusValue.last_job.error_message}</small>}
+          </div>
+        )}
+        <p className="sync-note">
+          The catch-up engine, independent checkpoints, retries, and historical reconciliation are ready.
+          Private Garmin sign-in is still required before network synchronization can run.
+        </p>
+        {syncMessage && <p className="sync-message" role="status">{syncMessage}</p>}
+      </section>
+
       <section className="preview" aria-labelledby="preview-title">
         <div className="section-heading">
           <div>
             <p>Data preview</p>
             <h2 id="preview-title">A safe dataset to build on</h2>
           </div>
-          {dataModeLabel && <div className="synthetic-label">{dataModeLabel}</div>}
+          <div className="preview-actions">
+            {dataModeLabel && <div className="synthetic-label">{dataModeLabel}</div>}
+            <button
+              className="customize-button"
+              type="button"
+              aria-expanded={isCustomizingCards}
+              onClick={() => setIsCustomizingCards((current) => !current)}
+            >
+              {isCustomizingCards ? "Done" : "Customize cards"}
+            </button>
+          </div>
         </div>
-        <div className="preview-grid">
+        {isCustomizingCards && (
+          <div className="card-editor">
+            <div className="card-editor-heading">
+              <div>
+                <strong>Dashboard cards</strong>
+                <span>Reorder, hide, or restore cards. Changes save locally.</span>
+              </div>
+              {isSavingCards && <span>Saving…</span>}
+            </div>
+            <div className="card-editor-list">
+              {dashboardCards.map((card, index) => (
+                <div className="card-editor-row" key={card.id}>
+                  <span className="card-drag-index">{index + 1}</span>
+                  <strong>{card.label}</strong>
+                  <div className="card-editor-controls">
+                    <button
+                      type="button"
+                      aria-label={`Move ${card.label} up`}
+                      disabled={isSavingCards || index === 0}
+                      onClick={() => moveCard(card.id, -1)}
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Move ${card.label} down`}
+                      disabled={isSavingCards || index === dashboardCards.length - 1}
+                      onClick={() => moveCard(card.id, 1)}
+                    >
+                      ↓
+                    </button>
+                    <button
+                      className={card.is_visible ? "card-remove" : "card-add"}
+                      type="button"
+                      disabled={isSavingCards}
+                      onClick={() => setCardVisibility(card.id, !card.is_visible)}
+                    >
+                      {card.is_visible ? "Hide" : "Add"}
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+            {cardLayoutError && (
+              <p className="card-editor-error" role="alert">{cardLayoutError}</p>
+            )}
+          </div>
+        )}
+        {connection.kind === "checking" && (
+          <p className="empty-cards">Loading dashboard cards…</p>
+        )}
+        {connection.kind === "ready" && previewCards.length === 0 && (
+          <p className="empty-cards">No cards are visible. Use Customize cards to add one.</p>
+        )}
+        <div className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
-            <article className="data-card" key={card.label}>
+            <article className="data-card" key={card.id}>
               <p>
                 {card.label}{" "}
                 <abbr className="info-tip" title={card.tooltip} aria-label={card.tooltip}>i</abbr>
@@ -640,6 +1042,7 @@ export default function App() {
           <div>
             <p>Activity history</p>
             <h2 id="activities-title">Explore the details</h2>
+            <span className="timezone-label">Calendar dates shown in {browserTimeZone}</span>
           </div>
           <DateRangeFilter
             start={activityRange.start}
@@ -692,7 +1095,7 @@ export default function App() {
                     aria-expanded={isOpen}
                     onClick={() => void toggleActivityDetail(activity.id)}
                   >
-                    <span className="activity-date">{formatLongDate(activity.started_at)}</span>
+                    <span className="activity-date">{formatLongDate(activity.local_date)}</span>
                     <span className="activity-name">
                       <strong>{activity.name ?? activity.activity_type.replaceAll("_", " ")}</strong>
                       <small>{activity.activity_type.replaceAll("_", " ")} · {sourceLabel(activity.source_name)}</small>
@@ -782,6 +1185,99 @@ export default function App() {
             )}
           </>
         )}
+      </section>
+
+      <section className="exports" aria-labelledby="exports-title">
+        <div className="section-heading">
+          <div>
+            <p>Import / Export</p>
+            <h2 id="exports-title">Keep a portable copy</h2>
+          </div>
+          <span className="export-range-label">
+            {activityRange.start && activityRange.end
+              ? `${formatLongDate(activityRange.start)} – ${formatLongDate(activityRange.end)}`
+              : "All dates"}
+          </span>
+        </div>
+        <p className="export-copy">
+          CSV and JSON use the activity date range selected above. Exports are generated
+          locally and never contain credentials or session tokens.
+        </p>
+        <div className="export-grid">
+          <article className="export-panel">
+            <span>Portable data</span>
+            <h3>Spreadsheet and JSON</h3>
+            <p>Download normalized app records with stable identifiers, units, and timestamps.</p>
+            <div className="export-actions">
+              <a href={`/api/exports/csv/activities${exportQuery}`} download>Activities CSV</a>
+              <a href={`/api/exports/csv/metrics${exportQuery}`} download>Health metrics CSV</a>
+              <a href={`/api/exports/csv/training${exportQuery}`} download>Training CSV</a>
+              <a href={`/api/exports/csv/nutrition${exportQuery}`} download>Nutrition CSV</a>
+              <a href={`/api/exports/data.json${exportQuery}`} download>Versioned JSON</a>
+            </div>
+          </article>
+          <article className="export-panel">
+            <span>Full backup</span>
+            <h3>Database snapshot</h3>
+            <p>Includes relationships, settings, and every completed module in one validated ZIP.</p>
+            <label className="backup-option">
+              <input
+                type="checkbox"
+                checked={includeOriginalsInBackup}
+                onChange={(event) => setIncludeOriginalsInBackup(event.target.checked)}
+              />
+              Include original source archives
+            </label>
+            <small>
+              {includeOriginalsInBackup
+                ? "This can make the backup very large and includes private Garmin source data."
+                : "Original private archives stay excluded; credentials are always excluded."}
+            </small>
+            <a
+              className="primary-export-action"
+              href={`/api/exports/backup.zip?include_originals=${includeOriginalsInBackup}`}
+              download
+            >
+              Download backup ZIP
+            </a>
+          </article>
+          <article className="export-panel">
+            <span>Preserved originals</span>
+            <h3>Activity source files</h3>
+            <p>
+              {originalActivities?.available
+                ? `${originalActivities.files.toLocaleString()} original FIT/TCX/GPX files are available as preserved source bytes.`
+                : "No preserved original activity files are available."}
+            </p>
+            {originalActivities?.available && (
+              <a className="primary-export-action" href="/api/exports/original-activities.zip" download>
+                Download originals ZIP
+              </a>
+            )}
+          </article>
+          <article className="export-panel">
+            <span>Restore safety check</span>
+            <h3>Preview before restoring</h3>
+            <p>Checks paths, checksum, schema, database integrity, and relationships without changing data.</p>
+            <label className="restore-picker">
+              <span>{restoreState.kind === "loading" ? "Checking backup…" : "Choose backup ZIP"}</span>
+              <input
+                type="file"
+                accept=".zip,application/zip"
+                disabled={restoreState.kind === "loading"}
+                onChange={(event) => void previewBackupRestore(event.target.files?.[0] ?? null)}
+              />
+            </label>
+            {restoreState.kind === "ready" && (
+              <p className="restore-result restore-result--ready" role="status">
+                Preview passed for {restoreState.filename}. {Object.values(restoreState.preview.table_counts).reduce((sum, count) => sum + count, 0).toLocaleString()} records checked. No data changed.
+              </p>
+            )}
+            {restoreState.kind === "error" && (
+              <p className="restore-result restore-result--error" role="alert">{restoreState.message}</p>
+            )}
+          </article>
+        </div>
       </section>
 
       <section className="import" aria-labelledby="import-title">

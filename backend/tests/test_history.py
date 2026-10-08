@@ -6,7 +6,12 @@ from datetime import date
 from pathlib import Path
 
 from app.database import connect, migrate
-from app.history import get_activity, list_activities, weekly_calories_summary
+from app.history import (
+    get_activity,
+    history_summary,
+    list_activities,
+    weekly_calories_summary,
+)
 
 
 class WeeklyCaloriesSummaryTests(unittest.TestCase):
@@ -126,6 +131,46 @@ class ActivityHistoryTests(unittest.TestCase):
                     end_date=date(2026, 9, 1),
                     path=database,
                 )
+
+    def test_filters_by_local_calendar_date_at_israel_dst_offset(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            database = Path(temporary_directory) / "test.sqlite3"
+            migrate(database)
+            with connect(database) as connection:
+                connection.execute(
+                    """
+                    INSERT INTO activities(
+                        id, source_name, source_record_id, activity_type,
+                        started_at
+                    ) VALUES (
+                        'late-utc', 'garmin_export', 'late-utc', 'cycling',
+                        '2026-03-27T21:30:00Z'
+                    )
+                    """
+                )
+
+            local_items = list_activities(
+                start_date=date(2026, 3, 28),
+                end_date=date(2026, 3, 28),
+                timezone_name="Asia/Jerusalem",
+                path=database,
+            )
+            utc_items = list_activities(
+                start_date=date(2026, 3, 28),
+                end_date=date(2026, 3, 28),
+                timezone_name="UTC",
+                path=database,
+            )
+            summary = history_summary(database, timezone_name="Asia/Jerusalem")
+
+            self.assertEqual(len(local_items), 1)
+            self.assertEqual(local_items[0]["local_date"], "2026-03-28")
+            self.assertEqual(local_items[0]["timezone_used"], "Asia/Jerusalem")
+            self.assertEqual(utc_items, [])
+            self.assertEqual(
+                summary["latest_activity"]["local_date"],
+                "2026-03-28",
+            )
 
 
 if __name__ == "__main__":

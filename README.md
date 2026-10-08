@@ -12,8 +12,17 @@ remaining training, biometric, workout, route, goal, gear, Golf, and Tacx data.
 The dashboard includes real latest-step and activity cards, a gap-aware weekly
 Garmin calories-burned card, reusable 30/90/all date filtering, expandable
 activity details with explicit missing values, and a consolidated
-coverage/failure view backed by durable import checkpoints. Synchronization,
-exports, customizable dashboard layouts, and AI features remain.
+coverage/failure view backed by durable import checkpoints. Date-filtered CSV,
+versioned JSON, backup ZIP, restore preview, and preserved-original downloads
+are available from the Import / Export screen. The synchronization foundation
+and Sync now interface are implemented
+with full-gap daily checkpoints, overlap refresh, restart recovery, and
+historical reconciliation; private Garmin login and live retrieval are the
+remaining sync steps. Dashboard cards can be reordered, hidden, and
+restored, with the saved layout persisted locally in SQLite. Activity calendar
+dates follow the browser's validated IANA timezone, including daylight-saving
+transitions; date-only Garmin health metrics retain their original dates. AI
+features remain future work.
 
 ## Project plan
 
@@ -102,6 +111,12 @@ make frontend
 
 Then open `http://127.0.0.1:5173`. Run `make test` for the database migration
 test and TypeScript checks, or `make build` for a production frontend build.
+
+The Import / Export section creates downloads locally. CSV and JSON follow the
+selected dashboard date range. Backup ZIPs always exclude credentials and
+session tokens; including the private original source archives is an explicit,
+off-by-default option. Restore preview validates paths, checksums, schema,
+SQLite integrity, and relationships without replacing the current database.
 
 ## Personal data
 

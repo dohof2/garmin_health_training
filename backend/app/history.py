@@ -5,12 +5,22 @@ from pathlib import Path
 
 from .database import connect
 from .garmin_import import GARMIN_SOURCE_NAME
+from .time_utils import (
+    calendar_date,
+    monday_sunday_week,
+    select_timezone,
+    timezone_info,
+)
 
 
-def history_summary(path: Path | None = None) -> dict[str, object]:
+def history_summary(
+    path: Path | None = None,
+    timezone_name: str | None = None,
+) -> dict[str, object]:
+    timezone_info(timezone_name)
     with connect(path) as connection:
         activity_count = connection.execute(
-            "SELECT COUNT(*) FROM activities"
+            "SELECT COUNT(*) FROM activities WHERE deleted_at IS NULL"
         ).fetchone()[0]
         metric_count = connection.execute(
             "SELECT COUNT(*) FROM metric_readings"
@@ -18,8 +28,9 @@ def history_summary(path: Path | None = None) -> dict[str, object]:
         latest_activity = connection.execute(
             """
             SELECT id, activity_type, name, started_at, duration_seconds,
-                   distance_meters, calories_kcal, source_name
+                   distance_meters, calories_kcal, source_name, timezone
             FROM activities
+            WHERE deleted_at IS NULL
             ORDER BY started_at DESC
             LIMIT 1
             """
@@ -37,21 +48,41 @@ def history_summary(path: Path | None = None) -> dict[str, object]:
             row[0]
             for row in connection.execute(
                 """
-                SELECT source_name FROM activities
+                SELECT source_name FROM activities WHERE deleted_at IS NULL
                 UNION
                 SELECT source_name FROM metric_readings
                 """
             )
         }
-        activity_bounds = connection.execute(
+        activity_times = connection.execute(
             """
-            SELECT MIN(substr(started_at, 1, 10)), MAX(substr(started_at, 1, 10))
+            SELECT started_at, timezone
             FROM activities
+            WHERE deleted_at IS NULL
             """
-        ).fetchone()
+        ).fetchall()
         latest_metric_at = connection.execute(
             "SELECT MAX(recorded_at) FROM metric_readings"
         ).fetchone()[0]
+
+    latest_activity_data = dict(latest_activity) if latest_activity else None
+    if latest_activity_data:
+        timezone_used = select_timezone(
+            latest_activity_data.get("timezone"), timezone_name
+        )
+        latest_activity_data["local_date"] = calendar_date(
+            str(latest_activity_data["started_at"]),
+            str(timezone_used) if timezone_used else None,
+        ).isoformat()
+        latest_activity_data["timezone_used"] = timezone_used
+
+    activity_dates = [
+        calendar_date(
+            str(row["started_at"]),
+            select_timezone(row["timezone"], timezone_name),
+        )
+        for row in activity_times
+    ]
 
     return {
         "data_mode": (
@@ -65,10 +96,10 @@ def history_summary(path: Path | None = None) -> dict[str, object]:
         ),
         "activity_count": activity_count,
         "metric_count": metric_count,
-        "latest_activity": dict(latest_activity) if latest_activity else None,
+        "latest_activity": latest_activity_data,
         "latest_steps": dict(latest_steps) if latest_steps else None,
-        "activity_date_start": activity_bounds[0],
-        "activity_date_end": activity_bounds[1],
+        "activity_date_start": min(activity_dates).isoformat() if activity_dates else None,
+        "activity_date_end": max(activity_dates).isoformat() if activity_dates else None,
         "latest_metric_at": latest_metric_at,
     }
 
@@ -89,8 +120,7 @@ def weekly_calories_summary(path: Path | None = None) -> dict[str, object] | Non
             return None
 
         latest_date = date.fromisoformat(str(latest_recorded_at)[:10])
-        week_start = latest_date - timedelta(days=latest_date.weekday())
-        week_end = week_start + timedelta(days=6)
+        week_start, week_end = monday_sunday_week(latest_date)
         rows = connection.execute(
             """
             SELECT metric_type, substr(recorded_at, 1, 10) AS recorded_date,
@@ -142,36 +172,51 @@ def list_activities(
     limit: int = 20,
     start_date: date | None = None,
     end_date: date | None = None,
+    timezone_name: str | None = None,
     path: Path | None = None,
 ) -> list[dict[str, object]]:
     if start_date and end_date and start_date > end_date:
         raise ValueError("start_date must be on or before end_date")
 
+    timezone_info(timezone_name)
     query = """
         SELECT id, activity_type, name, started_at, ended_at, timezone,
                duration_seconds, distance_meters, calories_kcal,
                elevation_gain_meters, source_name
         FROM activities
+        WHERE deleted_at IS NULL
     """
-    clauses: list[str] = []
-    parameters: list[object] = []
-    if start_date:
-        clauses.append("substr(started_at, 1, 10) >= ?")
-        parameters.append(start_date.isoformat())
-    if end_date:
-        clauses.append("substr(started_at, 1, 10) <= ?")
-        parameters.append(end_date.isoformat())
-    if clauses:
-        query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY started_at DESC LIMIT ?"
-    parameters.append(limit)
+    query += " ORDER BY started_at DESC"
 
     with connect(path) as connection:
-        rows = connection.execute(query, parameters).fetchall()
-    return [dict(row) for row in rows]
+        rows = connection.execute(query).fetchall()
+
+    activities: list[dict[str, object]] = []
+    for row in rows:
+        activity = dict(row)
+        timezone_used = select_timezone(activity.get("timezone"), timezone_name)
+        local_date = calendar_date(
+            str(activity["started_at"]),
+            str(timezone_used) if timezone_used else None,
+        )
+        if start_date and local_date < start_date:
+            continue
+        if end_date and local_date > end_date:
+            continue
+        activity["local_date"] = local_date.isoformat()
+        activity["timezone_used"] = timezone_used
+        activities.append(activity)
+        if len(activities) == limit:
+            break
+    return activities
 
 
-def get_activity(activity_id: str, path: Path | None = None) -> dict[str, object] | None:
+def get_activity(
+    activity_id: str,
+    path: Path | None = None,
+    timezone_name: str | None = None,
+) -> dict[str, object] | None:
+    timezone_info(timezone_name)
     with connect(path) as connection:
         activity = connection.execute(
             """
@@ -179,7 +224,7 @@ def get_activity(activity_id: str, path: Path | None = None) -> dict[str, object
                    duration_seconds, distance_meters, calories_kcal,
                    elevation_gain_meters, source_name
             FROM activities
-            WHERE id = ?
+            WHERE id = ? AND deleted_at IS NULL
             """,
             (activity_id,),
         ).fetchone()
@@ -203,6 +248,12 @@ def get_activity(activity_id: str, path: Path | None = None) -> dict[str, object
         ).fetchone()
 
     result = dict(activity)
+    timezone_used = select_timezone(result.get("timezone"), timezone_name)
+    result["local_date"] = calendar_date(
+        str(result["started_at"]),
+        str(timezone_used) if timezone_used else None,
+    ).isoformat()
+    result["timezone_used"] = timezone_used
     result["sample_summary"] = dict(samples)
     return result
 

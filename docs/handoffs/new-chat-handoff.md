@@ -2,7 +2,7 @@
 
 ## Purpose and current status
 
-Continue building a personalized local health, training, nutrition, and maintenance app for the user. The local foundation and full safe Garmin history import are operational. In addition to core activity/health samples, hydration, alerts, and nutrition, the database contains 26,143 extended records across 48 training, biometric, workout, route, goal, gear, Golf, and Tacx categories. All 298 outer archive files are classified: 144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, and zero unsupported. All 55,448 FIT files decoded without failure. Repeat imports are idempotent. The responsive dashboard now includes real steps, last-activity, and gap-aware weekly calories cards; reusable 30/90/all activity date filtering; source/freshness labels and gap tooltips; expandable activity details; and ten coverage categories with 21,933 tracked files and zero failed/unmatched.
+Continue building a personalized local health, training, nutrition, and maintenance app for the user. The local foundation and full safe Garmin history import are operational. In addition to core activity/health samples, hydration, alerts, and nutrition, the database contains 26,143 extended records across 48 training, biometric, workout, route, goal, gear, Golf, and Tacx categories. All 298 outer archive files are classified: 144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, and zero unsupported. All 55,448 FIT files decoded without failure. Repeat imports are idempotent. The responsive dashboard, saved layouts, timezone/DST handling, portable exports/backups, preserved-original downloads, and restore preview are operational. The offline T4 sync engine/UI is also complete: per-data-type daily checkpoints, full-gap catch-up, empty-interval evidence, three-day overlap, historical reconciliation, atomic commits, single-job locking, restart recovery, partial failures, and explicit activity-deletion tombstones. Live Garmin authentication/retrieval remains for U2.
 
 Read the two documents below before implementation; they contain the detailed requirements and acceptance criteria. This handoff summarizes decisions and operational state.
 
@@ -19,9 +19,9 @@ Review documents:
 - `/Users/dotanhofman/Documents/garmin_app/docs/status/garmin-export-inventory.md`
 - `/Users/dotanhofman/Documents/garmin_app/docs/status/import-coverage.md`
 
-GitHub remote: `https://github.com/dohof/Garmin_health_and-training.git`
+GitHub remote: `https://github.com/dohof2/garmin_health_training.git`
 
-The remote was empty when cloned. Local branch `main` includes commit `060067c` (“Build local app foundation with synthetic data”). **Nothing was successfully pushed because GitHub authentication remains pending.** The repository was moved to its current path on 6 October 2026 and its documents were organized under `docs/planning`, `docs/status`, and `docs/handoffs`.
+The user authenticated independently and pushed through commit `f48aa70` (“Import Garmin history and expand dashboard”). Local `main` tracks `origin/main`. The current dashboard-layout and timezone/DST work is uncommitted at this handoff. The repository was moved to its current path on 6 October 2026 and its documents were organized under `docs/planning`, `docs/status`, and `docs/handoffs`.
 
 The repository contains application source, pinned dependencies, tests, synthetic fixtures, and a local development database. Baseline `.gitignore` excludes health data, archives, databases, photos, credentials, runtime environments, installers, and preserved duplicate outputs. Never commit real Garmin exports or credentials.
 
@@ -90,16 +90,12 @@ Detailed tasks/subtasks and completion gates are in [`../planning/implementation
 - T11 retains its number but executes alongside/after T6, not necessarily last. First useful release includes data, dashboard, historical AI and maintenance; full scope later includes training/nutrition.
 - User inputs: U1 export complete and locally inventoried, U2 Garmin login/MFA privately in local flow, U3 removed, U4 background decision deferred, U5 usability feedback, U6 in-app training answers, U7 deliberate workout publication/testing, U8 in-app nutrition inputs, U9 free food API key only if required, U10 GitHub sign-in deferred, U11 maintenance details during use.
 - We can inspect this computer's hardware ourselves. Only ask if a different computer is the target.
-- Recommended next work: implement T5.3 with a card/chart registry and persisted add/remove/reorder settings using the existing `dashboard_cards` table. T5.2 is complete: inclusive activity date filters, source/freshness labels, missing-data explanations, units, and expandable detail/sample summaries are implemented and responsive. Preserve bounded processing and per-file evidence. Live synchronization still waits for U2.
+- Recommended next work: complete U2 privately and connect the real provider. First perform a small read-only account/data-type check, then run the existing 22-interval plan covering September 28–October 8 for activities and daily metrics. Review counts/errors before enabling the open-session daily schedule. The simulated engine already passes 2/10/30-day gaps, restart, partial failure, late upload, old correction, deletion, unchanged retry, and scheduled/manual-path tests. Do not mark simulated empty intervals as verified Garmin coverage.
 - The user does not need to choose libraries/schema/etc. Continue independent work when input is pending. Do not start implementation just because this handoff was loaded; respond to the new chat's actual instruction.
 
 ## GitHub authentication history — important
 
-Git HTTPS push failed because no authentication was configured. `gh` and Homebrew were initially absent. A browser fallback was denied; do not repeat that denied action without new authorization. Later the user explicitly asked for browser sign-in, so official GitHub CLI v2.101.0 for macOS arm64 was downloaded under the workspace:
-
-`/Users/dotanhofman/Documents/garmin_app/support/github-cli/extracted/gh_2.101.0_macOS_arm64/bin/gh`
-
-Browser device login was started, but the user said they would do it later. The pending CLI process was cancelled with Ctrl-C. Do not reuse the old code or assume login succeeded. No current push authorization should override this explicit deferral. If user resumes publication, check fresh auth and Git state; do not recreate the repo or overwrite changes. Network permissions may need requesting in a new turn. Never expose tokens.
+The user chose to configure Git authentication themselves and confirmed that commit `f48aa70` was pushed successfully to `https://github.com/dohof2/garmin_health_training.git`. Do not expose or request tokens. A request to implement work does not by itself authorize committing or pushing it; only commit/push when the user explicitly asks. Check current Git state first and preserve unrelated local changes.
 
 ## Working style
 
