@@ -26,8 +26,30 @@ class AIToolTests(unittest.TestCase):
                     ("run-a1", "run-a1", "running", "Easy run", "2026-10-01T06:00:00Z", 1800, 5000, 350, 20),
                     ("run-a2", "run-a2", "running", "Steady run", "2026-10-02T06:00:00Z", 2000, 5000, 375, 25),
                     ("ride-a", "ride-a", "cycling", "Ride", "2026-10-03T06:00:00Z", 3600, 30000, 700, 200),
+                    ("ride-near", "ride-near", "cycling", "Similar ride", "2026-10-04T06:00:00Z", 3900, 31500, 725, 220),
+                    ("ride-far", "ride-far", "cycling", "Long ride", "2026-10-07T06:00:00Z", 7200, 60000, 1300, 600),
+                    ("ride-indoor", "ride-indoor", "indoor_cycling", "Indoor ride", "2026-10-06T06:00:00Z", 3700, 30500, 680, 0),
                     ("run-b", "run-b", "running", "Long run", "2026-10-08T06:00:00Z", 5400, 15000, 900, 60),
                 ],
+            )
+            route_samples = []
+            for activity_id, latitude_offset in (("ride-a", 0.0), ("ride-near", 0.0001)):
+                route_samples.extend(
+                    (
+                        activity_id,
+                        f"2026-10-03T06:00:{index:02d}Z",
+                        32.0 + latitude_offset + index * 0.001,
+                        34.8 + index * 0.001,
+                    )
+                    for index in range(12)
+                )
+            connection.executemany(
+                """
+                INSERT INTO activity_samples(
+                    activity_id, recorded_at, latitude, longitude
+                ) VALUES (?, ?, ?, ?)
+                """,
+                route_samples,
             )
             connection.executemany(
                 """
@@ -63,7 +85,13 @@ class AIToolTests(unittest.TestCase):
         definitions = tool_definitions()
         self.assertEqual(
             [item["name"] for item in definitions],
-            ["get_health_summary", "list_activities", "compare_periods"],
+            [
+                "get_health_summary",
+                "list_activities",
+                "compare_periods",
+                "find_similar_rides",
+                "find_same_course_rides",
+            ],
         )
         self.assertTrue(
             all(item["input_schema"]["additionalProperties"] is False for item in definitions)
@@ -153,6 +181,85 @@ class AIToolTests(unittest.TestCase):
         self.assertEqual(metric_delta["period_b_average"], 3000)
         self.assertEqual(metric_delta["average"]["percent"], 100)
 
+    def test_similar_rides_exposes_adjustable_criteria_sample_and_links(self) -> None:
+        result = execute_tool(
+            "find_similar_rides",
+            {
+                "reference_activity_id": "ride-a",
+                "duration_tolerance_percent": 20,
+                "distance_tolerance_percent": 20,
+                "elevation_tolerance_percent": 30,
+                "timezone": "UTC",
+                "limit": 5,
+            },
+            self.database,
+        )
+
+        self.assertEqual(result["reference_ride"]["id"], "ride-a")
+        self.assertEqual(result["candidate_pool_count"], 2)
+        self.assertEqual(result["total_matches"], 1)
+        self.assertEqual(result["rides"][0]["id"], "ride-near")
+        self.assertEqual(result["rides"][0]["evidence_url"], "/api/activities/ride-near")
+        self.assertGreater(result["rides"][0]["similarity_score"], 0)
+        distance = next(
+            item for item in result["criteria"] if item["field"] == "distance_meters"
+        )
+        self.assertEqual(distance["unit"], "kilometers")
+        self.assertEqual(distance["minimum"], 24)
+        self.assertEqual(distance["maximum"], 36)
+        self.assertEqual(result["reference_ride"]["duration_hours"], 1)
+        self.assertIn("intended intensity", result["unavailable_criteria"])
+
+        broadened = execute_tool(
+            "find_similar_rides",
+            {
+                "reference_activity_id": "ride-a",
+                "candidate_activity_types": ["cycling", "indoor_cycling"],
+                "elevation_tolerance_percent": None,
+            },
+            self.database,
+        )
+        self.assertEqual(broadened["candidate_pool_count"], 3)
+        self.assertEqual(
+            {item["id"] for item in broadened["rides"]},
+            {"ride-near", "ride-indoor"},
+        )
+
+    def test_same_course_rides_match_gps_locally_and_report_progress(self) -> None:
+        result = execute_tool(
+            "find_same_course_rides",
+            {
+                "reference_activity_id": "ride-a",
+                "candidate_activity_types": ["cycling", "indoor_cycling"],
+                "route_tolerance_meters": 100,
+                "minimum_route_overlap_percent": 80,
+                "endpoint_tolerance_meters": 500,
+                "distance_tolerance_percent": 15,
+                "timezone": "UTC",
+            },
+            self.database,
+        )
+
+        self.assertEqual(result["reference_ride"]["id"], "ride-a")
+        self.assertEqual(result["candidate_pool_count"], 2)
+        self.assertEqual(result["gps_candidates_evaluated"], 1)
+        self.assertEqual(result["excluded_without_gps"], 1)
+        self.assertEqual(result["total_matches"], 1)
+        self.assertEqual(result["rides"][0]["id"], "ride-near")
+        self.assertGreaterEqual(
+            result["rides"][0]["route_match"]["route_overlap_percent"], 80
+        )
+        self.assertEqual(result["course_progress"]["attempt_count"], 2)
+        self.assertNotIn("latitude", str(result))
+        self.assertIn("not included", result["privacy"])
+
+        by_date = execute_tool(
+            "find_same_course_rides",
+            {"reference_date": "2026-10-03", "timezone": "UTC"},
+            self.database,
+        )
+        self.assertEqual(by_date["reference_ride"]["id"], "ride-a")
+
     def test_rejects_unknown_tools_unexpected_arguments_and_invalid_ranges(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unknown AI tool"):
             execute_tool("run_sql", {}, self.database)
@@ -166,6 +273,15 @@ class AIToolTests(unittest.TestCase):
             execute_tool(
                 "list_activities",
                 {"start_date": "2026-10-03", "end_date": "2026-10-01"},
+                self.database,
+            )
+        with self.assertRaisesRegex(ValueError, "between 0 and 100"):
+            execute_tool(
+                "find_similar_rides",
+                {
+                    "reference_activity_id": "ride-a",
+                    "distance_tolerance_percent": -1,
+                },
                 self.database,
             )
 

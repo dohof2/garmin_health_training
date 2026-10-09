@@ -52,6 +52,33 @@ class FakeResponse:
 
 
 class AIChatTests(unittest.TestCase):
+    def test_similar_ride_questions_force_the_scoped_matcher(self) -> None:
+        self.assertEqual(
+            ai_chat._forced_tool_name("Find rides similar to my latest ride"),
+            "find_similar_rides",
+        )
+        self.assertIsNone(ai_chat._forced_tool_name("List my latest rides"))
+        self.assertEqual(
+            ai_chat._forced_tool_name("How have I improved on this GPS course?"),
+            "find_same_course_rides",
+        )
+        self.assertIn(
+            "candidate_pool_count",
+            ai_chat._answer_guardrail("Find rides similar to my latest ride"),
+        )
+        self.assertIn(
+            "raw GPS coordinates were not provided",
+            ai_chat._answer_guardrail("How have I improved on this GPS course?"),
+        )
+        self.assertEqual(
+            ai_chat._normalize_tool_arguments(
+                "find_similar_rides",
+                {"reference_activity_id": "invented", "limit": 5},
+                "Find rides similar to my latest ride",
+            ),
+            {"limit": 5},
+        )
+
     def test_relative_period_resolves_last_days_deterministically(self) -> None:
         with patch("app.ai_chat.date") as mocked_date:
             mocked_date.today.return_value = date(2026, 10, 8)
@@ -59,6 +86,32 @@ class AIChatTests(unittest.TestCase):
                 ai_chat._relative_period("Summarize the last seven days"),
                 ("2026-10-02", "2026-10-08"),
             )
+
+    def test_same_course_answer_uses_only_computed_progress(self) -> None:
+        answer = ai_chat._same_course_answer(
+            {
+                "reference_ride": {"name": "Loop", "local_date": "2026-10-06"},
+                "total_matches": 3,
+                "course_progress": {
+                    "attempt_count": 4,
+                    "earliest": {"local_date": "2025-01-01"},
+                    "latest": {"local_date": "2026-10-06"},
+                    "changes_latest_minus_earliest": [
+                        {
+                            "metric": "duration",
+                            "earliest": 1.0,
+                            "latest": 0.9,
+                            "unit": "hours",
+                            "percent": -10.0,
+                        }
+                    ],
+                },
+            }
+        )
+        self.assertIn("3 other course attempts", answer)
+        self.assertIn("4 matched attempts", answer)
+        self.assertIn("latest attempt was faster", answer)
+        self.assertIn("not proof of improved fitness", answer)
 
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()

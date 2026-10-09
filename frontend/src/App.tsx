@@ -264,14 +264,57 @@ type ChatEvidence = {
   record_count?: number;
   total_matches?: number;
   returned_count?: number;
+  candidate_pool_count?: number;
+  evaluated_count?: number;
   truncated?: boolean;
   missing_metric_types?: string[];
-  records?: Array<{
+  unavailable_criteria?: string[];
+  criteria?: Array<{
+    field: string;
+    label: string;
+    unit?: string;
+    applied: boolean;
+    reference_value?: string | number;
+    accepted_values?: string[];
+    tolerance_percent?: number;
+    minimum?: number;
+    maximum?: number;
+    reason?: string;
+    description?: string;
+  }>;
+  reference_record?: {
     id: string;
+    name?: string;
     activity_type: string;
     local_date: string;
     url: string;
+  };
+  records?: Array<{
+    id: string;
+    name?: string;
+    activity_type: string;
+    local_date: string;
+    similarity_score?: number;
+    route_overlap_percent?: number;
+    direction?: string;
+    endpoint_distance_meters?: number;
+    url: string;
   }>;
+  course_progress?: null | {
+    attempt_count: number;
+    earliest: { id: string; local_date: string; evidence_url: string };
+    latest: { id: string; local_date: string; evidence_url: string };
+    changes_latest_minus_earliest: Array<{
+      metric: string;
+      unit: string;
+      earliest: number;
+      latest: number;
+      absolute: number;
+      percent: number | null;
+    }>;
+    interpretation_notes: string[];
+  };
+  privacy?: string;
   limitations?: string[];
 };
 
@@ -449,6 +492,47 @@ const formatSpeed = (metersPerSecond: number, unit: "km" | "mi") =>
   unit === "mi"
     ? `${(metersPerSecond * 2.236936).toFixed(1)} mph`
     : `${(metersPerSecond * 3.6).toFixed(1)} km/h`;
+
+const formatSimilarityCriterion = (
+  criterion: NonNullable<ChatEvidence["criteria"]>[number],
+  distanceUnit: "km" | "mi",
+) => {
+  if (!criterion.applied) return `${criterion.label}: ${criterion.reason ?? "not applied"}`;
+  if (criterion.description) return `${criterion.label}: ${criterion.description}`;
+  if (criterion.field === "activity_type") {
+    return `${criterion.label}: ${(criterion.accepted_values ?? []).map((value) => value.replaceAll("_", " ")).join(", ")}`;
+  }
+  const tolerance = typeof criterion.tolerance_percent === "number"
+    ? ` (±${criterion.tolerance_percent}%)`
+    : "";
+  if (criterion.minimum === undefined || criterion.maximum === undefined) {
+    return criterion.label;
+  }
+  if (criterion.unit === "seconds") {
+    return `${criterion.label}: ${formatDuration(criterion.minimum)}–${formatDuration(criterion.maximum)}${tolerance}`;
+  }
+  if (criterion.unit === "hours") {
+    return `${criterion.label}: ${criterion.minimum.toFixed(1)}–${criterion.maximum.toFixed(1)} hours${tolerance}`;
+  }
+  if (criterion.unit === "kilometers") {
+    const minimumMeters = criterion.minimum * 1_000;
+    const maximumMeters = criterion.maximum * 1_000;
+    return `${criterion.label}: ${formatDistance(minimumMeters, distanceUnit)}–${formatDistance(maximumMeters, distanceUnit)}${tolerance}`;
+  }
+  if (criterion.field === "distance_meters") {
+    return `${criterion.label}: ${formatDistance(criterion.minimum, distanceUnit)}–${formatDistance(criterion.maximum, distanceUnit)}${tolerance}`;
+  }
+  return `${criterion.label}: ${Math.round(criterion.minimum).toLocaleString()}–${Math.round(criterion.maximum).toLocaleString()} ${criterion.unit ?? ""}${tolerance}`.trim();
+};
+
+const formatCourseMetric = (value: number, unit: string) => {
+  if (unit === "hours") return `${value.toFixed(2)} h`;
+  if (unit === "kilometers_per_hour") return `${value.toFixed(1)} km/h`;
+  if (unit === "bpm") return `${Math.round(value)} bpm`;
+  if (unit === "watts") return `${Math.round(value)} W`;
+  if (unit === "rpm") return `${Math.round(value)} rpm`;
+  return value.toFixed(1);
+};
 
 type DateRangeFilterProps = {
   start: string;
@@ -1870,8 +1954,9 @@ export default function App() {
         </div>
         <p className="assistant-intro">
           The assistant can only read through validated health-summary, activity,
-          and period-comparison tools. Calculations come from application code,
-          and every data answer shows the records or periods used.
+          period-comparison, similar-ride, and local GPS course tools. Calculations
+          and matching come from application code, and every data answer shows
+          the records, periods, and criteria used.
         </p>
         <p className="assistant-privacy">
           {activeAiProvider === "openai"
@@ -1887,6 +1972,8 @@ export default function App() {
               <div className="chat-suggestions">
                 <button type="button" onClick={() => void sendChatMessage("Summarize my steps and sleep over the last seven days.")}>Last seven days</button>
                 <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
+                <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride and explain the matching criteria.")}>Similar rides</button>
+                <button type="button" onClick={() => void sendChatMessage("Find earlier rides on the same GPS course as my latest ride and show how my performance changed.")}>Same course</button>
                 <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
               </div>
             </div>
@@ -1909,20 +1996,63 @@ export default function App() {
                           )}
                           {typeof evidence.record_count === "number" && <small>{evidence.record_count.toLocaleString()} metric records</small>}
                           {typeof evidence.total_matches === "number" && (
-                            <small>{evidence.total_matches.toLocaleString()} matching activities{evidence.truncated ? ` · ${evidence.returned_count} shown` : ""}</small>
+                            <small>
+                              {evidence.total_matches.toLocaleString()} matching {evidence.tool === "find_same_course_rides" ? "course attempts" : evidence.tool === "find_similar_rides" ? "rides" : "activities"}
+                              {typeof evidence.candidate_pool_count === "number" ? ` from ${evidence.candidate_pool_count.toLocaleString()} candidates` : ""}
+                              {evidence.truncated ? ` · ${evidence.returned_count} shown` : ""}
+                            </small>
                           )}
                           {(evidence.freshness?.latest_recorded_at || evidence.freshness?.latest_started_at) && (
                             <small>Fresh through {formatLongDate(evidence.freshness.latest_recorded_at ?? evidence.freshness.latest_started_at ?? "")}</small>
                           )}
                           {evidence.records && evidence.records.length > 0 && (
                             <div className="evidence-links">
+                              {evidence.reference_record && (
+                                <a href={`${evidence.reference_record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} target="_blank" rel="noreferrer">
+                                  Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
+                                </a>
+                              )}
                               {evidence.records.slice(0, 6).map((record) => (
                                 <a href={`${record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} key={record.id} target="_blank" rel="noreferrer">
-                                  {record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
+                                  {record.name ?? record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
+                                  {typeof record.similarity_score === "number" ? ` · ${record.similarity_score.toFixed(0)}% similarity` : ""}
+                                  {typeof record.route_overlap_percent === "number" ? ` · ${record.route_overlap_percent.toFixed(0)}% route overlap` : ""}
+                                  {record.direction ? ` · ${record.direction}` : ""}
                                 </a>
                               ))}
                             </div>
                           )}
+                          {evidence.reference_record && (!evidence.records || evidence.records.length === 0) && (
+                            <div className="evidence-links">
+                              <a href={`${evidence.reference_record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} target="_blank" rel="noreferrer">
+                                Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
+                              </a>
+                            </div>
+                          )}
+                          {evidence.criteria && evidence.criteria.length > 0 && (
+                            <div className="evidence-criteria">
+                              {evidence.criteria.map((criterion) => (
+                                <small key={criterion.field}>{formatSimilarityCriterion(criterion, preferredDistanceUnit)}</small>
+                              ))}
+                            </div>
+                          )}
+                          {evidence.unavailable_criteria && evidence.unavailable_criteria.length > 0 && (
+                            <small>Not available for matching: {evidence.unavailable_criteria.join(", ")}</small>
+                          )}
+                          {evidence.course_progress && (
+                            <div className="course-progress">
+                              <strong>
+                                {evidence.course_progress.attempt_count} matched attempts · {formatLongDate(evidence.course_progress.earliest.local_date)} to {formatLongDate(evidence.course_progress.latest.local_date)}
+                              </strong>
+                              {evidence.course_progress.changes_latest_minus_earliest.map((change) => (
+                                <small key={change.metric}>
+                                  {change.metric}: {formatCourseMetric(change.earliest, change.unit)} → {formatCourseMetric(change.latest, change.unit)}
+                                  {change.percent === null ? "" : ` · ${change.percent >= 0 ? "+" : ""}${change.percent.toFixed(1)}%`}
+                                </small>
+                              ))}
+                            </div>
+                          )}
+                          {evidence.privacy && <small>{evidence.privacy}</small>}
                           {evidence.missing_metric_types && evidence.missing_metric_types.length > 0 && (
                             <small>Not recorded: {evidence.missing_metric_types.join(", ")}</small>
                           )}

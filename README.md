@@ -28,8 +28,10 @@ the Settings section. The AI provider foundation now supports manual selection
 between local Qwen through Ollama and the OpenAI Responses API; grounded chat
 now streams answers through either provider. Three provider-neutral read-only
 tools supply deterministic health summaries, filtered activities with sensor
-evidence, and period comparisons, while the interface shows periods, freshness,
-record counts, missing data, and activity evidence links.
+evidence, period comparisons, adjustable similar-ride selection, and local GPS
+course matching, while the interface shows periods, freshness, record counts,
+matching tolerances, course-performance changes, missing data, and activity
+evidence links. Raw GPS coordinates never leave the local matching layer.
 
 ## Project plan
 
@@ -41,7 +43,7 @@ Read the [review plan](docs/planning/health-training-app-plan.md) for the requir
 - Manually import and export data, with portable exports and restorable backups.
 - Synchronize daily with Garmin Connect and refresh using a **Sync now** button.
 - Explore health and activity history through customizable graphs.
-- Ask AI questions about historical data, compare similar rides, and assess a ride against its training goal.
+- Ask AI questions about historical data, compare similar rides or repeated GPS courses, and assess a ride against its training goal.
 - Plan personalized strength, cycling, and running sessions and publish supported workouts to Garmin Connect.
 - Review food-photo estimates and log calories, protein, fat, and carbohydrates.
 - Track daily nutrition targets and status, with optional messaging later.
@@ -68,8 +70,8 @@ shell, or filesystem access.
 
 ## Next steps
 
-1. Add similar-ride matching with visible criteria, tolerances, sample size, and linked rides.
-2. Add goal-aware ride assessment with explicit assumptions when session intent is missing.
+1. Add goal-aware ride assessment with explicit assumptions when session intent is missing.
+2. Add validated optional goal/profile updates through chat.
 3. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is already verified locally.
 
 ## Local development
