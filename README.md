@@ -26,12 +26,15 @@ transitions; date-only Garmin health metrics retain their original dates.
 Optional local profile fields and multiple training goals can be edited from
 the Settings section. The AI provider foundation now supports manual selection
 between local Qwen through Ollama and the OpenAI Responses API; grounded chat
-now streams answers through either provider. Three provider-neutral read-only
-tools supply deterministic health summaries, filtered activities with sensor
+now streams answers through either provider. Scoped provider-neutral tools supply deterministic health summaries, filtered activities with sensor
 evidence, period comparisons, adjustable similar-ride selection, and local GPS
 course matching, while the interface shows periods, freshness, record counts,
 matching tolerances, course-performance changes, missing data, and activity
-evidence links. Raw GPS coordinates never leave the local matching layer.
+evidence links. Raw GPS coordinates never leave the local matching layer. Conditional ride assessments
+and weekly running-volume trends use deterministic calculations. Chat can propose
+profile or goal changes, show a preview, and save only after the user clicks
+**Save change**. Forms and chat share validators and SQLite storage; stale proposals
+cannot overwrite newer edits, and goal changes retain revision history.
 
 ## Project plan
 
@@ -52,7 +55,7 @@ Read the [review plan](docs/planning/health-training-app-plan.md) for the requir
 ## Proposed architecture
 
 React/TypeScript interface, Python/FastAPI backend, SQLite storage, a
-provider-neutral AI layer, and scoped read-only query tools. Ollama is installed
+provider-neutral AI layer, scoped query tools, and reviewed settings proposals. Ollama is installed
 and benchmarked locally. Both Qwen through Ollama and OpenAI are supported behind
 one selectable interface; provider switching is manual, so there is no automatic
 fallback to a paid API. The in-app assistant calls application tools directly;
@@ -63,16 +66,30 @@ The key is read from the process environment and is not saved in SQLite or
 returned by the API. The integration uses the official OpenAI Python SDK and
 Responses API.
 
-The read-only tool catalog is available locally at `GET /api/ai/tools`. Tools
+The scoped tool catalog is available locally at `GET /api/ai/tools`. Tools
 execute through `POST /api/ai/tools/{tool_name}` with an `arguments` object.
 Only registered operations and fields are accepted; models never receive SQL,
 shell, or filesystem access.
 
+## Maintenance history
+
+Use **Maintenance** to log completed work, filter history, edit records, inspect
+revisions, remove/restore entries, or import/export a CSV snapshot. Clear chat
+commands such as “Log that I replaced the chain on my road bike today” save
+locally and show Edit/Undo. Missing equipment or dates prompt a focused question.
+Common maintenance commands work locally with either provider selected, including
+when no AI provider is configured. Costs remain separate by currency.
+
+SQLite stores the authoritative history; CSV is a portable current-record
+snapshot. JSON exports include event revisions, and full backups preserve the
+entire maintenance module. See [CSV columns and import behavior](docs/maintenance-csv.md)
+and [T11 verification](docs/status/t11-verification.md).
+
 ## Next steps
 
-1. Add goal-aware ride assessment with explicit assumptions when session intent is missing.
-2. Add validated optional goal/profile updates through chat.
-3. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is already verified locally.
+1. Implement T12 daily training readiness, then T7 preferences and structured plans.
+2. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is verified locally.
+3. Continue with T8 Garmin workout publishing, T9 nutrition, and T10 daily-use launch/quit and recovery.
 
 ## Local development
 

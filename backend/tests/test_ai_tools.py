@@ -81,6 +81,21 @@ class AIToolTests(unittest.TestCase):
     def tearDown(self) -> None:
         self.temporary.cleanup()
 
+    def test_course_progress_includes_sensors_from_matches_outside_display_limit(self) -> None:
+        with connect(self.database) as connection:
+            connection.execute("""INSERT INTO activities(id, source_name, activity_type, started_at, duration_seconds, distance_meters)
+                VALUES ('old-ride', 'synthetic', 'cycling', '2024-01-01T06:00:00Z', 4000, 31000)""")
+            connection.executemany("INSERT INTO activity_samples(activity_id, recorded_at, latitude, longitude, power_watts) VALUES ('old-ride', ?, ?, ?, 100)",
+                [(f"2024-01-01T06:00:{index:02d}Z", 32.0003 + index * .001, 34.8 + index * .001) for index in range(12)])
+            connection.execute("UPDATE activity_samples SET power_watts = 200 WHERE activity_id = 'ride-near'")
+        result = execute_tool('find_same_course_rides', {'reference_activity_id': 'ride-near', 'limit': 1}, self.database)
+        self.assertEqual(result['total_matches'], 2)
+        self.assertNotEqual(result['rides'][0]['id'], 'old-ride')
+        power_change = next(change for change in result['course_progress']['changes_latest_minus_earliest'] if change['metric'] == 'average power')
+        self.assertEqual(power_change['earliest'], 100)
+        self.assertEqual(power_change['latest'], 200)
+        self.assertEqual(power_change['percent'], 100)
+
     def test_catalog_exposes_only_scoped_read_only_tools(self) -> None:
         definitions = tool_definitions()
         self.assertEqual(
@@ -91,6 +106,15 @@ class AIToolTests(unittest.TestCase):
                 "compare_periods",
                 "find_similar_rides",
                 "find_same_course_rides",
+                "assess_ride",
+                "running_volume_trend",
+                "get_training_context",
+                "propose_settings_change",
+                "log_maintenance",
+                "list_maintenance",
+                "update_maintenance",
+                "undo_maintenance",
+                "export_maintenance",
             ],
         )
         self.assertTrue(

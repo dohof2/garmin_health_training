@@ -49,7 +49,7 @@ Existing decisions remain settled: computer first, bulk import first, account-wi
 | M2 — First dashboard | T5 | Steps, last activity, weekly calories, and editable saved layout |
 | M3 — Historical AI assistant | T6 | Questions about actual history, similar-ride comparisons, optional goal/profile editing |
 | M3A — Maintenance history | T11 | AI-based maintenance/replacement logging, review/edit/undo, CSV portability |
-| M4 — Training | T7–T8 | Stored training context, proposed plans, and verified Garmin publishing |
+| M4 — Training | T7–T8, T12 | Daily readiness, stored training context, proposed plans, and verified Garmin publishing |
 | M5 — Food and nutrition | T9 | Photo-assisted logging, editable estimates, daily targets and totals |
 | M6 — Daily-use release | T10 | Explicit launch/quit, recovery and catch-up after reopening, reminders only during open app sessions |
 
@@ -197,9 +197,11 @@ Done when everyday recovery works and no ongoing paid service is needed. Verify 
 
 ### T11 — Maintenance and accessory replacement log
 
+**Complete — 10 October 2026.** T11.1–T11.8 are implemented and verified; see [`../status/t11-verification.md`](../status/t11-verification.md) and the detailed status tracker. User maintenance details are supplied during normal use.
+
 Depends on T2 storage and T3 export/backup services; AI prompt execution depends on T6. It does not depend on the Garmin export, Garmin login, or device/sensor inventory. Include this module in T10's final backup and daily-use checks.
 
-**Execution method:** Store authoritative records in the existing local SQLite database. AI prompts call structured, validated application tools directly; those tools write records, not CSV text. An optional MCP adapter can expose selected tools to external AI clients without becoming an in-app dependency. Provide CSV import/export for spreadsheet use and portability. A CSV export is a snapshot. This is the proposed storage choice for review; it adds no paid dependency.
+**Execution method:** Store authoritative records in the existing local SQLite database. Common maintenance chat commands resolve locally into structured, validated application services shared by both provider modes; imported/model-generated text cannot authorize writes. An optional MCP adapter can expose selected tools to external AI clients without becoming an in-app dependency. Provide CSV import/export for spreadsheet use and portability. A CSV export is a snapshot. This adds no paid dependency.
 
 | Subtask | Work | Your involvement |
 |---|---|---|
@@ -222,6 +224,21 @@ Acceptance examples:
 - Exporting and reimporting an unchanged maintenance CSV creates no duplicates; a conflicting edit is shown for resolution.
 
 Done when chat can log/query/correct records reliably, users can inspect the history, and CSV/backup round trips preserve the documented data. Automatic maintenance reminders and activity-derived usage are not needed for completion.
+
+### T12 — Daily training readiness
+
+Build an original, transparent readiness metric from locally stored data. Do not claim to reproduce Garmin, Fitbit, or another vendor's proprietary algorithm. During implementation, review current public research and official metric definitions, cite the chosen basis, and keep the calculation inspectable and versioned.
+
+| Subtask | Work | Your involvement |
+|---|---|---|
+| T12.1 | Define and document a 0–100 readiness model using HRV relative to the user's baseline, sleep score, sleep duration, time since the last training session, recent training load, and resting heart rate relative to baseline. | None; optional feedback on whether the result feels useful |
+| T12.2 | Establish personalized rolling baselines, minimum history requirements, component weights, caps, and recovery windows. Keep every assumption configurable and version the formula so historical scores remain explainable. | None |
+| T12.3 | Compute one morning score with low/medium/high readiness bands, component contributions, source dates, freshness, and confidence. Degrade confidence visibly when inputs are missing or stale rather than inventing values. | None |
+| T12.4 | Add a dashboard card and trend view showing today's score, the main positive/negative contributors, available history, and a plain-language explanation. Recalculate safely after corrected or late Garmin data arrives. | U5 feedback can refine the presentation |
+| T12.5 | Make readiness available to the AI assistant and later training planner as advisory evidence. It may support a suggestion to reduce or increase intensity, but must not silently alter a plan or present medical advice. | Optional confirmation before changing a planned session |
+| T12.6 | Test normal recovery, poor sleep, suppressed HRV, elevated resting heart rate, heavy recent load, long rest, missing metrics, insufficient baseline, timezone boundaries, late data, and formula-version changes. Compare behavior with recognizable trends without treating a vendor score as ground truth. | None for automated tests; optional real-use feedback |
+
+Done when the morning score is reproducible from displayed inputs, explains why it changed, remains usable with partial data, and is clearly labeled as this app's readiness estimate rather than a Garmin/Fitbit score.
 
 ## 5. Deferred backlog
 

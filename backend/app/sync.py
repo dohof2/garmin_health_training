@@ -130,6 +130,7 @@ def ensure_sync_checkpoints(path: Path | None = None) -> None:
                     data_type, provider_name, coverage_start, coverage_end,
                     seeded_from_import, status
                 ) VALUES (?, 'garmin_connect', ?, ?, ?, 'pending')
+                ON CONFLICT(data_type) DO NOTHING
                 """,
                 (data_type, coverage_start, coverage_end, int(coverage_end is not None)),
             )

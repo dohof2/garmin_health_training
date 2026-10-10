@@ -1,8 +1,8 @@
 # Garmin Health & Training App — Progress Status
 
-Last updated: 9 October 2026
-Overall status: **The T1–T5 core is operational, and T6 AI provider integration has started with selectable OpenAI and local Qwen adapters.**
-Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, navigation, local profile/goals settings, unit preferences, portable export/backup, and restore preview are operational. Private Garmin authentication stores owner-only session tokens locally. Live checkpoints now cover activities, daily summaries, sleep, HRV, and weight/body composition through 8 October 2026; the 28 September–8 October historical reconciliation completed without failures and removed all archive/live daily-metric duplicates. Daily synchronization is enabled only while the app is open, catches every missing day, and rechecks the latest three days. Original FIT details restored 6,568 sensor samples for the newest activities. SQLite quick-check and foreign keys pass. Local Qwen 3.5 2B/4B text/tool inference and the 2B vision path were benchmarked successfully. Selectable Qwen/Ollama and OpenAI provider adapters, grounded historical chat, similar-ride matching, and privacy-preserving GPS course matching are implemented. Natural token-expiry observation, optional importer UI conveniences, dashboard feedback, and the remaining goal-aware AI work remain.
+Last updated: 10 October 2026
+Overall status: **The T1–T5 core is operational. T6 implementation and local Qwen verification are complete; live OpenAI verification awaits an API key. T11 maintenance history is complete.**
+Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, navigation, local profile/goals settings, unit preferences, portable export/backup, and restore preview are operational. Private Garmin authentication stores owner-only session tokens locally. Live checkpoints now cover activities, daily summaries, sleep, HRV, and weight/body composition through 8 October 2026; the 28 September–8 October historical reconciliation completed without failures and removed all archive/live daily-metric duplicates. Daily synchronization is enabled only while the app is open, catches every missing day, and rechecks the latest three days. Original FIT details restored 6,568 sensor samples for the newest activities. SQLite quick-check and foreign keys pass. Local Qwen 3.5 2B/4B text/tool inference and the 2B vision path were benchmarked successfully. Selectable Qwen/Ollama and OpenAI provider adapters, grounded historical chat, similar-ride matching, and privacy-preserving GPS course matching are implemented. Natural token-expiry observation, optional importer UI conveniences, dashboard feedback, and live OpenAI verification remain. Goal-aware assessment and reviewed chat profile/goal changes are implemented.
 
 This is the quick status reference. Detailed requirements and acceptance criteria remain in [`../planning/health-training-app-plan.md`](../planning/health-training-app-plan.md) and [`../planning/implementation-tasks-and-your-input.md`](../planning/implementation-tasks-and-your-input.md).
 
@@ -23,9 +23,9 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | M0 — Feasibility evidence | T1 | ✅ Complete | Hardware, runtime, archive, live Garmin coverage, workout surface, and local text/tool/basic-vision benchmarks are documented |
 | M1 — Local data foundation | T2–T4 | 🟡 Partial | Core import/export, settings, authentication, five-stream live catch-up, reconciliation, and scheduling are complete; natural token-expiry observation and optional importer UI conveniences remain |
 | M2 — First dashboard | T5 | 🟡 Partial | Technical implementation and timezone/DST verification are complete; gradual U5 usability feedback remains |
-| M3 — Historical AI assistant | T6 | 🟡 Partial | Selectable OpenAI/Qwen providers, scoped read-only tools, grounded chat, similar rides, and local GPS course matching are implemented; goal-aware assessment and validated chat writes remain |
-| M3A — Maintenance history | T11 | ⬜ Not started | SQLite-authoritative design with CSV portability is planned |
-| M4 — Training | T7–T8 | ⬜ Not started | Personalized planning and Garmin publishing remain future implementation |
+| M3 — Historical AI assistant | T6 | 🟡 Partial | Implementation complete: grounded history, ride/course comparison, conditional ride assessment, reviewed profile/goal changes, and regression checks. Local Qwen verified; live OpenAI verification awaits a key |
+| M3A — Maintenance history | T11 | ✅ Complete | Local chat commands, history/edit/undo, revisions, reviewed CSV portability, JSON and full backup restoration verified |
+| M4 — Training | T7–T8, T12 | ⬜ Not started | Transparent daily readiness, personalized planning, and Garmin publishing remain future implementation |
 | M5 — Food and nutrition | T9 | ⬜ Not started | Manual logging precedes photo estimation |
 | M6 — Daily-use release | T10 | ⬜ Not started | Explicit launch/quit and open-session-only jobs remain required |
 
@@ -97,9 +97,9 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | T6.2 | Scoped provider-neutral application tools and deterministic calculations | ✅ Complete | Registered `get_health_summary`, `list_activities`, and `compare_periods` tools validate bounded date ranges/fields, return coverage/freshness/evidence, expose available sensor aggregates, and never expose SQL, shell, filesystem, or raw imported text |
 | T6.3 | Streaming chat, evidence links, freshness, and uncertainty | ✅ Complete | OpenAI/Qwen share one NDJSON streaming contract; validated tools run before data answers; the UI shows periods, freshness, record counts, missing metrics, and activity links; relative periods are resolved deterministically and aggregate-only results cannot be presented as fabricated daily values |
 | T6.4 | Similar-ride and GPS-course matching with visible criteria and tolerances | ✅ Complete | `find_similar_rides` handles adjustable type/duration/distance/elevation matching. `find_same_course_rides` processes GPS locally, supports a latest, dated, or identified reference ride, checks bidirectional route coverage, endpoints, distance, and same/reverse direction, and reports deterministic earliest-to-latest duration/speed/sensor changes across every matched attempt. Raw coordinates are withheld from the AI and UI. Real Garmin validation found 47 matches for the 6 October 2026 Sprint course, including same- and reverse-direction attempts; Qwen was verified end to end for similar rides. |
-| T6.5 | Conditional ride-effectiveness assessment | ⬜ Not started | Requires session intent or clearly stated assumptions |
-| T6.6 | Validated optional goal/profile updates through chat | ⬜ Not started | Must share storage with forms and support correction |
-| T6.7 | Test example questions, numeric accuracy, prompt injection, and persistence | ⬜ Not started | Imported text is data, not instructions |
+| T6.5 | Conditional ride-effectiveness assessment | ✅ Complete | `assess_ride` reports actual ride volume/sensor evidence, active goals as context, explicit session intent and optional duration target; unknown intent gets conditional endurance/recovery/interval interpretations and a focused question. A single ride never establishes adaptation. Structured plan targets remain T7. |
+| T6.6 | Validated optional goal/profile updates through chat | ✅ Complete | Narrow proposals show current/proposed values and require Save change in the UI. Shared Settings validators/storage apply profile patches and goal create/correct/archive operations. Atomic confirmation, stale-snapshot rejection, idempotent retries, goal revisions, and Settings refresh are verified. |
+| T6.7 | Test example questions, numeric accuracy, prompt injection, and persistence | ✅ Complete | 97 backend tests, TypeScript checks, and production build pass. Tests cover weekly volume against independent numbers, unknown intent, missing data, injected names, unauthorized tools, bounded Qwen retry, shared OpenAI/Qwen review contract, API confirmation, stale changes, revisions and backup round trip. Live Qwen and browser checks verified creation/correction/profile updates on synthetic storage. |
 
 ### T7 — Build personalized training planning
 
@@ -147,14 +147,25 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T11.1 | Equipment labels, events, optional details, IDs, and revisions | ⬜ Not started | Depends on T2 storage |
-| T11.2 | Prompt extraction, local dates, and targeted clarification | ⬜ Not started | U11 occurs during normal use |
-| T11.3 | Validated log/list/update/undo/export tools with operation IDs | ⬜ Not started | AI writes through application services, not CSV text |
-| T11.4 | Maintenance history screen with filters and recoverable deletion | ⬜ Not started | Simple non-chat review/edit route required |
-| T11.5 | History questions, multiple entries, and currency-separated totals | ⬜ Not started | Never invent optional values |
-| T11.6 | UTF-8 CSV import/export, mapping, safety, dedupe, and conflicts | ⬜ Not started | CSV remains a snapshot, not live storage |
-| T11.7 | Include records/revisions in JSON and backup/restore | ⬜ Not started | Current-record CSV need not include revisions |
-| T11.8 | Test ambiguity, dates, revisions, retries, CSV, and restoration | ⬜ Not started | Automated fixtures first |
+| T11.1 | Equipment labels, events, optional details, IDs, and revisions | ✅ Complete | Migration 012 extends existing records and backfills initial revisions; labels created on demand |
+| T11.2 | Prompt extraction, local dates, and targeted clarification | ✅ Complete | Common English commands resolved locally for both providers; missing essentials prompt focused questions; future/negated work is not logged |
+| T11.3 | Validated log/list/update/undo/export tools with operation IDs | ✅ Complete | Atomic service writes, durable retries, stale-edit protection, saved feedback and Edit/Undo |
+| T11.4 | Maintenance history screen with filters and recoverable deletion | ✅ Complete | Date/item/category/search filters, all optional fields, revision details, remove/restore controls |
+| T11.5 | History questions, multiple entries, and currency-separated totals | ✅ Complete | Stored evidence only; multiple entries supported and shared costs are not duplicated |
+| T11.6 | UTF-8 CSV import/export, mapping, safety, dedupe, and conflicts | ✅ Complete | Versioned columns documented; full row preview, explicit conflict decisions, stale-preview rejection and import Undo |
+| T11.7 | Include records/revisions in JSON and backup/restore | ✅ Complete | JSON includes equipment/events/revisions; full SQLite backup restores revisions and operation identities |
+| T11.8 | Test ambiguity, dates, revisions, retries, CSV, and restoration | ✅ Complete | 120 backend tests plus TypeScript/build pass; isolated browser checks cover chat/form/CSV/edit/undo/remove/restore |
+
+### T12 — Daily training readiness
+
+| ID | Assignment | Status | Evidence, dependency, or next action |
+|---|---|---|---|
+| T12.1 | Define a transparent 0–100 readiness model from HRV, sleep score/duration, time since training, recent training load, and resting heart rate | ⬜ Not started | Research public evidence and official metric definitions; do not claim to reproduce proprietary Garmin/Fitbit algorithms |
+| T12.2 | Add personalized rolling baselines, minimum history, weights, recovery windows, and formula versioning | ⬜ Not started | Must remain inspectable, configurable, and historically explainable |
+| T12.3 | Compute a morning score, readiness band, contributors, freshness, missing inputs, and confidence | ⬜ Not started | Missing/stale inputs lower confidence rather than being invented |
+| T12.4 | Add a dashboard card and trend view with plain-language explanations | ⬜ Not started | Recalculate when corrected or late Garmin data arrives; refine through U5 feedback |
+| T12.5 | Expose readiness as advisory evidence to AI/planning without silent plan changes or medical claims | ⬜ Not started | User confirmation remains required before changing a planned session |
+| T12.6 | Test recovery/load/sleep/HRV/RHR scenarios, partial data, baselines, date boundaries, late corrections, and formula upgrades | ⬜ Not started | Real-use feedback is optional; a vendor score is not treated as ground truth |
 
 ## User-input tracker
 
@@ -185,4 +196,4 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 ## Immediate next action
 
-Begin T6.5 by adding goal-aware ride assessment that uses recorded/session intent when available and otherwise asks for the goal or gives clearly conditional interpretations. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite and stays deferred unless an external AI client needs access. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.
+Proceed to T12 transparent daily readiness, then T7 training preferences and structured plans. T11 maintenance is complete; details are in `t11-verification.md`. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.

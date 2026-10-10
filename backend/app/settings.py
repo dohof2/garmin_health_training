@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import uuid
+import math
+from contextlib import nullcontext
 from datetime import date
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -17,7 +19,9 @@ GOAL_STATUSES = {"active", "paused", "achieved", "archived"}
 def _optional_text(value: object, field: str, maximum: int) -> str | None:
     if value is None:
         return None
-    text = str(value).strip()
+    if not isinstance(value, str):
+        raise ValueError(f"{field} must be text")
+    text = value.strip()
     if not text:
         return None
     if len(text) > maximum:
@@ -47,7 +51,7 @@ def _optional_number(
         number = float(value)
     except (TypeError, ValueError) as error:
         raise ValueError(f"{field} must be a number") from error
-    if number < minimum or number > maximum:
+    if isinstance(value, bool) or not math.isfinite(number) or number < minimum or number > maximum:
         raise ValueError(f"{field} must be between {minimum:g} and {maximum:g}")
     return number
 
@@ -100,8 +104,7 @@ def get_settings(path: Path | None = None) -> dict[str, object]:
         }
 
 
-def save_profile(profile: dict[str, object], path: Path | None = None) -> dict[str, object]:
-    migrate(path)
+def normalize_profile(profile: dict[str, object]) -> tuple[object, ...]:
     timezone_name = _optional_text(profile.get("timezone"), "timezone", 100)
     if timezone_name:
         try:
@@ -126,7 +129,14 @@ def save_profile(profile: dict[str, object], path: Path | None = None) -> dict[s
         _optional_number(profile.get("height_cm"), "height_cm", 50, 260),
         _optional_number(profile.get("weight_kg"), "weight_kg", 20, 500),
     )
-    with connect(path) as connection:
+    return values
+
+
+def save_profile(profile: dict[str, object], path: Path | None = None, *, connection=None) -> dict[str, object]:
+    values = normalize_profile(profile)
+    if connection is None:
+        migrate(path)
+    with (nullcontext(connection) if connection is not None else connect(path)) as connection:
         connection.execute(
             """
             INSERT INTO user_profile(
@@ -149,7 +159,7 @@ def save_profile(profile: dict[str, object], path: Path | None = None) -> dict[s
         return _profile_row(connection)
 
 
-def save_goals(goals: list[dict[str, object]], path: Path | None = None) -> list[dict[str, object]]:
+def normalize_goals(goals: list[dict[str, object]]) -> list[dict[str, object]]:
     if len(goals) > 20:
         raise ValueError("No more than 20 goals can be saved")
     normalized: list[dict[str, object]] = []
@@ -178,8 +188,15 @@ def save_goals(goals: list[dict[str, object]], path: Path | None = None) -> list
             }
         )
 
-    migrate(path)
-    with connect(path) as connection:
+    return normalized
+
+
+def save_goals(goals: list[dict[str, object]], path: Path | None = None, *, connection=None) -> list[dict[str, object]]:
+    normalized = normalize_goals(goals)
+    seen = {goal["id"] for goal in normalized}
+    if connection is None:
+        migrate(path)
+    with (nullcontext(connection) if connection is not None else connect(path)) as connection:
         existing = {
             row[0]
             for row in connection.execute("SELECT id FROM goals WHERE status != 'archived'")
@@ -213,4 +230,4 @@ def save_goals(goals: list[dict[str, object]], path: Path | None = None) -> list
                 f"UPDATE goals SET status = 'archived', updated_at = CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
                 tuple(omitted),
             )
-    return list(get_settings(path)["goals"])
+        return [dict(row) for row in connection.execute("SELECT * FROM goals WHERE status != 'archived'")]

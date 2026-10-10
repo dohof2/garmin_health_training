@@ -8,7 +8,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
-from starlette.responses import FileResponse, StreamingResponse
+from starlette.responses import FileResponse, StreamingResponse, Response
 
 from .ai_chat import chat_stream
 from .ai_providers import provider_status, save_ai_settings
@@ -64,6 +64,9 @@ from .sync import (
     sync_status,
 )
 from .settings import get_settings, save_goals, save_profile
+from .ai_actions import confirm_settings_change
+from .maintenance import list_maintenance, log_maintenance, update_maintenance, undo_maintenance, event_history
+from .maintenance_csv import export_maintenance_csv, preview_maintenance_csv, apply_maintenance_csv
 from .wellness_import import (
     WellnessImportError,
     import_wellness_records,
@@ -150,10 +153,43 @@ class AIChatMessage(BaseModel):
 
 
 class AIChatRequest(BaseModel):
+    operation_id: str | None = Field(default=None, min_length=1, max_length=120)
+    clarification_id: str | None = Field(default=None, max_length=120)
     message: str = Field(min_length=1, max_length=4_000)
     history: list[AIChatMessage] = Field(default_factory=list, max_length=20)
     timezone: str | None = Field(default=None, max_length=100)
 
+
+
+class MaintenanceLogRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    events: list[dict[str, object]] = Field(min_length=1, max_length=25)
+    operation_id: str = Field(min_length=1, max_length=120)
+    timezone: str | None = None
+
+
+class MaintenanceUpdateRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    changes: dict[str, object]
+    expected_revision: int = Field(ge=1, strict=True)
+    operation_id: str = Field(min_length=1, max_length=120)
+    deleted: bool | None = None
+    timezone: str | None = None
+
+
+class MaintenanceUndoRequest(BaseModel):
+    operation_id: str = Field(min_length=1, max_length=120)
+
+
+class MaintenanceCSVPreviewRequest(BaseModel):
+    content: str = Field(max_length=2_097_152)
+    mapping: dict[str, str] | None = None
+
+
+class MaintenanceCSVApplyRequest(BaseModel):
+    preview_id: str
+    decisions: dict[str, str] = Field(default_factory=dict)
+    operation_id: str = Field(min_length=1, max_length=120)
 
 def _temporary_download(path: Path, filename: str, media_type: str) -> FileResponse:
     return FileResponse(
@@ -223,6 +259,14 @@ def run_ai_tool(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.post("/api/ai/settings-changes/{proposal_id}/confirm")
+def confirm_ai_settings_change(proposal_id: str) -> dict[str, object]:
+    try:
+        return confirm_settings_change(proposal_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
 @app.post("/api/ai/chat")
 def ai_chat(payload: AIChatRequest) -> StreamingResponse:
     return StreamingResponse(
@@ -230,11 +274,79 @@ def ai_chat(payload: AIChatRequest) -> StreamingResponse:
             payload.message,
             [item.model_dump() for item in payload.history],
             payload.timezone,
+            operation_id=payload.operation_id,
+            clarification_id=payload.clarification_id,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
 
+
+
+@app.get("/api/maintenance")
+def maintenance_history(equipment: str | None = None, query: str | None = None, category: str | None = None,
+                        start_date: str | None = None, end_date: str | None = None,
+                        include_deleted: bool = False, limit: int = Query(default=100, ge=1, le=1000)) -> dict[str, object]:
+    try:
+        return list_maintenance(equipment=equipment, query=query, category=category, start_date=start_date,
+                                end_date=end_date, include_deleted=include_deleted, limit=limit)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/maintenance")
+def create_maintenance(payload: MaintenanceLogRequest) -> dict[str, object]:
+    try:
+        return log_maintenance(payload.events, payload.operation_id, timezone_name=payload.timezone)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/maintenance/events/{event_id}")
+def maintenance_event(event_id: str) -> dict[str, object]:
+    try:
+        return event_history(event_id)
+    except ValueError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+
+
+@app.patch("/api/maintenance/events/{event_id}")
+def edit_maintenance(event_id: str, payload: MaintenanceUpdateRequest) -> dict[str, object]:
+    try:
+        return update_maintenance(event_id, payload.changes, payload.expected_revision, payload.operation_id,
+                                  timezone_name=payload.timezone, deleted=payload.deleted)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.post("/api/maintenance/operations/{target_id}/undo")
+def undo_maintenance_action(target_id: str, payload: MaintenanceUndoRequest) -> dict[str, object]:
+    try:
+        return undo_maintenance(target_id, payload.operation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@app.get("/api/maintenance/export.csv")
+def download_maintenance_csv() -> Response:
+    return Response(export_maintenance_csv(), media_type="text/csv; charset=utf-8",
+                    headers={"Content-Disposition": 'attachment; filename="maintenance.csv"'})
+
+
+@app.post("/api/maintenance/csv/preview")
+def maintenance_csv_preview(payload: MaintenanceCSVPreviewRequest) -> dict[str, object]:
+    try:
+        return preview_maintenance_csv(payload.content, payload.mapping)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/maintenance/csv/apply")
+def maintenance_csv_apply(payload: MaintenanceCSVApplyRequest) -> dict[str, object]:
+    try:
+        return apply_maintenance_csv(payload.preview_id, payload.decisions, payload.operation_id)
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 @app.get("/api/history/summary")
 def summary(timezone: str | None = None) -> dict[str, object]:

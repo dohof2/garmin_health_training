@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import MaintenancePanel, { type MaintenanceResult } from "./MaintenancePanel";
 
 type HealthResponse = {
   status: string;
@@ -251,7 +252,30 @@ type AiProviderStatus = {
   }>;
 };
 
+type SettingsProposal = {
+  id: string;
+  target: "profile" | "goals";
+  before: Record<string, unknown> | Array<Record<string, unknown>>;
+  after: Record<string, unknown> | Array<Record<string, unknown>>;
+  status: "pending" | "saved";
+};
+
+function proposalRows(proposal: SettingsProposal) {
+  const before = Array.isArray(proposal.before) ? proposal.before : [proposal.before];
+  const after = Array.isArray(proposal.after) ? proposal.after : [proposal.after];
+  return after.flatMap((item, index) => {
+    const old = proposal.target === "goals" ? before.find((entry) => entry.id === item.id) ?? {} : before[index] ?? {};
+    return Object.keys(item).filter((key) => key !== "id" && (item[key] ?? null) !== (old[key] ?? null)).map((key) => ({
+      label: key.replaceAll("_", " "),
+      before: old[key] == null ? "Not set" : String(old[key]),
+      after: item[key] == null ? "Not set" : String(item[key]),
+    }));
+  });
+}
+
 type ChatEvidence = {
+  maintenance?: MaintenanceResult;
+  proposal?: SettingsProposal;
   tool: string;
   period?: { start: string; end: string };
   period_a?: { start: string; end: string };
@@ -704,6 +728,8 @@ export default function App() {
     slow?: boolean;
     message?: string;
   }>({ kind: "idle" });
+  const [maintenanceVersion, setMaintenanceVersion] = useState(0);
+  const [maintenanceActionError, setMaintenanceActionError] = useState<string | null>(null);
   const chatAbortController = useRef<AbortController | null>(null);
   const scheduledSyncInFlight = useRef(false);
 
@@ -1018,6 +1044,7 @@ export default function App() {
           slow: false,
         });
       } else if (event.type === "tool") {
+        if (event.evidence.maintenance?.saved) setMaintenanceVersion((current) => current + 1);
         setChatMessages((current) => current.map((item) => item.id === assistantId
           ? { ...item, evidence: [...item.evidence, event.evidence] }
           : item));
@@ -1043,7 +1070,8 @@ export default function App() {
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, timezone: browserTimeZone }),
+        body: JSON.stringify({ message, history, timezone: browserTimeZone, operation_id: userMessage.id,
+          clarification_id: chatMessages.filter((item) => item.role === "assistant").at(-1)?.evidence.find((entry) => entry.maintenance?.clarification_id)?.maintenance?.clarification_id }),
         signal: controller.signal,
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -1083,6 +1111,48 @@ export default function App() {
       window.clearTimeout(slowTimer);
       chatAbortController.current = null;
     }
+  };
+
+  const [savingProposal, setSavingProposal] = useState<string | null>(null);
+  const [proposalError, setProposalError] = useState<string | null>(null);
+  const saveChatProposal = async (proposal: SettingsProposal) => {
+    setSavingProposal(proposal.id);
+    setProposalError(null);
+    try {
+      const response = await fetch(`/api/ai/settings-changes/${encodeURIComponent(proposal.id)}/confirm`, { method: "POST" });
+      if (!response.ok) throw new Error(await readError(response));
+      const settings = await response.json() as AppSettings;
+      setSettingsDraft(settings);
+      setConnection((current) => current.kind === "ready" ? { ...current, settings } : current);
+      setChatMessages((current) => current.map((item) => ({ ...item,
+        content: item.evidence.some((entry) => entry.proposal?.id === proposal.id)
+          ? `Your ${proposal.target === "goals" ? "goal" : "profile"} change was saved locally. You can correct it in Settings or ask for another change in chat.`
+          : item.content,
+        evidence: item.evidence.map((entry) =>
+        entry.proposal?.id === proposal.id ? { ...entry, proposal: { ...entry.proposal, status: "saved" } } : entry) })));
+    } catch (error) {
+      setProposalError(error instanceof Error ? error.message : "The change could not be saved.");
+    } finally {
+      setSavingProposal(null);
+    }
+  };
+
+  const undoChatMaintenance = async (result: MaintenanceResult) => {
+    if (!result.operation_id) return;
+    setMaintenanceActionError(null);
+    try {
+      const response = await fetch(`/api/maintenance/operations/${encodeURIComponent(result.operation_id)}/undo`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation_id: `undo-${result.operation_id}` }),
+      });
+      if (!response.ok) throw new Error(await readError(response));
+      const undone = await response.json() as MaintenanceResult;
+      setChatMessages((current) => current.map((item) => ({ ...item,
+        content: item.evidence.some((entry) => entry.maintenance?.operation_id === result.operation_id) ? "Maintenance action undone locally. Revision history is retained." : item.content,
+        evidence: item.evidence.map((entry) => entry.maintenance?.operation_id === result.operation_id
+          ? { ...entry, maintenance: { ...undone, undo_available: false } } : entry),
+      })));
+      setMaintenanceVersion((current) => current + 1);
+    } catch (error) { setMaintenanceActionError(error instanceof Error ? error.message : "This action could not be undone."); }
   };
 
   const stopChatResponse = () => {
@@ -1584,6 +1654,7 @@ export default function App() {
         <a href="#activities">Activities</a>
         <a href="#sync">Sync</a>
         <a href="#assistant">Assistant</a>
+        <a href="#maintenance">Maintenance</a>
         <a href="#data">Data</a>
         <a href="#settings">Settings</a>
       </nav>
@@ -1953,10 +2024,9 @@ export default function App() {
           </div>
         </div>
         <p className="assistant-intro">
-          The assistant can only read through validated health-summary, activity,
-          period-comparison, similar-ride, and local GPS course tools. Calculations
-          and matching come from application code, and every data answer shows
-          the records, periods, and criteria used.
+          Explore history, compare rides, and assess a ride against its session intent.
+          Calculations use recorded data. You can also ask to update your profile
+          or goals; review the proposed changes and save them here. Goals are optional.
         </p>
         <p className="assistant-privacy">
           {activeAiProvider === "openai"
@@ -1965,6 +2035,8 @@ export default function App() {
           {" "}Chat messages are currently kept only in this page session.
         </p>
 
+        {proposalError && <p role="alert">{proposalError}</p>}
+        {maintenanceActionError && <p role="alert">{maintenanceActionError}</p>}
         <div className="chat-shell">
           {chatMessages.length === 0 ? (
             <div className="chat-empty">
@@ -1974,6 +2046,9 @@ export default function App() {
                 <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
                 <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride and explain the matching criteria.")}>Similar rides</button>
                 <button type="button" onClick={() => void sendChatMessage("Find earlier rides on the same GPS course as my latest ride and show how my performance changed.")}>Same course</button>
+                <button type="button" onClick={() => void sendChatMessage("Was my latest ride effective? In what way?")}>Ride effectiveness</button>
+                <button type="button" onClick={() => void sendChatMessage("When did I last replace the rear tire on my road bike?")}>Maintenance history</button>
+                <button type="button" onClick={() => void sendChatMessage("Set my goal to improve cycling endurance.")}>Set a goal</button>
                 <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
               </div>
             </div>
@@ -1987,7 +2062,7 @@ export default function App() {
                     <div className="chat-evidence">
                       {message.evidence.map((evidence, index) => (
                         <div key={`${message.id}-${evidence.tool}-${index}`}>
-                          <strong>{evidence.tool.replaceAll("_", " ")}</strong>
+                          <strong>{evidence.maintenance ? "Maintenance history" : evidence.tool === "propose_settings_change" ? "Settings change" : evidence.tool === "assess_ride" ? "Ride assessment" : evidence.tool === "running_volume_trend" ? "Weekly running volume" : evidence.tool.replaceAll("_", " ")}</strong>
                           {evidence.period && <span>{formatLongDate(evidence.period.start)} – {formatLongDate(evidence.period.end)}</span>}
                           {evidence.period_a && evidence.period_b && (
                             <span>
@@ -1995,6 +2070,33 @@ export default function App() {
                             </span>
                           )}
                           {typeof evidence.record_count === "number" && <small>{evidence.record_count.toLocaleString()} metric records</small>}
+                          {evidence.maintenance && <div className="maintenance-chat-evidence">
+                            {evidence.maintenance.events?.slice(0, 6).map((event) => <a key={event.id} href={`/api/maintenance/events/${encodeURIComponent(event.id)}`} target="_blank" rel="noreferrer">
+                              {event.event_date} · {event.equipment_label} · {event.action}
+                            </a>)}
+                            {evidence.maintenance.saved && <strong>Saved locally · revision history retained</strong>}
+                            {evidence.maintenance.undo_available && <button type="button" onClick={() => void undoChatMaintenance(evidence.maintenance!)}>Undo maintenance action</button>}
+                            {evidence.maintenance.events?.length ? <a href="#maintenance">Edit in Maintenance history</a> : null}
+                            {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
+                            {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
+                          </div>}
+                          {evidence.proposal && (
+                            <div className="settings-proposal">
+                              <strong>{evidence.proposal.status === "saved" ? "Saved locally" : "Review proposed change"}</strong>
+                              <table>
+                                <thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead>
+                                <tbody>{proposalRows(evidence.proposal).map((row, index) => (
+                                  <tr key={index}><td>{row.label}</td><td>{row.before}</td><td>{row.after}</td></tr>
+                                ))}</tbody>
+                              </table>
+                              <button type="button" disabled={savingProposal !== null || evidence.proposal.status === "saved"}
+                                onClick={() => void saveChatProposal(evidence.proposal!)}>
+                                {savingProposal === evidence.proposal.id ? "Saving…" : evidence.proposal.status === "saved" ? "Saved" : "Save change"}
+                              </button>
+                              <a href="#settings">Edit in Settings</a>
+                              <small>To revise this proposal, ask for a correction in chat. Changes use the same profile and goals as Settings.</small>
+                            </div>
+                          )}
                           {typeof evidence.total_matches === "number" && (
                             <small>
                               {evidence.total_matches.toLocaleString()} matching {evidence.tool === "find_same_course_rides" ? "course attempts" : evidence.tool === "find_similar_rides" ? "rides" : "activities"}
@@ -2100,6 +2202,8 @@ export default function App() {
           </form>
         </div>
       </section>
+
+      <MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} />
 
       <section className="coverage" id="data" aria-labelledby="coverage-title">
         <div className="section-heading">
