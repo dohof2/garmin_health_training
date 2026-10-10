@@ -52,10 +52,75 @@ class FakeResponse:
 
 
 class AIChatTests(unittest.TestCase):
+    def test_matching_followups_preserve_user_reference_and_handle_actual_typos(self):
+        history = [{'role':'user','content':'What rides match my ride on September 27th?'},
+                   {'role':'assistant','content':'There are no rides on October 9th.'}]
+        with patch('app.ai_chat._today', return_value=date(2026,10,10)):
+            followup = ai_chat._matching_followup('and for the ride on OC 6th?',history,'Asia/Jerusalem')
+            self.assertEqual(ai_chat._forced_tool_name(followup),'find_same_course_rides')
+            self.assertEqual(ai_chat._ride_reference_date(followup),'2026-10-06')
+            gps = ai_chat._matching_followup('match using GPS',history,'Asia/Jerusalem')
+            self.assertEqual(ai_chat._ride_reference_date(gps),'2026-09-27')
+            for message in ('is ther mathced ride fir the oct 6th ride?', 'is there mathced ride for the ride on oct 6th ?'):
+                self.assertEqual(ai_chat._forced_tool_name(message),'find_same_course_rides')
+                self.assertEqual(ai_chat._ride_reference_date(message),'2026-10-06')
+            unrelated = 'What maintenance did I do on October 6th?'
+            self.assertEqual(ai_chat._matching_followup(unrelated,history,'Asia/Jerusalem'), unrelated)
+
+    def test_named_ride_dates_and_typos_select_reference_not_candidate_period(self):
+        with patch('app.ai_chat._today', return_value=date(2026,10,10)):
+            for phrase in ('September 27th', 'Sep 27', 'Sept 27 th', '27th of September', 'septmeber 27th', '2026-09-27'):
+                message = f'what re the rides maching my ride on {phrase}?'
+                self.assertEqual(ai_chat._forced_tool_name(message), 'find_same_course_rides')
+                args = ai_chat._normalize_tool_arguments('find_similar_rides', {
+                    'reference_activity_id':'invented', 'reference_date':'2026-10-09',
+                    'candidate_start_date':'2026-09-27','candidate_end_date':'2026-09-27'}, message, 'Asia/Jerusalem')
+                self.assertEqual(args, {'reference_date':'2026-09-27'})
+            self.assertEqual(ai_chat._ride_reference_date('December 27th'), '2025-12-27')
+            self.assertEqual(ai_chat._ride_reference_date('September 27th 2024'), '2024-09-27')
+
+    def test_date_matching_stream_is_grounded_without_model_inference(self):
+        from app.database import connect, migrate
+        with tempfile.TemporaryDirectory() as tmp:
+            db = Path(tmp) / 'rides.sqlite3'
+            migrate(db)
+            with connect(db) as c:
+                for ident, day in (('reference','2026-09-27'),('match','2026-09-01'),('latest','2026-10-09')):
+                    c.execute("INSERT INTO activities(id,source_name,name,activity_type,started_at,duration_seconds,distance_meters,elevation_gain_meters) VALUES(?,'synthetic',?,'cycling',?,3600,20000,100)", (ident,ident,day+'T06:00:00Z'))
+                    c.executemany("INSERT INTO activity_samples(activity_id, recorded_at, latitude, longitude) VALUES(?,?,?,?)", [(ident,day+f'T06:00:{i:02d}Z',32+i*.001+(1 if ident=='latest' else 0),34+i*.001) for i in range(12)])
+                c.execute("UPDATE activities SET distance_meters=80000,duration_seconds=14000 WHERE id='match'")
+            with patch('app.ai_chat._today', return_value=date(2026,10,10)), patch('app.ai_chat._ollama_request') as model:
+                events = [json.loads(line) for line in chat_stream('and for the ride on Sep 27th?', history=[{'role':'user','content':'Find matching rides for my latest ride'}], timezone_name='Asia/Jerusalem',path=db)]
+            model.assert_not_called()
+            self.assertFalse(any(e['type']=='error' for e in events), events)
+            evidence = next(e['evidence'] for e in events if e['type']=='tool')
+            self.assertEqual(evidence['reference_record']['id'], 'reference')
+            self.assertEqual(evidence['total_matches'], 1)
+            self.assertEqual(evidence['records'][0]['id'], 'match')
+            answer = next(e['text'] for e in events if e['type']=='delta')
+            self.assertIn('2026-09-27',answer)
+            self.assertIn('1 other course attempts',answer)
+            self.assertEqual(evidence['tool'], 'find_same_course_rides')
+            self.assertIn('full stored history',answer)
+            with connect(db) as c:
+                c.execute("UPDATE activities SET started_at='2026-10-06T06:00:00Z' WHERE id='reference'")
+            previous = [{'role':'user','content':'What rides match my ride on September 27th?'}]
+            with patch('app.ai_chat._today', return_value=date(2026,10,10)), patch('app.ai_chat._ollama_request') as model, patch('app.ai_chat.maintenance_chat') as maintenance:
+                for question in ('and for the ride on OC 6th?', 'is ther mathced ride fir the oct 6th ride?', 'is there mathced ride for the ride on oct 6th ?'):
+                    events = [json.loads(line) for line in chat_stream(question, history=previous, timezone_name='Asia/Jerusalem',path=db)]
+                    self.assertFalse(any(e['type']=='error' for e in events), events)
+                    evidence = next(e['evidence'] for e in events if e['type']=='tool')
+                    self.assertEqual(evidence['tool'],'find_same_course_rides')
+                    self.assertEqual(evidence['reference_record']['local_date'],'2026-10-06')
+                    self.assertEqual(evidence['total_matches'],1)
+            model.assert_not_called()
+            maintenance.assert_not_called()
+
+
     def test_similar_ride_questions_force_the_scoped_matcher(self) -> None:
         self.assertEqual(
             ai_chat._forced_tool_name("Find rides similar to my latest ride"),
-            "find_similar_rides",
+            "find_same_course_rides",
         )
         self.assertIsNone(ai_chat._forced_tool_name("List my latest rides"))
         self.assertEqual(
@@ -64,7 +129,7 @@ class AIChatTests(unittest.TestCase):
         )
         self.assertIn(
             "candidate_pool_count",
-            ai_chat._answer_guardrail("Find rides similar to my latest ride"),
+            ai_chat._answer_guardrail("Find rides similar to my latest ride by distance"),
         )
         self.assertIn(
             "raw GPS coordinates were not provided",

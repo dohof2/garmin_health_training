@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import unittest
+import random
 
-from app.route_matching import compare_routes, haversine_meters, resample_route
+from app.route_matching import compare_routes, haversine_meters, resample_route, _coverage_percent
 
 
 class RouteMatchingTests(unittest.TestCase):
@@ -17,6 +18,16 @@ class RouteMatchingTests(unittest.TestCase):
         self.assertEqual(len(sampled), 50)
         self.assertEqual(sampled[0], route[0])
         self.assertEqual(sampled[-1], route[-1])
+
+    def test_indexed_coverage_matches_exact_scan_at_boundaries_and_poles(self):
+        rng = random.Random(17)
+        for latitude in (-89.9, -32, 0, 32, 89.9):
+            source = [(latitude + rng.uniform(-.005,.005), rng.uniform(-180,180)) for _ in range(50)]
+            target = [(lat + rng.uniform(-.001,.001), lon + rng.uniform(-.001,.001)) for lat,lon in source]
+            for tolerance in (0, 20, 100, 500):
+                exact = sum(any(haversine_meters(p,q) <= tolerance for q in target) for p in source) / len(source) * 100
+                self.assertEqual(_coverage_percent(source,target,tolerance), exact)
+        self.assertEqual(_coverage_percent([],target,100),0)
 
     def test_same_and_reverse_routes_report_direction_and_overlap(self) -> None:
         reference = [(32.0 + index * 0.001, 34.8 + index * 0.001) for index in range(20)]

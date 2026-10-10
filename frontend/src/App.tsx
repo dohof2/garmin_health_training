@@ -1,6 +1,8 @@
+import GraphCanvas, { AssistantPlots, WeightEntry, type ChartResult, type ChartSpec } from "./GraphCanvas";
 import TrainingPanel from "./TrainingPanel";
+import NutritionPanel from "./NutritionPanel";
 import { ReadinessCard } from "./ReadinessCard";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import MaintenancePanel, { type MaintenanceResult } from "./MaintenancePanel";
 
 type HealthResponse = {
@@ -276,6 +278,7 @@ function proposalRows(proposal: SettingsProposal) {
 }
 
 type ChatEvidence = {
+  plots?: ChartResult[];
   maintenance?: MaintenanceResult;
   proposal?: SettingsProposal;
   tool: string;
@@ -693,7 +696,26 @@ function ActivityDetailPanel({
   );
 }
 
+const appPages = [
+  ['dashboard', 'Dashboard'], ['activities', 'Activities'], ['health', 'Health'],
+  ['assistant', 'Assistant'], ['training', 'Training'], ['nutrition', 'Nutrition'],
+  ['maintenance', 'Maintenance'], ['profile', 'Profile'], ['data', 'Data & sync'], ['settings', 'Settings'],
+] as const;
+function currentPage() {
+  const hash = window.location.hash.slice(1);
+  if (hash === 'sync') return 'data';
+  return appPages.some(([id]) => id === hash) ? hash : 'dashboard';
+}
+
 export default function App() {
+  const [page, setPage] = useState(currentPage);
+  useLayoutEffect(() => { window.scrollTo({ top: 0, behavior: "instant" }); }, [page]);
+  const [graphVersion, setGraphVersion] = useState(0);
+  useEffect(() => {
+    const navigate = () => { setPage(currentPage()); };
+    window.addEventListener('hashchange', navigate);
+    return () => window.removeEventListener('hashchange', navigate);
+  }, []);
   const [connection, setConnection] = useState<ConnectionState>({
     kind: "checking",
   });
@@ -723,6 +745,11 @@ export default function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [initialChatContext] = useState<{plots?: ChartSpec[]; ride?: string}>(() => {
+    try { return JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
+  });
+  const chatContext = useRef(initialChatContext);
+  const [plotMessageId, setPlotMessageId] = useState<string | null>(null);
   const [chatStatus, setChatStatus] = useState<{
     kind: "idle" | "streaming" | "error";
     provider?: AiProviderName;
@@ -1024,7 +1051,7 @@ export default function App() {
     const history = chatMessages
       .filter((item) => item.content.trim())
       .slice(-20)
-      .map(({ role, content }) => ({ role, content }));
+      .map(({ role, content }) => ({ role, content: content.slice(0, 4000) }));
     setChatMessages((current) => [...current, userMessage, assistantMessage]);
     setChatInput("");
     setChatStatus({ kind: "streaming", slow: false });
@@ -1046,6 +1073,17 @@ export default function App() {
           slow: false,
         });
       } else if (event.type === "tool") {
+        if (event.evidence.plots?.length) {
+          chatContext.current.plots = event.evidence.plots.map(p => p.spec);
+          const references = [...new Set(chatContext.current.plots.map(p => p.gps_reference_id).filter(Boolean))];
+          if (references.length === 1) chatContext.current.ride = references[0];
+        }
+        if (event.evidence.tool === 'find_same_course_rides' && event.evidence.reference_record) chatContext.current.ride = event.evidence.reference_record.id;
+        try { sessionStorage.setItem('garmin-assistant-query-context', JSON.stringify(chatContext.current)); } catch { /* Continue with in-memory context if browser storage is unavailable. */ }
+        if (event.evidence.plots?.length) {
+          setPlotMessageId(assistantId);
+          window.setTimeout(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"}), 100);
+        }
         if (event.evidence.maintenance?.saved) setMaintenanceVersion((current) => current + 1);
         setChatMessages((current) => current.map((item) => item.id === assistantId
           ? { ...item, evidence: [...item.evidence, event.evidence] }
@@ -1062,7 +1100,7 @@ export default function App() {
         });
       } else if (event.type === "error") {
         setChatMessages((current) => current.map((item) => item.id === assistantId
-          ? { ...item, content: item.content || event.message }
+          ? { ...item, content: item.content ? `${item.content}\n\n${event.message}` : event.message }
           : item));
         setChatStatus({ kind: "error", message: event.message });
       }
@@ -1072,7 +1110,10 @@ export default function App() {
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, timezone: browserTimeZone, operation_id: userMessage.id,
+        body: JSON.stringify({ message, history,
+          plot_context: chatMessages.find(item => item.id === plotMessageId)?.evidence.flatMap(e => e.plots ?? []).map(p => p.spec) ?? chatContext.current.plots,
+          ride_context: chatContext.current.ride ?? chatMessages.flatMap(item => item.evidence).filter(e => e.tool === 'find_same_course_rides').at(-1)?.reference_record?.id,
+          timezone: browserTimeZone, operation_id: userMessage.id,
           clarification_id: chatMessages.filter((item) => item.role === "assistant").at(-1)?.evidence.find((entry) => entry.maintenance?.clarification_id)?.maintenance?.clarification_id }),
         signal: controller.signal,
       });
@@ -1651,31 +1692,24 @@ export default function App() {
     .map((card) => cardRegistry[card.id]);
 
   return (
-    <main>
-      <nav className="app-navigation" aria-label="Main navigation">
-        <a href="#dashboard">Dashboard</a>
-        <a href="#activities">Activities</a>
-        <a href="#sync">Sync</a>
-        <a href="#assistant">Assistant</a>
-        <a href="#training">Training</a>
-        <a href="#maintenance">Maintenance</a>
-        <a href="#data">Data</a>
-        <a href="#settings">Settings</a>
-      </nav>
-      <header className="hero" id="dashboard">
-        <p className="eyebrow">Personal health workspace</p>
-        <h1>Your training history,<br />kept close.</h1>
-        <p className="intro">
-          Your imported history and live Garmin updates stay on this computer
-          while normalized records power the dashboard and grounded assistant.
-        </p>
-        <div className={`connection connection--${connection.kind}`}>
-          <span aria-hidden="true" />
-          {statusText}
-        </div>
+    <main className="app-shell">
+      <header className="app-topbar">
+        <a className="app-brand" href="#dashboard"><span className="brand-mark" aria-hidden="true">G</span><span>Garmin<span className="brand-subtitle">Personal workspace</span></span></a>
+        <div className={`connection connection--${connection.kind}`}><span aria-hidden="true" />{statusText}</div>
       </header>
+      <nav className="app-navigation" aria-label="Main navigation">
+        {appPages.map(([id, title]) => <a key={id} href={`#${id}`} aria-current={page === id ? 'page' : undefined}>{title}</a>)}
+      </nav>
+      <header className="page-heading">
+        <p className="eyebrow">Personal health workspace</p>
+        <h1>{appPages.find(([id]) => id === page)?.[1]}</h1>
+        <p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p>
+      </header>
+      <div hidden={!['dashboard', 'health', 'profile'].includes(page)}><WeightEntry unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} /></div>
+      <div hidden={page !== 'dashboard'}><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></div>
+      {page === 'health' && <GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={graphVersion} />}
 
-      <section className="sync" id="sync" aria-labelledby="sync-title">
+      <section hidden={page !== "data"} className="sync" id="sync" aria-labelledby="sync-title">
         <div className="section-heading sync-heading">
           <div>
             <p>Garmin synchronization</p>
@@ -1844,11 +1878,11 @@ export default function App() {
         {connectionMessage && <p className="sync-message" role="status">{connectionMessage}</p>}
       </section>
 
-      <section className="preview" aria-labelledby="preview-title">
+      <section hidden={page !== "dashboard"} className="preview" aria-labelledby="preview-title">
         <div className="section-heading">
           <div>
-            <p>Data preview</p>
-            <h2 id="preview-title">A safe dataset to build on</h2>
+            <p>Summary widgets</p>
+            <h2 id="preview-title">At a glance</h2>
           </div>
           <div className="preview-actions">
             {dataModeLabel && <div className="synthetic-label">{dataModeLabel}</div>}
@@ -1933,7 +1967,7 @@ export default function App() {
         </div>
       </section>
 
-      <section className="activities" id="activities" aria-labelledby="activities-title">
+      <section hidden={page !== "activities"} className="activities" id="activities" aria-labelledby="activities-title">
         <div className="section-heading activities-heading">
           <div>
             <p>Activity history</p>
@@ -2018,7 +2052,7 @@ export default function App() {
         )}
       </section>
 
-      <section className="assistant" id="assistant" aria-labelledby="assistant-title">
+      <section hidden={page !== "assistant"} className="assistant" id="assistant" aria-labelledby="assistant-title">
         <div className="section-heading assistant-heading">
           <div>
             <p>Grounded history assistant</p>
@@ -2038,9 +2072,10 @@ export default function App() {
           {activeAiProvider === "openai"
             ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
             : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
-          {" "}Chat messages are currently kept only in this page session.
+          {" "}Chat messages are kept in this app session. Graph and ride selections are retained in this browser tab, including after a refresh.
         </p>
 
+        <AssistantPlots plots={(chatMessages.find(message => message.id === plotMessageId) ?? chatMessages.filter(message => message.evidence.some(e => e.plots?.length)).at(-1))?.evidence.flatMap(evidence => evidence.plots ?? []) ?? []} profile={settingsDraft?.profile} />
         {proposalError && <p role="alert">{proposalError}</p>}
         {maintenanceActionError && <p role="alert">{maintenanceActionError}</p>}
         <div className="chat-shell">
@@ -2048,9 +2083,12 @@ export default function App() {
             <div className="chat-empty">
               <strong>Try a grounded question</strong>
               <div className="chat-suggestions">
+                <button type="button" onClick={() => void sendChatMessage("Plot my weight over the last year.")}>Weight over the last year</button>
+                <button type="button" onClick={() => void sendChatMessage("Plot power versus speed across all my cycling rides.")}>Power vs speed</button>
+                <button type="button" onClick={() => void sendChatMessage("Plot resting heart rate versus cycling VO2 max on matching dates.")}>Resting HR vs VO₂ max</button>
                 <button type="button" onClick={() => void sendChatMessage("Summarize my steps and sleep over the last seven days.")}>Last seven days</button>
                 <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
-                <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride and explain the matching criteria.")}>Similar rides</button>
+                <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride using GPS coordinates and explain the matching criteria.")}>Similar rides (GPS)</button>
                 <button type="button" onClick={() => void sendChatMessage("Find earlier rides on the same GPS course as my latest ride and show how my performance changed.")}>Same course</button>
                 <button type="button" onClick={() => void sendChatMessage("Was my latest ride effective? In what way?")}>Ride effectiveness</button>
                 <button type="button" onClick={() => void sendChatMessage("When did I last replace the rear tire on my road bike?")}>Maintenance history</button>
@@ -2065,6 +2103,7 @@ export default function App() {
                 <article className={`chat-message chat-message--${message.role}`} key={message.id}>
                   <span>{message.role === "user" ? "You" : "Assistant"}</span>
                   <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
+                  {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
                   {message.evidence.length > 0 && (
                     <div className="chat-evidence">
                       {message.evidence.map((evidence, index) => (
@@ -2100,7 +2139,7 @@ export default function App() {
                                 onClick={() => void saveChatProposal(evidence.proposal!)}>
                                 {savingProposal === evidence.proposal.id ? "Saving…" : evidence.proposal.status === "saved" ? "Saved" : "Save change"}
                               </button>
-                              <a href="#settings">Edit in Settings</a>
+                              <a href="#profile">Edit in Profile</a>
                               <small>To revise this proposal, ask for a correction in chat. Changes use the same profile and goals as Settings.</small>
                             </div>
                           )}
@@ -2210,11 +2249,12 @@ export default function App() {
         </div>
       </section>
 
-      <TrainingPanel timezone={browserTimeZone} />
+      <div hidden={page !== "training"}><TrainingPanel timezone={browserTimeZone} /></div>
+      <div hidden={page !== "nutrition"}><NutritionPanel timezone={browserTimeZone} /></div>
 
-      <MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} />
+      <div hidden={page !== "maintenance"}><MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} /></div>
 
-      <section className="coverage" id="data" aria-labelledby="coverage-title">
+      <section hidden={page !== "data"} className="coverage" id="data" aria-labelledby="coverage-title">
         <div className="section-heading">
           <div>
             <p>Import coverage</p>
@@ -2282,7 +2322,7 @@ export default function App() {
         )}
       </section>
 
-      <section className="exports" aria-labelledby="exports-title">
+      <section hidden={page !== "data"} className="exports" aria-labelledby="exports-title">
         <div className="section-heading">
           <div>
             <p>Import / Export</p>
@@ -2294,6 +2334,12 @@ export default function App() {
               : "All dates"}
           </span>
         </div>
+        <DateRangeFilter
+          start={activityRange.start} end={activityRange.end}
+          minimum={summary?.activity_date_start ?? null}
+          maximum={summary?.activity_date_end ?? null}
+          onChange={(start, end) => setActivityRange({ start, end })}
+        />
         <p className="export-copy">
           CSV and JSON use the activity date range selected above. Exports are generated
           locally and never contain credentials or session tokens.
@@ -2307,7 +2353,7 @@ export default function App() {
               <a href={`/api/exports/csv/activities${exportQuery}`} download>Activities CSV</a>
               <a href={`/api/exports/csv/metrics${exportQuery}`} download>Health metrics CSV</a>
               <a href={`/api/exports/csv/training${exportQuery}`} download>Training CSV</a>
-              <a href={`/api/exports/csv/nutrition${exportQuery}`} download>Nutrition CSV</a>
+              <a href={`/api/exports/csv/nutrition${exportQuery}`} download>Garmin nutrition summaries CSV</a>
               <a href={`/api/exports/data.json${exportQuery}`} download>Versioned JSON</a>
             </div>
           </article>
@@ -2375,7 +2421,7 @@ export default function App() {
         </div>
       </section>
 
-      <section className="import" aria-labelledby="import-title">
+      <section hidden={page !== "data"} className="import" aria-labelledby="import-title">
         <div className="section-heading">
           <div>
             <p>Garmin import</p>
@@ -2450,11 +2496,11 @@ export default function App() {
         )}
       </section>
 
-      <section className="settings" id="settings" aria-labelledby="settings-title">
+      <section hidden={page !== "settings" && page !== "profile"} className="settings" id="settings" aria-labelledby="settings-title">
         <div className="section-heading">
           <div>
             <p>Personal settings</p>
-            <h2 id="settings-title">Profile and training goals</h2>
+            <h2 id="settings-title">{page === "profile" ? "Profile and training goals" : "Assistant settings"}</h2>
           </div>
         </div>
         {!settingsDraft ? (
@@ -2462,6 +2508,7 @@ export default function App() {
         ) : (
           <div className="settings-layout">
             <form
+              hidden={page !== "profile"}
               className="settings-panel"
               onSubmit={(event) => {
                 event.preventDefault();
@@ -2538,16 +2585,18 @@ export default function App() {
                   />
                 </label>
                 <label>
-                  Sex or gender
-                  <input
-                    type="text"
-                    maxLength={40}
-                    value={settingsDraft.profile.sex ?? ""}
+                  VO₂ reference population
+                  <select
+                    value={['male', 'm'].includes(settingsDraft.profile.sex?.toLowerCase() ?? '') ? 'male' : ['female', 'f'].includes(settingsDraft.profile.sex?.toLowerCase() ?? '') ? 'female' : ''}
                     onChange={(event) => setSettingsDraft({
                       ...settingsDraft,
                       profile: { ...settingsDraft.profile, sex: event.target.value || null },
                     })}
-                  />
+                  >
+                    <option value="" disabled hidden>Select reference population</option>
+                    <option value="male">Male</option>
+                    <option value="female">Female</option>
+                  </select>
                 </label>
                 <label>
                   Height (cm)
@@ -2581,7 +2630,7 @@ export default function App() {
             </form>
 
             <form
-              className="settings-panel settings-panel--ai"
+              hidden={page !== "settings"} className="settings-panel settings-panel--ai"
               onSubmit={(event) => {
                 event.preventDefault();
                 void saveAISettings();
@@ -2661,7 +2710,7 @@ export default function App() {
             </form>
 
             <form
-              className="settings-panel settings-panel--goals"
+              hidden={page !== "profile"} className="settings-panel settings-panel--goals"
               onSubmit={(event) => {
                 event.preventDefault();
                 void saveGoalSettings();
@@ -2743,7 +2792,7 @@ export default function App() {
         {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
       </section>
 
-      <section className="foundation" aria-labelledby="foundation-title">
+      <section hidden={page !== "settings"} className="foundation" aria-labelledby="foundation-title">
         <div className="section-heading">
           <p>Foundation 01</p>
           <h2 id="foundation-title">Local by design</h2>

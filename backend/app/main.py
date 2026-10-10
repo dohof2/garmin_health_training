@@ -13,9 +13,12 @@ from starlette.responses import FileResponse, StreamingResponse, Response
 from .ai_chat import chat_stream
 from .ai_providers import provider_status, save_ai_settings
 from .ai_tools import execute_tool, tool_definitions
+from .charts import catalog, chart_data, read_layout, save_layout, add_weight
 from .dashboard import dashboard_card_layout, save_dashboard_card_layout
 from .readiness import readiness_history, get_readiness_settings, save_readiness_settings
 from .training import training_context, save_preferences, draft_week, list_training, accept_plan, update_workout, progression_proposal
+from .nutrition import food_search, preview_meal, save_meal, remove_meal, daily_status, save_library, list_library, scale_library, target_preview, save_target, target_history
+from .food_vision import analyze_photo
 from .database import migrate, schema_status
 from .extended_archive_import import (
     ExtendedArchiveImportError,
@@ -88,6 +91,160 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+class ChartRequest(BaseModel):
+    spec: dict[str, object]
+
+
+class WidgetLayoutRequest(BaseModel):
+    widgets: list[dict[str, object]]
+
+
+class WeightRequest(BaseModel):
+    date: date
+    value: float = Field(gt=0, allow_inf_nan=False)
+    unit: Literal['kg', 'lb'] = 'kg'
+
+
+@app.get('/api/charts/catalog')
+def chart_catalog():
+    return catalog()
+
+
+@app.post('/api/charts/query')
+def query_chart(request: ChartRequest):
+    try:
+        return chart_data(request.spec)
+    except (ValueError, TypeError) as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.get('/api/dashboard/widgets')
+def get_widgets():
+    return {'widgets': read_layout()}
+
+
+@app.put('/api/dashboard/widgets')
+def put_widgets(request: WidgetLayoutRequest):
+    try:
+        return {'widgets': save_layout(request.widgets)}
+    except (ValueError, TypeError) as error:
+        raise HTTPException(400, str(error)) from error
+
+
+@app.post('/api/weight')
+def log_weight(request: WeightRequest):
+    try:
+        return add_weight(request.date.isoformat(), request.value, request.unit)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
+class NutritionDraft(BaseModel):
+    model_config = {"extra": "forbid"}
+    payload: dict[str, object]
+
+
+class NutritionSave(NutritionDraft):
+    confirmed: Literal[True]
+    operation_id: str = Field(min_length=1, max_length=100)
+    expected_revision: int | None = Field(default=None, strict=True, ge=1)
+
+
+class NutritionTargetSave(NutritionDraft):
+    confirmed: Literal[True]
+    expected_revision: int = Field(strict=True, ge=0)
+
+
+class NutritionLibrarySave(NutritionDraft):
+    expected_revision: int | None = Field(default=None, strict=True, ge=1)
+
+
+class NutritionRemoval(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(strict=True, ge=1)
+    removed: bool = Field(strict=True)
+
+
+class FoodPhoto(BaseModel):
+    model_config = {"extra": "forbid"}
+    image_base64: str = Field(min_length=1, max_length=8*1024*1024)
+
+
+def nutrition_call(function, *args):
+    try: return function(*args)
+    except ValueError as error: raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get('/api/nutrition/foods')
+def nutrition_foods(q: str = Query(min_length=1, max_length=120)):
+    return nutrition_call(food_search,q)
+
+
+@app.get('/api/nutrition/day')
+def nutrition_day(day: date, timezone: str = Query(max_length=100)):
+    return nutrition_call(daily_status,day,timezone)
+
+
+@app.post('/api/nutrition/preview')
+def nutrition_preview(body: NutritionDraft):
+    return nutrition_call(preview_meal,body.payload)
+
+
+@app.post('/api/nutrition/meals')
+def nutrition_save(body: NutritionSave):
+    return nutrition_call(save_meal,body.payload,body.operation_id)
+
+
+@app.put('/api/nutrition/meals/{identifier}')
+def nutrition_edit(identifier: str, body: NutritionSave):
+    return nutrition_call(save_meal,body.payload,body.operation_id,identifier,body.expected_revision)
+
+
+@app.patch('/api/nutrition/meals/{identifier}/removed')
+def nutrition_remove(identifier: str, body: NutritionRemoval):
+    return nutrition_call(remove_meal,identifier,body.expected_revision,body.removed)
+
+
+@app.get('/api/nutrition/library')
+def nutrition_library():
+    return list_library()
+
+
+@app.post('/api/nutrition/library')
+def nutrition_library_save(body: NutritionLibrarySave):
+    return nutrition_call(save_library,body.payload)
+
+
+@app.put('/api/nutrition/library/{identifier}')
+def nutrition_library_edit(identifier: str, body: NutritionLibrarySave):
+    return nutrition_call(save_library,body.payload,identifier,body.expected_revision)
+
+
+@app.get('/api/nutrition/library/{identifier}/scale')
+def nutrition_library_scale(identifier: str, servings: float = Query(gt=0,le=1000)):
+    return nutrition_call(scale_library,identifier,servings)
+
+
+@app.get('/api/nutrition/targets')
+def nutrition_targets():
+    return target_history()
+
+
+@app.post('/api/nutrition/targets/preview')
+def nutrition_target_preview(body: NutritionDraft):
+    return nutrition_call(target_preview,body.payload)
+
+
+@app.post('/api/nutrition/targets')
+def nutrition_target_save(body: NutritionTargetSave):
+    return nutrition_call(save_target,body.payload,body.expected_revision)
+
+
+@app.post('/api/nutrition/photo')
+def nutrition_photo(body: FoodPhoto):
+    return nutrition_call(analyze_photo,body.image_base64)
 
 
 class DashboardCardUpdate(BaseModel):
@@ -179,6 +336,8 @@ class AIChatMessage(BaseModel):
 
 
 class AIChatRequest(BaseModel):
+    plot_context: list[dict[str, object]] | None = Field(default=None, max_length=4)
+    ride_context: str | None = Field(default=None, max_length=160)
     operation_id: str | None = Field(default=None, min_length=1, max_length=120)
     clarification_id: str | None = Field(default=None, max_length=120)
     message: str = Field(min_length=1, max_length=4_000)
@@ -302,6 +461,8 @@ def ai_chat(payload: AIChatRequest) -> StreamingResponse:
             payload.timezone,
             operation_id=payload.operation_id,
             clarification_id=payload.clarification_id,
+            plot_context=payload.plot_context,
+            ride_context=payload.ride_context,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},

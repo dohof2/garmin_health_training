@@ -89,7 +89,7 @@ and [T11 verification](docs/status/t11-verification.md).
 
 1. Use Training to save preferences and review T7 foundation plans; T12 readiness remains advisory.
 2. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is verified locally.
-3. Implement T9 nutrition, then T10 daily-use launch/quit, recovery and normal-use checks.
+3. Use Nutrition for local meal/recipe logging and reviewed targets, then implement T10 daily-use launch/quit, recovery and normal-use checks.
 4. Add T8 Garmin workout publishing last, once the local app works without it.
 
 ## Local development
@@ -181,3 +181,9 @@ The dashboard includes a provisional morning readiness card with personal HRV/RH
 ## Training plans
 
 Open **Training** to save sports, availability, equipment, experience and restrictions. Only missing/stale answers require confirmation. Create a Monday draft, review its sessions and context, then explicitly accept it. Edit templates/duration and record completion, effort, soreness or missed sessions. Review next-week volume separately; saving limits leaves the existing calendar unchanged. Goals are optional. Foundation templates are local; Garmin publishing is T8. See [rules and limits](docs/planning/training-rules.md) and [verification](docs/status/t7-verification.md).
+
+## Food and nutrition
+
+Open **Nutrition** to enter label values (whole portion or per 100 g), search the bundled USDA foods, save recipes/reusable meals, review totals and explicitly confirm a meal. Edits retain revisions; removed meals can be restored. Daily totals flag unknown nutrients and estimated portions. Photos go only to local Ollama and are not retained; correct ingredient/amount guesses, choose nutrient sources, then review before saving. Photo ranges are unvalidated.
+
+Targets are optional: preview a manual target or an adult Mifflin maintenance estimate with explicit inputs. Macros and training-day calorie overrides are entered by you. Garmin energy is never added automatically; logged days retain their target snapshot. No API key is needed for the limited offline USDA catalog. See [methods/limits](docs/planning/nutrition-methods.md) and [T9 verification](docs/status/t9-verification.md).

@@ -1,7 +1,7 @@
 # Garmin Health & Training App — Progress Status
 
 Last updated: 10 October 2026
-Overall status: **The T1–T5 core is operational. T6 implementation and local Qwen verification are complete; live OpenAI verification awaits an API key. T7 foundation planning, T11 maintenance history and the T12 readiness prototype are complete.**
+Overall status: **The T1–T5 core is operational. T6 implementation and local Qwen verification are complete; live OpenAI verification awaits an API key. T7 foundation planning, T9 local nutrition prototype, T11 maintenance history and the T12 readiness prototype are implemented and verified.**
 Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, navigation, local profile/goals settings, unit preferences, portable export/backup, and restore preview are operational. Private Garmin authentication stores owner-only session tokens locally. Live checkpoints now cover activities, daily summaries, sleep, HRV, and weight/body composition through 10 October 2026; omitted activity/FIT summaries and HRV history were recovered (1,434 HRV nights, 725 activity loads); the 28 September–8 October historical reconciliation completed without failures and removed all archive/live daily-metric duplicates. Daily synchronization is enabled only while the app is open, catches every missing day, and rechecks the latest three days. Original FIT details restored 6,568 sensor samples for the newest activities. SQLite quick-check and foreign keys pass. Local Qwen 3.5 2B/4B text/tool inference and the 2B vision path were benchmarked successfully. Selectable Qwen/Ollama and OpenAI provider adapters, grounded historical chat, similar-ride matching, and privacy-preserving GPS course matching are implemented. Natural token-expiry observation, optional importer UI conveniences, dashboard feedback, and live OpenAI verification remain. Goal-aware assessment and reviewed chat profile/goal changes are implemented.
 
 This is the quick status reference. Detailed requirements and acceptance criteria remain in [`../planning/health-training-app-plan.md`](../planning/health-training-app-plan.md) and [`../planning/implementation-tasks-and-your-input.md`](../planning/implementation-tasks-and-your-input.md).
@@ -26,7 +26,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | M3 — Historical AI assistant | T6 | 🟡 Partial | Implementation complete: grounded history, ride/course comparison, conditional ride assessment, reviewed profile/goal changes, and regression checks. Local Qwen verified; live OpenAI verification awaits a key |
 | M3A — Maintenance history | T11 | ✅ Complete | Local chat commands, history/edit/undo, revisions, reviewed CSV portability, JSON and full backup restoration verified |
 | M4 — Training | T7–T8, T12 | 🟡 Partial | T7 foundation planning and T12 advisory readiness implemented and verified; T8 Garmin publishing is deferred until after T9/T10 and local normal-use validation |
-| M5 — Food and nutrition | T9 | ⬜ Not started | Manual logging precedes photo estimation |
+| M5 — Food and nutrition | T9 | ✅ Complete | Local prototype: manual/recipe logging, offline USDA, reviewed photo candidates and targets; photo mass accuracy remains unvalidated |
 | M6 — Daily-use release | T10 | ⬜ Not started | Explicit launch/quit and open-session-only jobs remain required |
 
 ## Task and subtask tracker
@@ -127,12 +127,12 @@ Deferred to the last implementation stage by user decision, after T9, T10 and lo
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T9.1 | Manual foods, recipes, reusable meals, sources, and totals | ⬜ Not started | Implement before photo estimation |
-| T9.2 | Photo analysis with editable foods, portions, and uncertainty | ⬜ Not started | Requires successful local vision-model validation |
-| T9.3 | Free nutrient lookup and caching | ⬜ Not started | U9 only if the chosen free API requires a personal key |
-| T9.4 | Documented targets, overrides, history, and exercise handling | ⬜ Not started | Personalized values require U8 during use |
-| T9.5 | Target/logged/remaining calories and macros | ⬜ Not started | Estimated and measured values must remain distinct |
-| T9.6 | Validate portions, recipe scaling, edits, dates, and totals | ⬜ Not started | Automated fixtures first; optional U8 samples later |
+| T9.1 | Manual foods, recipes, reusable meals, sources, and totals | ✅ Complete | Manual portion/per-100g inputs, recipe scaling, reusable meals, source snapshots, revisions and partial-aware daily totals |
+| T9.2 | Photo analysis with editable foods, portions, and uncertainty | ✅ Complete | Local Qwen upload/analyze/correct/match/review/save flow verified; gram ranges/count accuracy remains unvalidated |
+| T9.3 | Free nutrient lookup and caching | ✅ Complete | 363-food public Foundation cache; version/checksum and reproducible builder; no API key needed |
+| T9.4 | Documented targets, overrides, history, and exercise handling | ✅ Complete | Adult maintenance/manual previews, explicit macros/training override, no added Garmin energy, immutable target/day history |
+| T9.5 | Target/logged/remaining calories and macros | ✅ Complete | Calories/macros table shows target/logged/remaining; unknowns remain partial and photo/estimated portions are flagged |
+| T9.6 | Validate portions, recipe scaling, edits, dates, and totals | ✅ Complete | 199 backend tests, TypeScript/build, synthetic known-portion browser workflow and public apple vision check; see t9-verification.md |
 
 ### T10 — Prepare for everyday local use
 
@@ -180,8 +180,8 @@ Deferred to the last implementation stage by user decision, after T9, T10 and lo
 | U5 | Dashboard usability feedback | ⏳ Ready when convenient | The first working desktop/mobile dashboard is available; feedback can be provided gradually |
 | U6 | Training availability/equipment/experience/restrictions | ⏳ Ready during use | Saved Training questions are available; no real answers invented |
 | U7 | Deliberate test-workout publication and device check | ⏳ Not needed yet | T8 validation, one test per supported sport |
-| U8 | Nutrition inputs and optional known-portion meals | ⏳ Not needed yet | Personalized target and food validation |
-| U9 | Free food-API key, only if required | ⏳ Not needed yet | Only if a downloadable database is unsuitable |
+| U8 | Nutrition inputs and optional known-portion meals | ⏳ Ready during use | Nutrition target/meal review is available; known-portion photo quality trials remain useful |
+| U9 | Free food-API key, only if required | 🔒 Not required | Bundled USDA download supports offline lookup without a key |
 | U10 | GitHub sign-in/publication | ✅ Complete | User authenticated independently and published the repository at `dohof2/garmin_health_training` |
 | U11 | Maintenance details during use | ⏳ Not needed yet | Only when recording actual events |
 
@@ -198,7 +198,7 @@ Deferred to the last implementation stage by user decision, after T9, T10 and lo
 
 ## Immediate next action
 
-T7 foundation training planning is implemented and verified; see `t7-verification.md`. Next implementation milestone is T9 nutrition, followed by T10 daily-use lifecycle/recovery and normal-use validation. T8 Garmin workout publishing comes last. T12 readiness is implemented as a provisional advisory prototype; see `t12-verification.md`. T11 maintenance is complete; details are in `t11-verification.md`. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.
+T7 foundation training planning is implemented and verified; see `t7-verification.md`. T9 local nutrition is implemented and verified; see `t9-verification.md`. Next is T10 daily-use lifecycle/recovery and normal-use validation. T8 Garmin workout publishing comes last. T12 readiness is implemented as a provisional advisory prototype; see `t12-verification.md`. T11 maintenance is complete; details are in `t11-verification.md`. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.
 
 ## Sync recovery verification — 10 October 2026
 

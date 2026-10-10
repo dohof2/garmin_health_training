@@ -116,6 +116,8 @@ class AIToolTests(unittest.TestCase):
                 "update_maintenance",
                 "undo_maintenance",
                 "export_maintenance",
+                "get_chart_catalog",
+                "create_plots",
             ],
         )
         self.assertTrue(
@@ -205,6 +207,21 @@ class AIToolTests(unittest.TestCase):
         self.assertEqual(metric_delta["period_a_average"], 1500)
         self.assertEqual(metric_delta["period_b_average"], 3000)
         self.assertEqual(metric_delta["average"]["percent"], 100)
+
+    def test_similar_rides_reference_date_never_defaults_to_latest(self):
+        with connect(self.database) as c:
+            c.execute("INSERT INTO activities(id,source_name,name,activity_type,started_at,duration_seconds,distance_meters,elevation_gain_meters) VALUES('dated','synthetic','Dated ride','cycling','2026-09-26T22:30:00Z',3600,30000,100)")
+        result = execute_tool('find_similar_rides', {'reference_date':'2026-09-27','timezone':'Asia/Jerusalem'},self.database)
+        self.assertEqual(result['reference_ride']['id'],'dated')
+        self.assertIsNone(result['candidate_period'])
+        with self.assertRaisesRegex(ValueError,'No stored ride'):
+            execute_tool('find_similar_rides', {'reference_date':'2026-09-28'},self.database)
+        with self.assertRaisesRegex(ValueError,'not both'):
+            execute_tool('find_similar_rides', {'reference_date':'2026-09-27','reference_activity_id':'ride-a'},self.database)
+        with connect(self.database) as c:
+            c.execute("INSERT INTO activities(id,source_name,name,activity_type,started_at) VALUES('second','synthetic','Second ride','cycling','2026-09-27T06:00:00Z')")
+        with self.assertRaisesRegex(ValueError,'Multiple rides'):
+            execute_tool('find_similar_rides', {'reference_date':'2026-09-27','timezone':'Asia/Jerusalem'},self.database)
 
     def test_similar_rides_exposes_adjustable_criteria_sample_and_links(self) -> None:
         result = execute_tool(

@@ -174,6 +174,8 @@ Done per sport only after actual verification. A calendar entry alone does not e
 
 ### T9 — Add food logging and nutrition status
 
+**Local prototype implemented and verified — 10 October 2026.** Manual/recipe logging, offline USDA reference data, local photo candidate review and explicit nutrient matching, reviewed targets and partial-aware daily totals are available. See [`../status/t9-verification.md`](../status/t9-verification.md). Photo count/mass accuracy is unvalidated; actual known-portion trials and U8 values are supplied during use. No U9 API key is needed.
+
 | Subtask | Work | Your involvement |
 |---|---|---|
 | T9.1 | Implement manual food entries, recipes, reusable meals, nutrient sources, and daily totals first. | None |

@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import StatusDial, { readinessBands } from "./StatusDial";
 
 type Reading = { value: number; unit: string; wake_date: string; source_name: string } | null;
 type Group = {
@@ -86,10 +87,16 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
   const result = data?.latest;
   return <>
     <p>Training readiness <span className="readiness-prototype">Prototype</span></p>
-    <h3>{loading ? "Loading…" : result ? value(result) : "—"}</h3>
+    {result && !loading ? <StatusDial
+      value={result.score !== null ? String(result.score) : result.score_range ? `${result.score_range.low}–${result.score_range.high}` : '—'}
+      unit="/ 100" bands={readinessBands}
+      position={result.score !== null ? result.score / 100 : null}
+      range={result.score === null && result.score_range ? { low: result.score_range.low / 100, high: result.score_range.high / 100 } : null}
+      interpretation={result.score !== null ? result.score < 50 ? 'Recovery focus · prioritize rest or an easy session.' : result.score < 80 ? 'Ready with care · keep the session manageable.' : 'Well prepared · measured recovery signals are favorable.' : result.score_range ? 'Readiness uncertain · arrows mark the possible range; some inputs are missing.' : result.status === 'awaiting_morning' ? 'Awaiting morning measurements' : 'Not enough data to assess readiness'}
+    /> : <h3>{loading ? 'Loading…' : '—'}</h3>}
     {error && <p role="alert" className="form-error">{error}</p>}
     {result && <>
-      <span>{result.band ? `${result.band[0].toUpperCase()}${result.band.slice(1)} readiness` : result.status.replaceAll("_", " ")} · {result.data_quality} data quality</span>
+      <span>{result.data_quality} data quality</span>
       <small>{result.date} · {timezone} · after {new Date(result.cutoff).toLocaleTimeString([], { timeZone: timezone, hour: "2-digit", minute: "2-digit" })}</small>
       <p className="readiness-caution">{result.caution}</p>
     </>}

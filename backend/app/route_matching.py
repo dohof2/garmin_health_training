@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from math import asin, cos, radians, sin, sqrt
+from math import asin, cos, radians, sin, sqrt, floor, pi
 from pathlib import Path
 
 from .database import connect
@@ -78,12 +78,23 @@ def _coverage_percent(
 ) -> float:
     if not source or not target:
         return 0.0
-    covered = sum(
-        1
-        for point in source
-        if min(haversine_meters(point, candidate) for candidate in target)
-        <= tolerance_meters
-    )
+    if tolerance_meters <= 0:
+        covered = sum(any(haversine_meters(point, candidate) <= tolerance_meters
+                          for candidate in target) for point in source)
+    else:
+        # Latitude separation alone bounds the great-circle distance. Only
+        # adjacent latitude cells can contain a point inside the tolerance.
+        step = tolerance_meters / EARTH_RADIUS_METERS * 180 / pi
+        cells: dict[int, list[Coordinate]] = {}
+        for candidate in target:
+            cells.setdefault(floor(candidate[0] / step), []).append(candidate)
+        covered = 0
+        for point in source:
+            cell = floor(point[0] / step)
+            if any(haversine_meters(point, candidate) <= tolerance_meters
+                   for adjacent in (cell - 1, cell, cell + 1)
+                   for candidate in cells.get(adjacent, ())):
+                covered += 1
     return covered / len(source) * 100
 
 

@@ -1,0 +1,355 @@
+[
+  {
+    "request": "Plot my weight over the last year with a mean line",
+    "plots": [
+      {
+        "spec": {
+          "metric": "weight",
+          "kind": "line",
+          "reference_lines": [
+            "mean"
+          ],
+          "size": "full",
+          "timezone": "Asia/Jerusalem",
+          "start": "2025-10-10",
+          "end": "2026-10-10",
+          "title": "Weight"
+        },
+        "count": 75,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 75,
+          "reference_lines": [
+            {
+              "label": "Mean",
+              "value": 86.08486666666667
+            }
+          ],
+          "trend": null,
+          "pearson_r": null,
+          "r_squared": null,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "Plot power versus speed across all cycling rides with correlation and a trend line",
+    "plots": [
+      {
+        "spec": {
+          "metric": "activity_speed",
+          "kind": "scatter",
+          "x_metric": "activity_power",
+          "sport": "cycling",
+          "trend_line": true,
+          "correlation": true,
+          "size": "full",
+          "timezone": "Asia/Jerusalem",
+          "title": "Power vs speed across rides"
+        },
+        "count": 389,
+        "excluded": 12,
+        "unpaired": 448,
+        "analysis": {
+          "sample_count": 389,
+          "reference_lines": [],
+          "trend": {
+            "x_start": 0.0,
+            "x_end": 203.0,
+            "y_start": 9.854657622218578,
+            "y_end": 24.5123690245587,
+            "slope": 0.07220547488837498,
+            "r_squared": 0.2841635002017644
+          },
+          "pearson_r": 0.5330698830376411,
+          "r_squared": 0.2841635002017644,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "Plot resting heart rate versus cycling VO2 max with correlation",
+    "plots": [
+      {
+        "spec": {
+          "metric": "vo2_cycling",
+          "kind": "scatter",
+          "x_metric": "resting_heart_rate",
+          "sport": "cycling",
+          "correlation": true,
+          "size": "full",
+          "timezone": "Asia/Jerusalem",
+          "title": "VO\u2082 max \u00b7 cycling vs Resting heart rate"
+        },
+        "count": 366,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 366,
+          "reference_lines": [],
+          "trend": null,
+          "pearson_r": -0.2137313580151953,
+          "r_squared": 0.04568109339901959,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "Plot weight; plot sleep for the last two weeks; plot steps for the past three months; plot resting heart rate",
+    "plots": [
+      {
+        "spec": {
+          "metric": "weight",
+          "kind": "line",
+          "size": "half",
+          "timezone": "Asia/Jerusalem",
+          "title": "Weight"
+        },
+        "count": 925,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 925,
+          "reference_lines": [],
+          "trend": null,
+          "pearson_r": null,
+          "r_squared": null,
+          "reason": null
+        }
+      },
+      {
+        "spec": {
+          "metric": "sleep_duration",
+          "kind": "line",
+          "size": "half",
+          "timezone": "Asia/Jerusalem",
+          "start": "2026-09-27",
+          "end": "2026-10-10",
+          "title": "Sleep duration"
+        },
+        "count": 14,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 14,
+          "reference_lines": [],
+          "trend": null,
+          "pearson_r": null,
+          "r_squared": null,
+          "reason": null
+        }
+      },
+      {
+        "spec": {
+          "metric": "steps",
+          "kind": "line",
+          "size": "half",
+          "timezone": "Asia/Jerusalem",
+          "start": "2026-07-10",
+          "end": "2026-10-10",
+          "title": "Steps"
+        },
+        "count": 100,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 100,
+          "reference_lines": [],
+          "trend": null,
+          "pearson_r": null,
+          "r_squared": null,
+          "reason": null
+        }
+      },
+      {
+        "spec": {
+          "metric": "resting_heart_rate",
+          "kind": "line",
+          "size": "half",
+          "timezone": "Asia/Jerusalem",
+          "title": "Resting heart rate"
+        },
+        "count": 2978,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 2978,
+          "reference_lines": [],
+          "trend": null,
+          "pearson_r": null,
+          "r_squared": null,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "plot the speed of all rides macthed to the ride on oct 6th add a refferance line (all in one plot)",
+    "plots": [
+      {
+        "spec": {
+          "metric": "activity_speed",
+          "kind": "line",
+          "sport": "cycling",
+          "reference_lines": [
+            "mean"
+          ],
+          "size": "full",
+          "gps_reference_id": "garmin-connect-activity-b011cbd311b60a359bf7cb2e",
+          "title": "Speed across GPS-matched rides \u00b7 2026-10-06",
+          "timezone": "Asia/Jerusalem"
+        },
+        "count": 52,
+        "excluded": 0,
+        "unpaired": 0,
+        "analysis": {
+          "sample_count": 52,
+          "reference_lines": [
+            {
+              "label": "Mean",
+              "value": 22.279776932848417
+            }
+          ],
+          "trend": null,
+          "pearson_r": null,
+          "r_squared": null,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "Add a trend line and correlation",
+    "plots": [
+      {
+        "spec": {
+          "metric": "activity_speed",
+          "kind": "line",
+          "sport": "cycling",
+          "reference_lines": [
+            "mean"
+          ],
+          "size": "full",
+          "gps_reference_id": "garmin-connect-activity-b011cbd311b60a359bf7cb2e",
+          "title": "Speed across GPS-matched rides \u00b7 2026-10-06",
+          "timezone": "Asia/Jerusalem",
+          "trend_line": true,
+          "correlation": true
+        },
+        "count": 52,
+        "analysis": {
+          "sample_count": 52,
+          "reference_lines": [
+            {
+              "label": "Mean",
+              "value": 22.279776932848417
+            }
+          ],
+          "trend": {
+            "x_start": "2024-05-08",
+            "x_end": "2026-10-06",
+            "y_start": 22.12418867787981,
+            "y_end": 22.395043258234818,
+            "slope": 0.00030743993229853244,
+            "r_squared": 0.002876572772535662
+          },
+          "pearson_r": 0.05363369064809602,
+          "r_squared": 0.002876572772535662,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "Show it for the last year",
+    "plots": [
+      {
+        "spec": {
+          "metric": "activity_speed",
+          "kind": "line",
+          "sport": "cycling",
+          "reference_lines": [
+            "mean"
+          ],
+          "size": "full",
+          "gps_reference_id": "garmin-connect-activity-b011cbd311b60a359bf7cb2e",
+          "title": "Speed across GPS-matched rides \u00b7 2026-10-06",
+          "timezone": "Asia/Jerusalem",
+          "trend_line": true,
+          "correlation": true,
+          "start": "2025-10-10",
+          "end": "2026-10-10"
+        },
+        "count": 23,
+        "analysis": {
+          "sample_count": 23,
+          "reference_lines": [
+            {
+              "label": "Mean",
+              "value": 22.4301913264399
+            }
+          ],
+          "trend": {
+            "x_start": "2025-11-07",
+            "x_end": "2026-10-06",
+            "y_start": 23.039579323773133,
+            "y_end": 22.088039533441655,
+            "slope": -0.0028574768478422784,
+            "r_squared": 0.015212153375607836
+          },
+          "pearson_r": -0.12333755865756317,
+          "r_squared": 0.015212153375607836,
+          "reason": null
+        }
+      }
+    ]
+  },
+  {
+    "request": "Show power instead",
+    "plots": [
+      {
+        "spec": {
+          "metric": "activity_power",
+          "kind": "line",
+          "sport": "cycling",
+          "reference_lines": [
+            "mean"
+          ],
+          "size": "full",
+          "gps_reference_id": "garmin-connect-activity-b011cbd311b60a359bf7cb2e",
+          "timezone": "Asia/Jerusalem",
+          "trend_line": true,
+          "correlation": true,
+          "start": "2025-10-10",
+          "end": "2026-10-10",
+          "title": "Activity power"
+        },
+        "count": 22,
+        "analysis": {
+          "sample_count": 22,
+          "reference_lines": [
+            {
+              "label": "Mean",
+              "value": 163.6818181818182
+            }
+          ],
+          "trend": {
+            "x_start": "2026-02-09",
+            "x_end": "2026-10-06",
+            "y_start": 173.55188414145925,
+            "y_end": 155.259037184894,
+            "slope": -0.07653910860487553,
+            "r_squared": 0.04485394239767201
+          },
+          "pearson_r": -0.21178749348739176,
+          "r_squared": 0.04485394239767201,
+          "reason": null
+        }
+      }
+    ]
+  }
+]

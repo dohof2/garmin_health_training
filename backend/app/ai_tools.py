@@ -8,7 +8,7 @@ from .ai_actions import get_training_context, propose_settings_change, PROFILE_F
 from .settings import get_settings
 from .database import connect, migrate
 from .history import get_activity, list_activities
-from .route_matching import compare_routes, load_gps_route
+from .route_matching import compare_routes, load_gps_route, haversine_meters
 
 
 MAX_ACTIVITY_RESULTS = 100
@@ -168,7 +168,7 @@ TOOL_DEFINITIONS: list[dict[str, object]] = [
         "description": (
             "Find rides similar to a reference ride using deterministic, visible, "
             "adjustable activity-type, duration, distance, and elevation criteria. "
-            "Omit reference_activity_id to use the latest stored ride."
+            "Use reference_date for a named local ride date, or reference_activity_id. Omit both to use the latest stored ride."
         ),
         "input_schema": {
             "type": "object",
@@ -176,6 +176,10 @@ TOOL_DEFINITIONS: list[dict[str, object]] = [
                 "reference_activity_id": {
                     "type": ["string", "null"],
                     "maxLength": 200,
+                },
+                "reference_date": {
+                    "type": ["string", "null"], "format": "date",
+                    "description": "Local date of the reference ride. This does not restrict candidate dates.",
                 },
                 "candidate_start_date": {"type": ["string", "null"], "format": "date"},
                 "candidate_end_date": {"type": ["string", "null"], "format": "date"},
@@ -247,7 +251,7 @@ TOOL_DEFINITIONS: list[dict[str, object]] = [
                     "type": ["number", "null"],
                     "minimum": 0,
                     "maximum": 50,
-                    "description": "Null disables distance prefiltering; omitted defaults to 15%.",
+                    "description": "Distance prefiltering is disabled by default. Set a percentage only when explicitly requested.",
                 },
                 "route_tolerance_meters": {
                     "type": "number",
@@ -569,9 +573,16 @@ def list_activities_tool(
     selected = activities[:limit]
     ids = [str(item["id"]) for item in selected]
     sample_summaries = _sample_summaries(ids, path)
+    summaries = {}
+    if ids:
+        with connect(path) as c:
+            placeholders = ','.join('?' for _ in ids)
+            for row in c.execute(f'SELECT activity_id,metric_type,value,unit FROM activity_metrics WHERE activity_id IN ({placeholders})',ids):
+                summaries.setdefault(row['activity_id'],[]).append(dict(row))
 
     source_names: set[str] = set()
     for activity in selected:
+        activity["activity_metrics"] = summaries.get(activity["id"],[])
         activity["sample_summary"] = sample_summaries.get(
             str(activity["id"]),
             {
@@ -736,6 +747,19 @@ def find_similar_rides_tool(
     reference_id = _optional_identifier(
         arguments.get("reference_activity_id"), "reference_activity_id"
     )
+    reference_date = arguments.get('reference_date')
+    if reference_id and reference_date:
+        raise ValueError('Use reference_activity_id or reference_date, not both')
+    if reference_date:
+        day = date.fromisoformat(str(reference_date))
+        rides = [item for item in list_activities(start_date=day, end_date=day, limit=100,
+                  timezone_name=timezone_name, path=path) if item['activity_type'] in RIDE_ACTIVITY_TYPES]
+        if not rides:
+            raise ValueError(f'No stored ride was found on {day.isoformat()}. Choose another date or year.')
+        if len(rides) > 1:
+            raise ValueError(f"Multiple rides were found on {day.isoformat()}; choose a reference_activity_id: " +
+                             '; '.join(f"{r['name']} ({r['id']})" for r in rides))
+        reference_id = str(rides[0]['id'])
     if reference_id:
         reference = get_activity(reference_id, path, timezone_name)
         if reference is None:
@@ -1090,7 +1114,7 @@ def find_same_course_rides_tool(
     )
     start, end = _optional_candidate_period(arguments)
     distance_tolerance = _optional_tolerance(
-        arguments, "distance_tolerance_percent", 15
+        arguments, "distance_tolerance_percent", None
     )
     if distance_tolerance is not None and distance_tolerance > 50:
         raise ValueError("distance_tolerance_percent must be between 0 and 50")
@@ -1180,6 +1204,14 @@ def find_same_course_rides_tool(
         if len(candidate_points) < 10:
             excluded_without_gps += 1
             continue
+        # Reject geographically distant endpoints before the full overlap scan.
+        # This is a GPS criterion, independent of ride duration or distance.
+        same_endpoints = max(haversine_meters(reference_points[0], candidate_points[0]),
+                             haversine_meters(reference_points[-1], candidate_points[-1]))
+        reverse_endpoints = max(haversine_meters(reference_points[0], candidate_points[-1]),
+                                haversine_meters(reference_points[-1], candidate_points[0]))
+        if min(same_endpoints, reverse_endpoints) > endpoint_tolerance:
+            continue
         route_match = compare_routes(
             reference_points,
             candidate_points,
@@ -1235,6 +1267,7 @@ def find_same_course_rides_tool(
     attempts = [reference_result, *all_ride_results]
     return {
         "tool": "find_same_course_rides",
+        "matched_activity_ids": [str(item['activity']['id']) for item in matched],
         "reference_ride": reference_result,
         "candidate_period": (
             {"start": start.isoformat(), "end": end.isoformat()}
@@ -1546,6 +1579,25 @@ TOOL_DEFINITIONS.extend([
          "required": ["target_operation_id", "operation_id"], "additionalProperties": False}},
     {"name": "export_maintenance", "description": "Return a local CSV download link for current maintenance history.",
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
+])
+
+from .charts import create_plot_tool, catalog as chart_catalog
+
+TOOL_HANDLERS['create_plots'] = create_plot_tool
+TOOL_HANDLERS['get_chart_catalog'] = lambda arguments, path: {'tool': 'get_chart_catalog', **chart_catalog(path)}
+TOOL_DEFINITIONS.extend([
+    {'name': 'get_chart_catalog', 'description': 'List supported stored health metrics and activity fields for plotting. Query before choosing an unfamiliar metric.',
+     'input_schema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
+    {'name': 'create_plots', 'description': 'Create one to four large visible plots from recorded health or activity data. Supports any catalog metric. VO2 IDs: vo2_cycling, vo2_running. Activity IDs: activity_power, activity_speed, activity_distance, activity_duration, activity_heart_rate, activity_calories, activity_elevation. For power versus speed use x_metric activity_power, metric activity_speed, kind scatter, sport cycling. For HR versus VO2 use x_metric resting_heart_rate, metric vo2_cycling, kind scatter. Sparse health comparisons pair actual same-date readings; never fill gaps. Omit dates for full history.',
+     'input_schema': {'type': 'object', 'properties': {'plots': {'type': 'array', 'minItems': 1, 'maxItems': 4,
+         'items': {'type': 'object', 'properties': {'metric': {'type': 'string'}, 'x_metric': {'type': 'string'},
+             'kind': {'type': 'string', 'enum': ['line','bar','scatter','dial']},
+             'title': {'type': 'string'}, 'start': {'type': 'string'}, 'end': {'type': 'string'},
+             'sport': {'type': 'string'}, 'timezone': {'type': 'string'}, 'gps_reference_id': {'type': 'string'},
+             'reference_lines': {'type': 'array', 'maxItems': 4, 'items': {'anyOf': [{'type': 'number'}, {'type': 'string', 'enum': ['mean']}]}},
+             'trend_line': {'type': 'boolean'}, 'correlation': {'type': 'boolean'},
+             'size': {'type': 'string', 'enum': ['half','full']}},
+             'required': ['metric','kind'], 'additionalProperties': False}}}, 'required': ['plots'], 'additionalProperties': False}},
 ])
 
 TOOL_DEFINITIONS_BY_NAME = {
