@@ -167,6 +167,8 @@ Before personalized advice, collect missing availability, equipment, experience,
 
 ### E. Garmin workout publishing
 
+**Implementation order, updated 10 October 2026:** Add this integration last, after local training, nutrition and daily-use lifecycle/recovery pass normal-use checks. Local app functionality must work without publishing workouts. This does not defer existing Garmin data ingestion/sync or local data exports.
+
 Workflow: draft → preview → user selects publish → create Garmin workout → schedule date → read back and verify.
 
 Store local and Garmin identifiers plus publication status. Retries must not create duplicate workouts. Handle “created but not scheduled” separately from complete success. Reconcile edits and date changes, with an explicit action before removing published sessions.
@@ -260,9 +262,10 @@ Maintenance application tools: `log_maintenance`, `list_maintenance`, `update_ma
 | 2 — Graphs | Steps, last activity, weekly calories; reusable cards and saved configuration | Basic metrics handle dates, units, and missing data; layout survives restart/restore; adding a supported card requires no dashboard redesign |
 | 3 — AI history assistant | Internal application tools, grounded answers, ride comparisons/assessments, optional goal and profile updates through chat; optional MCP adapter later | Answers match independent calculations and expose evidence; goals can be skipped; form/chat edits share the same persisted profile |
 | 3A — Maintenance log | Chat-based maintenance/replacement entries, history screen, corrections/undo, CSV import/export | Clear prompts save accurately; ambiguous prompts ask targeted questions; retries/reimports do not duplicate entries; CSV and backup round trips preserve records |
-| 4 — Training and Garmin | Transparent daily readiness, just-in-time training questions, saved answers, weekly planning, feedback, calendar, publishing | Readiness is reproducible from displayed inputs and handles missing data; missing context is requested before personalized advice and reused afterward; supported sports pass publication tests without duplicate sessions |
+| 4 — Local training | Transparent daily readiness, just-in-time training questions, saved answers, weekly planning, feedback, local calendar | Readiness is reproducible from displayed inputs and handles missing data; missing context is requested before personalized advice and reused afterward; local plans work without Garmin publication |
 | 5 — Food and nutrition | Photo review, nutrient lookup, manual logging, target calculation | Known-portion meals assess estimate quality; edits and daily totals calculate correctly; uncertainty stays visible |
 | 6 — Daily-use finish | Explicit launch/quit lifecycle, backup/restore, reminders during open sessions | App-owned processes stop on exit; no closed-app sync/reminders or login autostart; reopening resumes pending work and catches up all missing intervals |
+| 7 — Garmin workout publishing, last | Preview, publish, schedule, retry and read-back verification | Local app already passes normal-use checks; supported sports pass publication tests without duplicate sessions |
 
 **Later iterations:** Decide whether to add background operation and automatic startup; neither is included in the first edition. Additional dashboard metrics based on use, AI-added graphs, and phone connectivity; potentially messaging if compatible with the approved budget. These are outside the initial release.
 

@@ -246,6 +246,7 @@ def get_activity(
             """,
             (activity_id,),
         ).fetchone()
+        metrics = connection.execute('SELECT metric_type, value, unit, source_method, source_field FROM activity_metrics WHERE activity_id=? ORDER BY metric_type', (activity_id,)).fetchall()
 
     result = dict(activity)
     timezone_used = select_timezone(result.get("timezone"), timezone_name)
@@ -255,6 +256,7 @@ def get_activity(
     ).isoformat()
     result["timezone_used"] = timezone_used
     result["sample_summary"] = dict(samples)
+    result['activity_metrics'] = [dict(row) for row in metrics]
     return result
 
 

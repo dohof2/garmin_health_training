@@ -18,7 +18,7 @@ class DashboardLayoutTests(unittest.TestCase):
 
             self.assertEqual(
                 [card["id"] for card in layout],
-                ["latest_steps", "last_activity", "weekly_calories"],
+                ["latest_steps", "last_activity", "weekly_calories", "training_readiness"],
             )
             self.assertTrue(all(card["is_visible"] for card in layout))
 
@@ -27,6 +27,7 @@ class DashboardLayoutTests(unittest.TestCase):
             database = Path(temporary_directory) / "test.sqlite3"
             migrate(database)
             requested = [
+                {"id": "training_readiness", "position": 3, "is_visible": True},
                 {"id": "weekly_calories", "position": 0, "is_visible": True},
                 {"id": "latest_steps", "position": 1, "is_visible": False},
                 {"id": "last_activity", "position": 2, "is_visible": True},
@@ -40,6 +41,7 @@ class DashboardLayoutTests(unittest.TestCase):
                 "weekly_calories",
                 "latest_steps",
                 "last_activity",
+                "training_readiness",
             ])
             self.assertFalse(loaded[1]["is_visible"])
 
@@ -56,6 +58,7 @@ class DashboardLayoutTests(unittest.TestCase):
                         {"id": "latest_steps", "position": 0, "is_visible": True},
                         {"id": "last_activity", "position": 0, "is_visible": True},
                         {"id": "weekly_calories", "position": 2, "is_visible": True},
+                        {"id": "training_readiness", "position": 3, "is_visible": True},
                     ],
                     database,
                 )

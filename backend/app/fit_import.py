@@ -14,6 +14,7 @@ from garmin_fit_sdk import Decoder, Stream
 
 from .config import data_directory
 from .database import connect, migrate
+from .activity_metrics import preserve_fit_summary
 from .garmin_import import (
     GARMIN_SOURCE_NAME,
     default_archive_path,
@@ -689,6 +690,7 @@ def import_fit_activity_samples(
                     "UPDATE activities SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
                     (activity_id,),
                 )
+                preserve_fit_summary(connection, activity_id, messages)
             _record_fit_status(
                 database_path=database_path,
                 archive_source_id=archive_source_id,

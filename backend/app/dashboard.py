@@ -20,6 +20,7 @@ CARD_REGISTRY = (
     DashboardCardDefinition(
         "weekly_calories", "metric_summary", "Weekly calories burned", 2
     ),
+    DashboardCardDefinition("training_readiness", "readiness", "Training readiness", 3),
 )
 
 

@@ -1,3 +1,5 @@
+import TrainingPanel from "./TrainingPanel";
+import { ReadinessCard } from "./ReadinessCard";
 import { useEffect, useRef, useState } from "react";
 import MaintenancePanel, { type MaintenanceResult } from "./MaintenancePanel";
 
@@ -92,7 +94,7 @@ type WeeklyCalories = {
   source_name: "garmin_export";
 };
 
-type DashboardCardId = "latest_steps" | "last_activity" | "weekly_calories";
+type DashboardCardId = "latest_steps" | "last_activity" | "weekly_calories" | "training_readiness";
 
 type DashboardCardLayout = {
   id: DashboardCardId;
@@ -1602,6 +1604,7 @@ export default function App() {
   }, [syncStatusValue?.schedule_enabled, garminConnectionValue?.status]);
 
   const cardRegistry: Record<DashboardCardId, PreviewCard> = {
+    training_readiness: { id: "training_readiness", label: "Training readiness", value: "", detail: "", tooltip: "Transparent morning estimate with personal baselines and explicit uncertainty." },
     latest_steps: {
       id: "latest_steps",
       label: "Latest steps",
@@ -1654,6 +1657,7 @@ export default function App() {
         <a href="#activities">Activities</a>
         <a href="#sync">Sync</a>
         <a href="#assistant">Assistant</a>
+        <a href="#training">Training</a>
         <a href="#maintenance">Maintenance</a>
         <a href="#data">Data</a>
         <a href="#settings">Settings</a>
@@ -1915,6 +1919,7 @@ export default function App() {
         <div className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
             <article className="data-card" key={card.id}>
+              {card.id === "training_readiness" ? <ReadinessCard timezone={browserTimeZone} refreshToken={`${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /> : <>
               <p>
                 {card.label}{" "}
                 <abbr className="info-tip" title={card.tooltip} aria-label={card.tooltip}>i</abbr>
@@ -1922,6 +1927,7 @@ export default function App() {
               <h3>{card.value}</h3>
               <span>{card.detail}</span>
               {card.subdetail && <small>{card.subdetail}</small>}
+              </>}
             </article>
           ))}
         </div>
@@ -2049,6 +2055,7 @@ export default function App() {
                 <button type="button" onClick={() => void sendChatMessage("Was my latest ride effective? In what way?")}>Ride effectiveness</button>
                 <button type="button" onClick={() => void sendChatMessage("When did I last replace the rear tire on my road bike?")}>Maintenance history</button>
                 <button type="button" onClick={() => void sendChatMessage("Set my goal to improve cycling endurance.")}>Set a goal</button>
+                <button type="button" onClick={() => void sendChatMessage("What is my training readiness today?")}>Training readiness</button>
                 <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
               </div>
             </div>
@@ -2202,6 +2209,8 @@ export default function App() {
           </form>
         </div>
       </section>
+
+      <TrainingPanel timezone={browserTimeZone} />
 
       <MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} />
 

@@ -49,13 +49,14 @@ Existing decisions remain settled: computer first, bulk import first, account-wi
 | M2 — First dashboard | T5 | Steps, last activity, weekly calories, and editable saved layout |
 | M3 — Historical AI assistant | T6 | Questions about actual history, similar-ride comparisons, optional goal/profile editing |
 | M3A — Maintenance history | T11 | AI-based maintenance/replacement logging, review/edit/undo, CSV portability |
-| M4 — Training | T7–T8, T12 | Daily readiness, stored training context, proposed plans, and verified Garmin publishing |
+| M4 — Local training | T7, T12 | Daily readiness, stored training context, reviewable local plans and feedback |
 | M5 — Food and nutrition | T9 | Photo-assisted logging, editable estimates, daily targets and totals |
 | M6 — Daily-use release | T10 | Explicit launch/quit, recovery and catch-up after reopening, reminders only during open app sessions |
+| M7 — Garmin workout publishing, last | T8 | Verified publication only after the rest of the local app works |
 
-**First useful release: M1–M3A**, after relevant feasibility checks. M4–M6 complete the initial full application. Background operation/automatic startup, phone access, WhatsApp, and AI-added dashboard graphs are later work. T11 is numbered separately to preserve existing task references, but executes alongside/after T6, before the daily-use release.
+**First useful release: M1–M3A**, after relevant feasibility checks. M4–M6 complete the local application; M7 adds Garmin workout publishing last. Background operation/automatic startup, phone access, WhatsApp, and AI-added dashboard graphs are later work. T11 is numbered separately to preserve existing task references, but executes alongside/after T6, before the daily-use release.
 
-Dependency sequence: data foundation → import/sync → dashboard and historical analysis → training and nutrition → daily-use validation. U1 is complete, so the importer can now be developed and verified against the real archive. Live Garmin synchronization still waits for U2. Food logging can be developed independently once storage is ready. This describes task dependencies, not authorization to launch parallel agents.
+Dependency sequence: data foundation → import/sync → dashboard and historical analysis → local training and nutrition → daily-use validation → Garmin workout publishing (T8), last. U1 is complete, so the importer can now be developed and verified against the real archive. Live Garmin synchronization still waits for U2. Food logging can be developed independently once storage is ready. This describes task dependencies, not authorization to launch parallel agents.
 
 Feasibility has separate gates: imports need a representative archive, live sync needs login, and local AI needs hardware benchmarking. A blocked gate must not stop unrelated work. An unavailable automatic integration remains an unmet requirement even when file import works; report the limitation and review options rather than declaring it complete.
 
@@ -159,6 +160,8 @@ Done when answers trace to actual records/calculations and goal-free use remains
 Done when plans respect stored constraints, explain their rationale, and do not require repeating the questionnaire.
 
 ### T8 — Publish and schedule Garmin workouts
+
+**Deferred to the final implementation stage by user decision (10 October 2026).** Complete T9 nutrition and T10 local lifecycle/recovery and normal-use checks first. The local app must work without workout publication. Existing Garmin data import/sync and local CSV/JSON/backup exports remain in their current scope. T8 retains its requirements and IDs; U7 is needed only when this final stage starts.
 
 | Subtask | Work | Your involvement |
 |---|---|---|

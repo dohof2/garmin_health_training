@@ -81,6 +81,8 @@ def confirm_settings_change(identifier: str, path: Path | None = None):
 
 
 def get_training_context(arguments: dict[str, object], path: Path | None = None):
+    from .training import training_context
     settings = get_settings(path)
     return {'tool': 'get_training_context', 'profile': settings['profile'], 'goals': settings['goals'],
-            'limitations': ['User goals are context, not evidence of the intent of a particular session. Training plans and session targets are not implemented yet.']}
+            'training': training_context(path),
+            'limitations': ['User goals are context, not evidence of the intent of a particular session. Draft and save training preferences in the Training screen; the assistant does not change the schedule.']}

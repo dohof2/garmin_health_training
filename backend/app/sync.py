@@ -13,6 +13,7 @@ from typing import Protocol
 
 from .database import connect, migrate
 from .fit_import import _decode_fit, _sample_rows
+from .activity_metrics import encoded, normalize_activity_metrics, preserve_fit_summary
 
 
 SYNC_DATA_TYPES = (
@@ -124,15 +125,22 @@ def ensure_sync_checkpoints(path: Path | None = None) -> None:
             ).fetchone():
                 continue
             coverage_start, coverage_end = _source_bounds(connection, data_type)
+            history_backfill_next = None
+            if data_type == "hrv_metrics":
+                first_sleep = connection.execute(
+                    "SELECT MIN(substr(recorded_at,1,10)) FROM metric_readings WHERE metric_type='sleep_duration'"
+                ).fetchone()[0]
+                if first_sleep and (not coverage_start or first_sleep < coverage_start):
+                    history_backfill_next = first_sleep
             connection.execute(
                 """
                 INSERT INTO sync_checkpoints(
                     data_type, provider_name, coverage_start, coverage_end,
-                    seeded_from_import, status
-                ) VALUES (?, 'garmin_connect', ?, ?, ?, 'pending')
+                    seeded_from_import, status, history_backfill_next
+                ) VALUES (?, 'garmin_connect', ?, ?, ?, 'pending', ?)
                 ON CONFLICT(data_type) DO NOTHING
                 """,
-                (data_type, coverage_start, coverage_end, int(coverage_end is not None)),
+                (data_type, coverage_start, coverage_end, int(coverage_end is not None), history_backfill_next),
             )
 
 
@@ -162,6 +170,7 @@ def _checkpoint_rows(path: Path | None = None) -> list[dict[str, object]]:
                 """
                 SELECT data_type, provider_name, coverage_start, coverage_end,
                        seeded_from_import, last_attempt_at, last_success_at,
+                       history_backfill_next,
                        last_source_updated_at, last_reconciled_start,
                        last_reconciled_end, status, error_message
                 FROM sync_checkpoints ORDER BY data_type
@@ -211,6 +220,14 @@ def sync_plan(
         else:
             start = through_date
             kind = "catch_up"
+        # Older versions started a new HRV stream at today and never filled its past.
+        if checkpoint['data_type'] == 'hrv_metrics' and not reconcile_from and (coverage_start is None or checkpoint['history_backfill_next']):
+            with connect(path) as connection:
+                first = connection.execute("SELECT MIN(substr(recorded_at,1,10)) FROM metric_readings WHERE metric_type='sleep_duration'").fetchone()[0]
+            first = checkpoint['history_backfill_next'] or first
+            if first:
+                start = date.fromisoformat(first)
+                kind = 'history_backfill'
         days = max((through_date - start).days + 1, 0)
         plans.append(
             {
@@ -316,7 +333,7 @@ def _activity_values(record: dict[str, object]) -> dict[str, object]:
         "elevation_gain_meters": record.get("elevation_gain_meters"),
         "source_updated_at": record.get("source_updated_at"),
         "deleted_at": _now() if record.get("deleted") else None,
-        "raw_json": json.dumps(public_record, separators=(",", ":"), sort_keys=True),
+        "raw_json": encoded(record.get('source_payload') or public_record),
     }
 
 
@@ -381,12 +398,8 @@ def _activity_needs_detail(
             existing = _activity_fingerprint_match(connection, values)
         if existing is None:
             return True
-        return (
-            connection.execute(
-                "SELECT COUNT(*) FROM activity_samples WHERE activity_id = ?",
-                (existing["id"],),
-            ).fetchone()[0]
-            == 0
+        return existing['fit_detail_version'] < 1 or bool(
+            values['source_updated_at'] and values['source_updated_at'] != existing['source_updated_at']
         )
 
 
@@ -445,6 +458,7 @@ def _upsert_activity_detail(
         """,
         samples,
     )
+    preserve_fit_summary(connection, str(activity['id']), messages)
     return len(samples)
 
 
@@ -461,6 +475,12 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
     ).fetchone()
     if existing is None and not record.get("deleted"):
         existing = _activity_fingerprint_match(connection, values)
+    if existing is not None:
+        # Summary refreshes must not erase richer archive/FIT fields absent from the new response.
+        old = json.loads(existing['raw_json'] or '{}')
+        incoming = json.loads(values['raw_json'])
+        old.update(incoming)
+        values['raw_json'] = encoded(old)
     if record.get("deleted") and existing is None:
         return "unchanged"
     if record.get("deleted") and existing["deleted_at"]:
@@ -641,6 +661,8 @@ def _commit_interval(
     records: list[dict[str, object]],
     old_coverage_end: date | None,
     path: Path | None,
+    source_response: object = None,
+    backfill_through: date | None = None,
 ) -> dict[str, int]:
     counts = {"created": 0, "updated": 0, "unchanged": 0, "detail_samples": 0}
     with connect(path) as connection:
@@ -652,6 +674,9 @@ def _commit_interval(
                 else _upsert_metric(connection, record)
             )
             counts[result] += 1
+            if data_type == 'activities' and not record.get('deleted'):
+                activity = connection.execute('SELECT id, raw_json FROM activities WHERE source_record_id=? LIMIT 1', (str(record['source_record_id']),)).fetchone()
+                normalize_activity_metrics(connection, activity['id'], json.loads(activity['raw_json']))
             detail = record.get("_detail_fit")
             if data_type == "activities" and isinstance(detail, bytes):
                 counts["detail_samples"] += _upsert_activity_detail(
@@ -660,6 +685,10 @@ def _commit_interval(
                     detail,
                 )
         day = interval_date.isoformat()
+        if source_response is not None:
+            connection.execute('''INSERT INTO garmin_sync_payloads(data_type, calendar_date, payload_json)
+                VALUES (?, ?, ?) ON CONFLICT(data_type, calendar_date) DO UPDATE SET
+                payload_json=excluded.payload_json, updated_at=CURRENT_TIMESTAMP''', (data_type, day, encoded(source_response)))
         connection.execute(
             """
             INSERT INTO sync_intervals(
@@ -683,9 +712,13 @@ def _commit_interval(
         )
         coverage_end = max(old_coverage_end, interval_date) if old_coverage_end else interval_date
         source_updates = [str(record["source_updated_at"]) for record in records if record.get("source_updated_at")]
+        if backfill_through:
+            following = (interval_date + timedelta(days=1)).isoformat() if interval_date < backfill_through else None
+            connection.execute('UPDATE sync_checkpoints SET history_backfill_next=? WHERE data_type=?', (following, data_type))
         connection.execute(
             """
             UPDATE sync_checkpoints SET
+                coverage_start = CASE WHEN coverage_start IS NULL OR coverage_start > ? THEN ? ELSE coverage_start END,
                 coverage_end = ?, last_attempt_at = ?, last_success_at = ?,
                 last_source_updated_at = COALESCE(?, last_source_updated_at),
                 last_reconciled_start = CASE WHEN ? = 'reconciliation' THEN COALESCE(last_reconciled_start, ?) ELSE last_reconciled_start END,
@@ -694,6 +727,8 @@ def _commit_interval(
             WHERE data_type = ?
             """,
             (
+                day,
+                day,
                 coverage_end.isoformat(),
                 _now(),
                 _now(),
@@ -753,18 +788,24 @@ def run_sync(
     reconcile_from: date | None = None,
     interrupt_after: int | None = None,
     request_delay_seconds: float = 0,
+    data_types: tuple[str, ...] | None = None,
 ) -> dict[str, object]:
     """Run manual or scheduled sync through the same durable interval pipeline."""
     if provider.connection_status != "connected":
         raise SyncConnectionRequired("Garmin connection needs sign-in or renewal")
     if request_delay_seconds < 0 or request_delay_seconds > 60:
         raise ValueError("request_delay_seconds must be between 0 and 60")
+    if data_types is not None and (not data_types or set(data_types) - set(SYNC_DATA_TYPES) or len(set(data_types)) != len(data_types)):
+        raise ValueError('Invalid synchronization data types')
     plan = sync_plan(
         through_date,
         path,
         overlap_days=overlap_days,
         reconcile_from=reconcile_from,
     )
+    if data_types is not None:
+        plan['data_types'] = [item for item in plan['data_types'] if item['data_type'] in data_types]
+        plan['total_intervals'] = sum(item['days'] for item in plan['data_types'])
     job_id = _job_start(trigger, int(plan["total_intervals"]), path)
     completed = 0
     totals = {
@@ -798,6 +839,8 @@ def run_sync(
                 else None
             )
             with connect(path) as connection:
+                if data_plan['kind'] == 'history_backfill':
+                    connection.execute('UPDATE sync_checkpoints SET history_backfill_next=? WHERE data_type=?', (start.isoformat(), data_type))
                 connection.execute(
                     """
                     UPDATE sync_checkpoints SET
@@ -824,6 +867,9 @@ def run_sync(
                     else "gap"
                 )
                 try:
+                    prepare = getattr(provider, 'prepare_intervals', None)
+                    if offset == 0 and callable(prepare):
+                        prepare(data_type, start, through_date)
                     records = provider.fetch(data_type, interval_date, interval_date)
                     detail_fetcher = getattr(provider, "fetch_activity_detail", None)
                     if data_type == "activities" and callable(detail_fetcher):
@@ -842,6 +888,8 @@ def run_sync(
                         records,
                         old_end,
                         path,
+                        getattr(provider, 'interval_payload', None),
+                        through_date if data_plan['kind'] == 'history_backfill' else None,
                     )
                     totals["received"] += len(records)
                     for key in ("created", "updated", "unchanged"):

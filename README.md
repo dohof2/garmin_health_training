@@ -17,7 +17,7 @@ versioned JSON, backup ZIP, restore preview, and preserved-original downloads
 are available from the Import / Export screen. Live synchronization uses
 private local Garmin authentication, per-data-type full-gap checkpoints, a
 three-day overlap, restart recovery, historical reconciliation, and original
-FIT detail retrieval for activities missing sensor samples. It currently
+FIT detail retrieval with versioned session-summary recovery. Full queried source responses are retained locally; explicit activity load/effect and power/HR summary fields are normalized. It currently
 refreshes activities, daily summaries, sleep, HRV, and weight/body-composition
 data. Dashboard cards can be reordered, hidden, and
 restored, with the saved layout persisted locally in SQLite. Activity calendar
@@ -87,9 +87,10 @@ and [T11 verification](docs/status/t11-verification.md).
 
 ## Next steps
 
-1. Implement T12 daily training readiness, then T7 preferences and structured plans.
+1. Use Training to save preferences and review T7 foundation plans; T12 readiness remains advisory.
 2. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is verified locally.
-3. Continue with T8 Garmin workout publishing, T9 nutrition, and T10 daily-use launch/quit and recovery.
+3. Implement T9 nutrition, then T10 daily-use launch/quit, recovery and normal-use checks.
+4. Add T8 Garmin workout publishing last, once the local app works without it.
 
 ## Local development
 
@@ -162,3 +163,21 @@ SQLite integrity, and relationships without replacing the current database.
 ## Personal data
 
 Keep Garmin archives, activity files, meal photos, credentials, and local databases outside version control. The repository includes baseline ignore rules; future tests should use synthetic or deliberately anonymized fixtures.
+
+### Repair data omitted by earlier sync versions
+
+With the app stopped, create a backup from Import / Export before running recovery. To normalize preserved activity summaries and recover session metadata from the original local archive:
+
+```sh
+PYTHONPATH=backend .venv/bin/python -m app.sync_repair
+```
+
+Add `--live` to use the saved Garmin session for missing live activity summaries and historical HRV. Add `--skip-fit` when FIT recovery has already completed. The recovery updates existing records; it does not reimport sensor samples. Interrupted HRV history resumes from its committed date. Missing source values remain missing. See [sync recovery verification](docs/status/sync-recovery-verification.md).
+
+### Transparent training readiness
+
+The dashboard includes a provisional morning readiness card with personal HRV/RHR references, sleep adequacy and decayed workout load. Expand it for exact deductions, data gaps, a 14-morning trend, and editable versioned parameters. Missing inputs yield a range or insufficient data. Ask the assistant for training readiness to get the same advisory result. The prototype never changes a workout automatically; its weights are not prospectively validated. See [T12 verification](docs/status/t12-verification.md).
+
+## Training plans
+
+Open **Training** to save sports, availability, equipment, experience and restrictions. Only missing/stale answers require confirmation. Create a Monday draft, review its sessions and context, then explicitly accept it. Edit templates/duration and record completion, effort, soreness or missed sessions. Review next-week volume separately; saving limits leaves the existing calendar unchanged. Goals are optional. Foundation templates are local; Garmin publishing is T8. See [rules and limits](docs/planning/training-rules.md) and [verification](docs/status/t7-verification.md).

@@ -1,8 +1,8 @@
 # Garmin Health & Training App — Progress Status
 
 Last updated: 10 October 2026
-Overall status: **The T1–T5 core is operational. T6 implementation and local Qwen verification are complete; live OpenAI verification awaits an API key. T11 maintenance history is complete.**
-Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, navigation, local profile/goals settings, unit preferences, portable export/backup, and restore preview are operational. Private Garmin authentication stores owner-only session tokens locally. Live checkpoints now cover activities, daily summaries, sleep, HRV, and weight/body composition through 8 October 2026; the 28 September–8 October historical reconciliation completed without failures and removed all archive/live daily-metric duplicates. Daily synchronization is enabled only while the app is open, catches every missing day, and rechecks the latest three days. Original FIT details restored 6,568 sensor samples for the newest activities. SQLite quick-check and foreign keys pass. Local Qwen 3.5 2B/4B text/tool inference and the 2B vision path were benchmarked successfully. Selectable Qwen/Ollama and OpenAI provider adapters, grounded historical chat, similar-ride matching, and privacy-preserving GPS course matching are implemented. Natural token-expiry observation, optional importer UI conveniences, dashboard feedback, and live OpenAI verification remain. Goal-aware assessment and reviewed chat profile/goal changes are implemented.
+Overall status: **The T1–T5 core is operational. T6 implementation and local Qwen verification are complete; live OpenAI verification awaits an API key. T7 foundation planning, T11 maintenance history and the T12 readiness prototype are complete.**
+Current position: The ignored original Garmin ZIP remains immutable. All safely interpretable health/training history has been imported: core activities/metrics/samples, hydration, alerts, nutrition, and 26,143 extended training/biometric records across 48 categories. Every one of 298 outer files is classified (144 extended imports, 121 handled by dedicated stages, 33 private administrative exclusions, zero unsupported), and all 55,448 FIT files decoded without failure. The dashboard, navigation, local profile/goals settings, unit preferences, portable export/backup, and restore preview are operational. Private Garmin authentication stores owner-only session tokens locally. Live checkpoints now cover activities, daily summaries, sleep, HRV, and weight/body composition through 10 October 2026; omitted activity/FIT summaries and HRV history were recovered (1,434 HRV nights, 725 activity loads); the 28 September–8 October historical reconciliation completed without failures and removed all archive/live daily-metric duplicates. Daily synchronization is enabled only while the app is open, catches every missing day, and rechecks the latest three days. Original FIT details restored 6,568 sensor samples for the newest activities. SQLite quick-check and foreign keys pass. Local Qwen 3.5 2B/4B text/tool inference and the 2B vision path were benchmarked successfully. Selectable Qwen/Ollama and OpenAI provider adapters, grounded historical chat, similar-ride matching, and privacy-preserving GPS course matching are implemented. Natural token-expiry observation, optional importer UI conveniences, dashboard feedback, and live OpenAI verification remain. Goal-aware assessment and reviewed chat profile/goal changes are implemented.
 
 This is the quick status reference. Detailed requirements and acceptance criteria remain in [`../planning/health-training-app-plan.md`](../planning/health-training-app-plan.md) and [`../planning/implementation-tasks-and-your-input.md`](../planning/implementation-tasks-and-your-input.md).
 
@@ -25,7 +25,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | M2 — First dashboard | T5 | 🟡 Partial | Technical implementation and timezone/DST verification are complete; gradual U5 usability feedback remains |
 | M3 — Historical AI assistant | T6 | 🟡 Partial | Implementation complete: grounded history, ride/course comparison, conditional ride assessment, reviewed profile/goal changes, and regression checks. Local Qwen verified; live OpenAI verification awaits a key |
 | M3A — Maintenance history | T11 | ✅ Complete | Local chat commands, history/edit/undo, revisions, reviewed CSV portability, JSON and full backup restoration verified |
-| M4 — Training | T7–T8, T12 | ⬜ Not started | Transparent daily readiness, personalized planning, and Garmin publishing remain future implementation |
+| M4 — Training | T7–T8, T12 | 🟡 Partial | T7 foundation planning and T12 advisory readiness implemented and verified; T8 Garmin publishing is deferred until after T9/T10 and local normal-use validation |
 | M5 — Food and nutrition | T9 | ⬜ Not started | Manual logging precedes photo estimation |
 | M6 — Daily-use release | T10 | ⬜ Not started | Explicit launch/quit and open-session-only jobs remain required |
 
@@ -37,7 +37,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 |---|---|---|---|
 | T1.1 | Inspect OS, processor, memory, storage, and runtimes | ✅ Complete | M5 MacBook Air, 16 GiB memory, adequate storage; Python 3.13.15, Node.js 24.21.0 LTS, npm 11.19.0, SQLite, Git, and developer tools verified |
 | T1.2 | Inventory the real Garmin export | ✅ Complete | Original ZIP integrity and archive safety verified; 1,054 activities, 3,050 daily summaries, 2,908 sleep records, and 55,448 nested FIT files inventoried in `garmin-export-inventory.md` |
-| T1.3 | Define Garmin Connect coverage by data type/date | ✅ Complete | `live-data-coverage.md` records live, archive-only, excluded, and not-yet-normalized categories through 8 October 2026 |
+| T1.3 | Define Garmin Connect coverage by data type/date | ✅ Complete | `live-data-coverage.md` records live, archive-only, excluded, and not-yet-normalized categories through 10 October 2026 |
 | T1.4 | Test Garmin login and a small read-only query | ✅ Complete | Private local login succeeded; the saved-token session passed a live read-only check with 91 daily-summary fields and zero activities for the current day |
 | T1.5 | Benchmark free local text/tool and vision models | ✅ Complete | Qwen 3.5 2B produced the constrained tool result in 6.00s at 54.56 tok/s; 4B took 12.07s at 40.06 tok/s; the 2B vision path ran in 29.39s, with representative food-quality testing deferred to T9 |
 | T1.6 | Inspect running, cycling, and strength workout support | ✅ Complete | Library surface and sample payload capabilities inspected without publishing; real external validation remains T8/U7 |
@@ -48,7 +48,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
 | T2.1 | Set up backend/frontend, commands, pinned dependencies, and synthetic fixtures | ✅ Complete | React/TypeScript, FastAPI, pinned lock files, commands, and an idempotent fixture with 3 activities, 4 samples, and 14 metrics are tested |
-| T2.2 | Create schema and migrations | ✅ Complete | Ten repeatable migrations create 32 tables, including dedicated import records, sync checkpoints, full archive classification, and AI provider settings |
+| T2.2 | Create schema and migrations | ✅ Complete | Fifteen repeatable migrations create the application tables, including dedicated import records, sync checkpoints, full archive classification, and AI provider settings |
 | T2.3 | Add shared date/time/unit handling, validation, and calculations | ✅ Complete | Canonical metric units, numeric/timestamp validation, IANA-timezone dates, DST/week boundaries, and saved kilometre/mile display conversion are implemented; later modules extend the same rules |
 | T2.4 | Add local files, credential-store integration, redacted logs, and localhost-only access | ✅ Complete | Database and Garmin session tokens use ignored local `data/`; tokens are owner-only, passwords are not persisted, authentication errors are sanitized, and both servers bind to `127.0.0.1` |
 | T2.5 | Build navigation, empty/error states, and optional profile/goal settings | ✅ Complete | Responsive anchor navigation, backend/empty/error states, validated local profile fields, unit preferences, and multiple editable goals are implemented |
@@ -105,21 +105,23 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T7.1 | Context-aware questionnaire with saved answers | ⬜ Not started | U6 is collected during actual personalized use |
-| T7.2 | Structured strength, cycling, and running workout models | ⬜ Not started | No user input needed for base models |
-| T7.3 | Testable progression, recovery, and constraint rules | ⬜ Not started | Must respect restrictions and avoid diagnosis |
-| T7.4 | Reviewable weekly plans, editing, and substitutions | ⬜ Not started | Personalized output uses U6 when requested |
-| T7.5 | Completion, effort, soreness, missed-session, and revision tracking | ⬜ Not started | No silent plan rewrites |
-| T7.6 | Test conflicts, equipment, missing goals, stale data, and restrictions | ⬜ Not started | Goals remain optional |
+| T7.1 | Context-aware questionnaire with saved answers | ✅ Complete | Saved per-field confirmations; only missing/stale questions; U6 collected in Training during use |
+| T7.2 | Structured strength, cycling, and running workout models | ✅ Complete | Timed conversational endurance and constrained strength foundation templates |
+| T7.3 | Testable progression, recovery, and constraint rules | ✅ Complete | Documented provisional volume/recovery defaults; constraints and adjacent-week recovery tested |
+| T7.4 | Reviewable weekly plans, editing, and substitutions | ✅ Complete | Explicit draft/accept flow, context and explanations, template/duration substitutions; date rescheduling remains an extension |
+| T7.5 | Completion, effort, soreness, missed-session, and revision tracking | ✅ Complete | Completion, feedback, immutable revisions and explicit next-week proposals; no silent calendar changes |
+| T7.6 | Test conflicts, equipment, missing goals, stale data, and restrictions | ✅ Complete | 177 backend tests plus TypeScript/build and isolated synthetic browser verification; see t7-verification.md |
 
 ### T8 — Publish and schedule Garmin workouts
 
+Deferred to the last implementation stage by user decision, after T9, T10 and local normal-use verification.
+
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T8.1 | Map sport sessions to supported Garmin fields | ⬜ Not started | Unsupported representations must be visible |
-| T8.2 | Preview, publish, schedule, and read-back verification | ⬜ Not started | External write requires deliberate user action |
-| T8.3 | Remote IDs, retry safety, edits, rescheduling, and removal | ⬜ Not started | Retries must not create duplicates |
-| T8.4 | Validate one workout per supported sport in Garmin/device | ⏳ Waiting for user input | Requires U7 and U2 if disconnected |
+| T8.1 | Map sport sessions to supported Garmin fields | 🔒 Deferred | Unsupported representations must be visible; final stage after the local app works |
+| T8.2 | Preview, publish, schedule, and read-back verification | 🔒 Deferred | External write requires deliberate user action; final stage after the local app works |
+| T8.3 | Remote IDs, retry safety, edits, rescheduling, and removal | 🔒 Deferred | Retries must not create duplicates; final stage after the local app works |
+| T8.4 | Validate one workout per supported sport in Garmin/device | 🔒 Deferred | Requires U7 and U2 if disconnected; final stage after the local app works |
 
 ### T9 — Add food logging and nutrition status
 
@@ -160,12 +162,12 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T12.1 | Define a transparent 0–100 readiness model from HRV, sleep score/duration, time since training, recent training load, and resting heart rate | ⬜ Not started | Research public evidence and official metric definitions; do not claim to reproduce proprietary Garmin/Fitbit algorithms |
-| T12.2 | Add personalized rolling baselines, minimum history, weights, recovery windows, and formula versioning | ⬜ Not started | Must remain inspectable, configurable, and historically explainable |
-| T12.3 | Compute a morning score, readiness band, contributors, freshness, missing inputs, and confidence | ⬜ Not started | Missing/stale inputs lower confidence rather than being invented |
-| T12.4 | Add a dashboard card and trend view with plain-language explanations | ⬜ Not started | Recalculate when corrected or late Garmin data arrives; refine through U5 feedback |
-| T12.5 | Expose readiness as advisory evidence to AI/planning without silent plan changes or medical claims | ⬜ Not started | User confirmation remains required before changing a planned session |
-| T12.6 | Test recovery/load/sleep/HRV/RHR scenarios, partial data, baselines, date boundaries, late corrections, and formula upgrades | ⬜ Not started | Real-use feedback is optional; a vendor score is not treated as ground truth |
+| T12.1 | Define a transparent 0–100 readiness model from HRV, sleep score/duration, time since training, recent training load, and resting heart rate | ✅ Complete | Versioned three-group prototype and evidence boundaries documented in `../planning/readiness-algorithm.md`; calibration remains provisional |
+| T12.2 | Add personalized rolling baselines, minimum history, weights, recovery windows, and formula versioning | ✅ Complete | Past-only robust personal references, validated editable parameters, load decay, immutable formula/configuration identities and snapshots |
+| T12.3 | Compute a morning score, readiness band, contributors, freshness, missing inputs, and confidence | ✅ Complete | Completed-sleep morning cutoff, previous-day RHR context, exact deductions, bands, partial ranges, data-quality and sensitivity flags |
+| T12.4 | Add a dashboard card and trend view with plain-language explanations | ✅ Complete | Hide/reorder dashboard card, 14-morning trend, contributors, input dates, baseline counts and parameter form; refresh after corrected sync data |
+| T12.5 | Expose readiness as advisory evidence to AI/planning without silent plan changes or medical claims | ✅ Complete | Shared advisory tool and deterministic Qwen/OpenAI answer; local Qwen verified; no workout/plan mutations |
+| T12.6 | Test recovery/load/sleep/HRV/RHR scenarios, partial data, baselines, date boundaries, late corrections, and formula upgrades | ✅ Complete | 157 backend tests plus TypeScript/build; timing/DST/coverage, scenarios, monotonicity, revisions, API, portability and synthetic browser checks; prospective usefulness remains unvalidated |
 
 ## User-input tracker
 
@@ -176,7 +178,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | U3 | Device/sensor inventory | ✅ Removed | Garmin Connect is the sole external data source; no inventory required |
 | U4 | Background-operation decision | 🔒 Deferred | Later edition only; first edition has none |
 | U5 | Dashboard usability feedback | ⏳ Ready when convenient | The first working desktop/mobile dashboard is available; feedback can be provided gradually |
-| U6 | Training availability/equipment/experience/restrictions | ⏳ Not needed yet | Asked just in time during personalized use |
+| U6 | Training availability/equipment/experience/restrictions | ⏳ Ready during use | Saved Training questions are available; no real answers invented |
 | U7 | Deliberate test-workout publication and device check | ⏳ Not needed yet | T8 validation, one test per supported sport |
 | U8 | Nutrition inputs and optional known-portion meals | ⏳ Not needed yet | Personalized target and food validation |
 | U9 | Free food-API key, only if required | ⏳ Not needed yet | Only if a downloadable database is unsuitable |
@@ -196,4 +198,8 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 ## Immediate next action
 
-Proceed to T12 transparent daily readiness, then T7 training preferences and structured plans. T11 maintenance is complete; details are in `t11-verification.md`. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.
+T7 foundation training planning is implemented and verified; see `t7-verification.md`. Next implementation milestone is T9 nutrition, followed by T10 daily-use lifecycle/recovery and normal-use validation. T8 Garmin workout publishing comes last. T12 readiness is implemented as a provisional advisory prototype; see `t12-verification.md`. T11 maintenance is complete; details are in `t11-verification.md`. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.
+
+## Sync recovery verification — 10 October 2026
+
+Repaired stripped live activity summaries, omitted FIT session fields, and the historical HRV bootstrap/resume gap. Recovered 1,045 preserved FIT summaries without reimporting samples; all five live streams synced successfully through 10 October. 135 backend tests, TypeScript checks, and production build pass. See `sync-recovery-verification.md` for counts, remaining source limitations, and repeat-sync evidence.

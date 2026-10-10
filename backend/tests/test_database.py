@@ -29,12 +29,16 @@ class DatabaseMigrationTests(unittest.TestCase):
                     "010_ai_provider_settings.sql",
                     "011_ai_settings_actions.sql",
                     "012_maintenance.sql",
+                    "013_sync_summary_recovery.sql",
+                    "014_hrv_backfill_resume.sql",
+                    "015_readiness.sql",
+                    "016_training_planning.sql",
                 ],
             )
             self.assertEqual(migrate(database), [])
 
             status = schema_status(database)
-            self.assertEqual(status["migrations"], 12)
+            self.assertEqual(status["migrations"], 16)
             self.assertGreaterEqual(status["tables"], 15)
 
             with closing(sqlite3.connect(database)) as connection:

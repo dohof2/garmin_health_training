@@ -14,6 +14,8 @@ from .ai_chat import chat_stream
 from .ai_providers import provider_status, save_ai_settings
 from .ai_tools import execute_tool, tool_definitions
 from .dashboard import dashboard_card_layout, save_dashboard_card_layout
+from .readiness import readiness_history, get_readiness_settings, save_readiness_settings
+from .training import training_context, save_preferences, draft_week, list_training, accept_plan, update_workout, progression_proposal
 from .database import migrate, schema_status
 from .extended_archive_import import (
     ExtendedArchiveImportError,
@@ -96,6 +98,30 @@ class DashboardCardUpdate(BaseModel):
 
 class DashboardLayoutUpdate(BaseModel):
     cards: list[DashboardCardUpdate]
+
+
+class ReadinessSettingsUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    parameters: dict[str, object]
+
+
+class TrainingPreferencesUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    answers: dict[str, object]
+    expected_revision: int = Field(ge=0, strict=True)
+
+
+class TrainingWeekRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    week_start: date
+    timezone: str
+    expected_preference_revision: int = Field(ge=0, strict=True)
+
+
+class TrainingWorkoutUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    changes: dict[str, object]
+    expected_revision: int = Field(ge=1, strict=True)
 
 
 class GarminLoginRequest(BaseModel):
@@ -364,6 +390,74 @@ def weekly_calories() -> dict[str, object] | None:
 @app.get("/api/dashboard/cards")
 def dashboard_cards() -> list[dict[str, object]]:
     return dashboard_card_layout()
+
+
+@app.get("/api/readiness")
+def training_readiness(end_date: date | None = None, days: int = Query(default=14, ge=1, le=90), timezone: str = "UTC", config_version: str | None = None):
+    try:
+        return readiness_history(end_date, days, timezone, config_version=config_version)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/readiness/settings")
+def readiness_settings():
+    return get_readiness_settings()
+
+
+@app.get("/api/training/context")
+def get_training_preferences():
+    return training_context()
+
+
+@app.put("/api/training/preferences")
+def update_training_preferences(payload: TrainingPreferencesUpdate):
+    try:
+        return save_preferences(payload.answers, payload.expected_revision)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/training")
+def training_history():
+    return list_training()
+
+
+@app.get("/api/training/progression")
+def training_progression():
+    return progression_proposal()
+
+
+@app.post("/api/training/draft")
+def draft_training_week(payload: TrainingWeekRequest):
+    try:
+        return draft_week(payload.week_start, payload.timezone, payload.expected_preference_revision)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post("/api/training/plans/{plan_id}/accept")
+def accept_training_plan(plan_id: str):
+    try:
+        return accept_plan(plan_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.patch("/api/training/workouts/{workout_id}")
+def edit_training_workout(workout_id: str, payload: TrainingWorkoutUpdate):
+    try:
+        return update_workout(workout_id, payload.expected_revision, payload.changes)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.put("/api/readiness/settings")
+def update_readiness_settings(payload: ReadinessSettingsUpdate):
+    try:
+        return save_readiness_settings(payload.parameters)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.put("/api/dashboard/cards")

@@ -106,6 +106,7 @@ class AIToolTests(unittest.TestCase):
                 "compare_periods",
                 "find_similar_rides",
                 "find_same_course_rides",
+                "get_training_readiness",
                 "assess_ride",
                 "running_volume_trend",
                 "get_training_context",

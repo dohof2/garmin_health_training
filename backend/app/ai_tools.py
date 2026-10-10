@@ -1483,7 +1483,10 @@ def export_maintenance_tool(arguments, path=None):
 
 
 ToolHandler = Callable[[dict[str, object], Path | None], dict[str, object]]
+from .readiness import get_readiness_tool
+
 TOOL_HANDLERS: dict[str, ToolHandler] = {
+    "get_training_readiness": get_readiness_tool,
     "get_health_summary": get_health_summary_tool,
     "list_activities": list_activities_tool,
     "compare_periods": compare_periods_tool,
@@ -1500,6 +1503,9 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "export_maintenance": export_maintenance_tool,
 }
 TOOL_DEFINITIONS.extend([
+    {"name": "get_training_readiness", "description": "Return the application's advisory morning readiness estimate, exact deductions, data gaps, personal references and provisional formula. Missing evidence yields a range or insufficient data. Never change a workout from this result.",
+     "input_schema": {"type": "object", "properties": {"date": {"type": ["string", "null"], "format": "date"},
+         "timezone": {"type": ["string", "null"]}}, "additionalProperties": False}},
     {"name": "assess_ride", "description": "Assess recorded ride evidence against user-stated session intent; otherwise give conditional interpretations. Omit id for latest ride. Do not invent intent or targets.",
      "input_schema": {"type": "object", "properties": {
          "reference_activity_id": {"type": ["string", "null"]}, "timezone": {"type": ["string", "null"]},

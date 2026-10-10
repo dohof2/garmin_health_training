@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import math
 import threading
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -15,6 +16,7 @@ from garminconnect import (
 from garminconnect.client import token_file_path
 
 from .config import data_directory
+from .activity_metrics import source_payload
 from .database import connect, migrate
 from .sync import SyncConnectionRequired, SyncError
 
@@ -229,13 +231,16 @@ def _iso_timestamp(value: object) -> str | None:
 
 
 def _activity_type(record: dict[str, object]) -> str:
-    raw = record.get("activityType")
+    raw = record.get("activityType") or record.get('activityTypeDTO')
     if isinstance(raw, dict):
         return str(raw.get("typeKey") or raw.get("parentTypeId") or "unknown")
     return str(raw or record.get("activityTypeDTO") or "unknown")
 
 
 def _normalise_activity(record: dict[str, object]) -> dict[str, object]:
+    payload = source_payload(record)
+    if isinstance(record.get('summaryDTO'), dict):
+        record = {**record, **record['summaryDTO']}
     source_id = record.get("activityId") or record.get("activityUUID")
     if source_id is None:
         raise SyncError("Garmin activity response is missing its activity ID")
@@ -248,6 +253,7 @@ def _normalise_activity(record: dict[str, object]) -> dict[str, object]:
     )
     return {
         "source_record_id": str(source_id),
+        "source_payload": payload,
         "activity_type": _activity_type(record),
         "name": record.get("activityName"),
         "started_at": started_at,
@@ -340,6 +346,8 @@ def _metric(
         number = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(number):
+        return None
     return {
         "source_record_id": source_record_id,
         "metric_type": metric_type,
@@ -395,7 +403,11 @@ def _normalise_hrv(record: object, calendar_date: str) -> list[dict[str, object]
         return []
     summary = record.get("hrvSummary")
     if not isinstance(summary, dict):
+        if summary is not None:
+            raise SyncError('Garmin HRV summary is malformed')
         return []
+    if summary.get('calendarDate') and str(summary['calendarDate']) != calendar_date:
+        raise SyncError('Garmin HRV summary date did not match the requested date')
     source_id = f"hrv:{calendar_date}"
     metrics: list[dict[str, object]] = []
     for field, metric_type in (
@@ -448,42 +460,105 @@ class GarminConnectProvider:
 
     def __init__(self, client: Garmin):
         self.client = client
+        self.interval_payload = None
+        self._hrv_history = {}
+
+    def prepare_intervals(self, data_type: str, start_date: date, end_date: date):
+        """Batch a historical HRV query; daily sync retains the detailed daily response."""
+        self._hrv_history = {}
+        if data_type != 'hrv_metrics' or (end_date - start_date).days < 31:
+            return
+        day = start_date
+        while day <= end_date:
+            last = min(date.fromordinal(day.toordinal() + 89), end_date)
+            response = self.client.get_hrv_data_range(day.isoformat(), last.isoformat())
+            if response is None or response == {}:
+                response = {'hrvSummaries': []}
+            if isinstance(response, dict) and 'hrvSummaries' in response and response['hrvSummaries'] is None:
+                response = {**response, 'hrvSummaries': []}
+            if not isinstance(response, dict) or not isinstance(response.get('hrvSummaries'), list):
+                raise SyncError('Garmin HRV range response is malformed; coverage was not advanced')
+            summaries = {}
+            for summary in response['hrvSummaries']:
+                if not isinstance(summary, dict) or not summary.get('calendarDate'):
+                    raise SyncError('Garmin HRV range contains an invalid date')
+                key = str(summary['calendarDate'])
+                parsed = date.fromisoformat(key)
+                if not day <= parsed <= last or key in summaries:
+                    raise SyncError('Garmin HRV range has duplicate or out-of-range dates')
+                summaries[key] = summary
+            for offset in range((last - day).days + 1):
+                key = date.fromordinal(day.toordinal() + offset).isoformat()
+                self._hrv_history[key] = {'hrvSummary': summaries.get(key), 'history_summary_only': True}
+            day = date.fromordinal(last.toordinal() + 1)
 
     @classmethod
     def from_saved_session(cls, path: Path | None = None) -> "GarminConnectProvider":
         return cls(load_client(path))
 
     def fetch(self, data_type: str, start_date: date, end_date: date) -> list[dict[str, object]]:
+        self.interval_payload = None
         if data_type == "activities":
             records = self.client.get_activities_by_date(
                 start_date.isoformat(), end_date.isoformat()
             )
-            return [_normalise_activity(dict(record)) for record in records]
+            if not isinstance(records, list):
+                raise SyncError('Garmin activities response is malformed')
+            enriched = []
+            for record in records:
+                payload = dict(record)
+                summary_fetcher = getattr(self.client, 'get_activity', None)
+                if callable(summary_fetcher):
+                    detail = summary_fetcher(str(record['activityId']))
+                    if not isinstance(detail, dict) or not isinstance(detail.get('summaryDTO'), dict):
+                        raise SyncError('Garmin activity summary response is malformed')
+                    if str(detail.get('activityId')) != str(record['activityId']):
+                        raise SyncError('Garmin activity summary ID did not match')
+                    payload.update(detail)
+                enriched.append(payload)
+            self.interval_payload = source_payload(enriched)
+            return [_normalise_activity(record) for record in enriched]
         if data_type == "daily_metrics":
             metrics: list[dict[str, object]] = []
+            payloads = []
             day = start_date
             while day <= end_date:
                 summary = self.client.get_user_summary(day.isoformat())
+                payloads.append(source_payload(summary))
                 if isinstance(summary, dict):
                     metrics.extend(_normalise_summary(summary, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
+            self.interval_payload = payloads[0] if len(payloads) == 1 else payloads
             return metrics
         if data_type == "sleep_metrics":
             metrics: list[dict[str, object]] = []
+            payloads = []
             day = start_date
             while day <= end_date:
-                metrics.extend(_normalise_sleep(self.client.get_sleep_data(day.isoformat()), day.isoformat()))
+                payload = self.client.get_sleep_data(day.isoformat())
+                payloads.append(source_payload(payload))
+                metrics.extend(_normalise_sleep(payload, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
+            self.interval_payload = payloads[0] if len(payloads) == 1 else payloads
             return metrics
         if data_type == "hrv_metrics":
             metrics: list[dict[str, object]] = []
+            payloads = []
             day = start_date
             while day <= end_date:
-                metrics.extend(_normalise_hrv(self.client.get_hrv_data(day.isoformat()), day.isoformat()))
+                payload = self._hrv_history.get(day.isoformat())
+                if payload is None:
+                    payload = self.client.get_hrv_data(day.isoformat())
+                    if payload is not None and not isinstance(payload, dict):
+                        raise SyncError('Garmin HRV response is malformed')
+                payloads.append(source_payload(payload))
+                metrics.extend(_normalise_hrv(payload, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
+            self.interval_payload = payloads[0] if len(payloads) == 1 else payloads
             return metrics
         if data_type == "weight_metrics":
             records = self.client.get_weigh_ins(start_date.isoformat(), end_date.isoformat())
+            self.interval_payload = source_payload(records)
             return _normalise_weight(records, start_date.isoformat())
         raise SyncError(f"Unsupported Garmin data type: {data_type}")
 

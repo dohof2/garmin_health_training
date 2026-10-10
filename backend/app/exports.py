@@ -45,7 +45,7 @@ CSV_DATASETS: dict[str, tuple[str, str]] = {
         """
         SELECT id, training_plan_id, sport, title, scheduled_for,
                definition_json, garmin_workout_id, publish_status,
-               created_at, updated_at
+               revision, completion_status, created_at, updated_at
         FROM planned_workouts
         """,
         "scheduled_for",
@@ -61,8 +61,17 @@ CSV_DATASETS: dict[str, tuple[str, str]] = {
 }
 
 PORTABLE_TABLES = (
+    "training_preferences",
+    "training_preference_revisions",
+    "training_workout_revisions",
+    "training_feedback",
+    "readiness_configs",
+    "readiness_settings",
+    "readiness_calculations",
     "activities",
     "activity_samples",
+    "activity_metrics",
+    "garmin_sync_payloads",
     "metric_readings",
     "health_samples",
     "hydration_events",
@@ -83,6 +92,8 @@ PORTABLE_TABLES = (
 )
 
 TABLE_DATE_COLUMNS = {
+    "readiness_calculations": "calendar_date",
+    "garmin_sync_payloads": "calendar_date",
     "activities": "started_at",
     "activity_samples": "recorded_at",
     "metric_readings": "recorded_at",
@@ -205,6 +216,17 @@ def export_json(
                 start_date,
                 end_date,
             )
+            if table in ("activity_metrics", "training_feedback", "training_workout_revisions") and (start_date or end_date):
+                parent = "activities" if table == "activity_metrics" else "planned_workouts"
+                date_column = "started_at" if table == "activity_metrics" else "scheduled_for"
+                child_column = "activity_id" if table == "activity_metrics" else "workout_id"
+                parent_query, values = _dated_query(
+                    f"SELECT id FROM {parent}", date_column, start_date, end_date
+                )
+                query = (
+                    f"SELECT * FROM {table} WHERE {child_column} IN ("
+                    + parent_query + ") ORDER BY rowid"
+                )
             count = 0
             for row in connection.execute(query, values):
                 if count:
