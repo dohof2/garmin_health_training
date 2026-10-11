@@ -20,17 +20,17 @@ def history_summary(
     timezone_info(timezone_name)
     with connect(path) as connection:
         activity_count = connection.execute(
-            "SELECT COUNT(*) FROM activities WHERE deleted_at IS NULL"
+            "SELECT COUNT(*) FROM activities WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'"
         ).fetchone()[0]
         metric_count = connection.execute(
-            "SELECT COUNT(*) FROM metric_readings"
+            "SELECT COUNT(*) FROM metric_readings WHERE source_name != 'synthetic_fixture'"
         ).fetchone()[0]
         latest_activity = connection.execute(
             """
             SELECT id, activity_type, name, started_at, duration_seconds,
                    distance_meters, calories_kcal, source_name, timezone
             FROM activities
-            WHERE deleted_at IS NULL
+            WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
             ORDER BY started_at DESC
             LIMIT 1
             """
@@ -39,7 +39,7 @@ def history_summary(
             """
             SELECT value, unit, recorded_at, source_name
             FROM metric_readings
-            WHERE metric_type = 'steps'
+            WHERE metric_type = 'steps' AND source_name != 'synthetic_fixture'
             ORDER BY recorded_at DESC
             LIMIT 1
             """
@@ -48,9 +48,9 @@ def history_summary(
             row[0]
             for row in connection.execute(
                 """
-                SELECT source_name FROM activities WHERE deleted_at IS NULL
+                SELECT source_name FROM activities WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
                 UNION
-                SELECT source_name FROM metric_readings
+                SELECT source_name FROM metric_readings WHERE source_name != 'synthetic_fixture'
                 """
             )
         }
@@ -58,11 +58,11 @@ def history_summary(
             """
             SELECT started_at, timezone
             FROM activities
-            WHERE deleted_at IS NULL
+            WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
             """
         ).fetchall()
         latest_metric_at = connection.execute(
-            "SELECT MAX(recorded_at) FROM metric_readings"
+            "SELECT MAX(recorded_at) FROM metric_readings WHERE source_name != 'synthetic_fixture'"
         ).fetchone()[0]
 
     latest_activity_data = dict(latest_activity) if latest_activity else None
@@ -174,6 +174,7 @@ def list_activities(
     end_date: date | None = None,
     timezone_name: str | None = None,
     path: Path | None = None,
+    offset: int = 0,
 ) -> list[dict[str, object]]:
     if start_date and end_date and start_date > end_date:
         raise ValueError("start_date must be on or before end_date")
@@ -184,7 +185,7 @@ def list_activities(
                duration_seconds, distance_meters, calories_kcal,
                elevation_gain_meters, source_name
         FROM activities
-        WHERE deleted_at IS NULL
+        WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
     """
     query += " ORDER BY started_at DESC"
 
@@ -192,6 +193,8 @@ def list_activities(
         rows = connection.execute(query).fetchall()
 
     activities: list[dict[str, object]] = []
+    if offset < 0: raise ValueError("offset must be nonnegative")
+    skipped = 0
     for row in rows:
         activity = dict(row)
         timezone_used = select_timezone(activity.get("timezone"), timezone_name)
@@ -202,6 +205,9 @@ def list_activities(
         if start_date and local_date < start_date:
             continue
         if end_date and local_date > end_date:
+            continue
+        if skipped < offset:
+            skipped += 1
             continue
         activity["local_date"] = local_date.isoformat()
         activity["timezone_used"] = timezone_used
@@ -224,7 +230,7 @@ def get_activity(
                    duration_seconds, distance_meters, calories_kcal,
                    elevation_gain_meters, source_name
             FROM activities
-            WHERE id = ? AND deleted_at IS NULL
+            WHERE id = ? AND deleted_at IS NULL AND source_name != 'synthetic_fixture'
             """,
             (activity_id,),
         ).fetchone()
@@ -268,10 +274,11 @@ def list_metrics(
     query = """
         SELECT id, metric_type, recorded_at, value, unit, source_name
         FROM metric_readings
+        WHERE source_name != 'synthetic_fixture'
     """
     parameters: list[object] = []
     if metric_type:
-        query += " WHERE metric_type = ?"
+        query += " AND metric_type = ?"
         parameters.append(metric_type)
     query += " ORDER BY recorded_at DESC LIMIT ?"
     parameters.append(limit)

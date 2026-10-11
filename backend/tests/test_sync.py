@@ -74,9 +74,9 @@ class SyncTests(unittest.TestCase):
                 result = run_sync(provider, through, database, overlap_days=0)
                 status = sync_status(database)
 
-                self.assertEqual(plan["total_intervals"], gap_days * 2 + 3)
+                self.assertEqual(plan["total_intervals"], gap_days * 2 + 5)
                 self.assertEqual(result["status"], "completed")
-                self.assertEqual(status["verified_empty_intervals"], gap_days * 2 + 3)
+                self.assertEqual(status["verified_empty_intervals"], gap_days * 2 + 5)
                 self.assertTrue(
                     all(item["coverage_end"] == through.isoformat() for item in status["checkpoints"])
                 )

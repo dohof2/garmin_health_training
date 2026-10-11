@@ -17,6 +17,7 @@ from .charts import catalog, chart_data, read_layout, save_layout, add_weight
 from .dashboard import dashboard_card_layout, save_dashboard_card_layout
 from .readiness import readiness_history, get_readiness_settings, save_readiness_settings
 from .training import training_context, save_preferences, draft_week, list_training, accept_plan, update_workout, progression_proposal
+from .training_coach import read_brief, save_brief, preview as coach_preview, create_draft as coach_draft, parse_request
 from .nutrition import food_search, preview_meal, save_meal, remove_meal, daily_status, save_library, list_library, scale_library, target_preview, save_target, target_history
 from .food_vision import analyze_photo
 from .database import migrate, schema_status
@@ -82,6 +83,8 @@ from .wellness_import import (
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     migrate()
+    from .activity_metrics import backfill_fit_ascent
+    backfill_fit_ascent()
     recover_interrupted_sync_jobs()
     yield
 
@@ -268,6 +271,22 @@ class TrainingPreferencesUpdate(BaseModel):
     expected_revision: int = Field(ge=0, strict=True)
 
 
+class CoachingRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    brief: dict[str, object]
+    week_start: date
+    timezone: str
+    message: str | None = Field(default=None, max_length=4000)
+    replace_plan_id: str | None = Field(default=None, max_length=160)
+    fingerprint: str | None = Field(default=None, max_length=64)
+
+
+class CoachingBriefUpdate(BaseModel):
+    model_config = {"extra": "forbid"}
+    brief: dict[str, object]
+    expected_revision: int = Field(ge=0, strict=True)
+
+
 class TrainingWeekRequest(BaseModel):
     model_config = {"extra": "forbid"}
     week_start: date
@@ -336,6 +355,7 @@ class AIChatMessage(BaseModel):
 
 
 class AIChatRequest(BaseModel):
+    coaching_context: dict[str, object] | None = None
     plot_context: list[dict[str, object]] | None = Field(default=None, max_length=4)
     ride_context: str | None = Field(default=None, max_length=160)
     operation_id: str | None = Field(default=None, min_length=1, max_length=120)
@@ -463,6 +483,7 @@ def ai_chat(payload: AIChatRequest) -> StreamingResponse:
             clarification_id=payload.clarification_id,
             plot_context=payload.plot_context,
             ride_context=payload.ride_context,
+            coaching_context=payload.coaching_context,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
@@ -561,6 +582,15 @@ def training_readiness(end_date: date | None = None, days: int = Query(default=1
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.get("/api/readiness/forecast")
+def tomorrow_readiness(timezone: str = "UTC"):
+    from .readiness_forecast import forecast
+    try:
+        return forecast(timezone)
+    except ValueError as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @app.get("/api/readiness/settings")
 def readiness_settings():
     return get_readiness_settings()
@@ -577,6 +607,36 @@ def update_training_preferences(payload: TrainingPreferencesUpdate):
         return save_preferences(payload.answers, payload.expected_revision)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get("/api/training/coach")
+def get_coaching_brief():
+    return read_brief()
+
+
+@app.put("/api/training/coach")
+def put_coaching_brief(payload: CoachingBriefUpdate):
+    try:
+        return save_brief(payload.brief,payload.expected_revision)
+    except ValueError as error:
+        raise HTTPException(status_code=400,detail=str(error)) from error
+
+
+@app.post("/api/training/coach/preview")
+def preview_coaching_plan(payload: CoachingRequest):
+    try:
+        brief,recognized=parse_request(payload.message,payload.brief,payload.week_start) if payload.message else (payload.brief,[])
+        return {**coach_preview(brief,payload.week_start,payload.timezone,replace_plan_id=payload.replace_plan_id), 'recognized':recognized}
+    except ValueError as error:
+        raise HTTPException(status_code=400,detail=str(error)) from error
+
+
+@app.post("/api/training/coach/draft")
+def draft_coaching_plan(payload: CoachingRequest):
+    try:
+        return coach_draft(payload.brief,payload.week_start,payload.timezone,payload.fingerprint,replace_plan_id=payload.replace_plan_id)
+    except ValueError as error:
+        raise HTTPException(status_code=400,detail=str(error)) from error
 
 
 @app.get("/api/training")
@@ -634,6 +694,7 @@ def update_dashboard_cards(payload: DashboardLayoutUpdate) -> list[dict[str, obj
 @app.get("/api/activities")
 def activities(
     limit: int = Query(default=20, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     start_date: date | None = None,
     end_date: date | None = None,
     timezone: str | None = None,
@@ -641,6 +702,7 @@ def activities(
     try:
         return list_activities(
             limit=limit,
+            offset=offset,
             start_date=start_date,
             end_date=end_date,
             timezone_name=timezone,
@@ -938,7 +1000,26 @@ def garmin_import(
             detail="Import requires confirm=true after reviewing the preview.",
         )
     try:
-        return import_garmin_export()
+        from .fit_import import import_fit_activity_samples
+        from .xml_activity_import import import_xml_activity_details
+        from .health_fit_import import import_health_fit_samples
+        result = import_garmin_export()
+        stages = {}
+        for name, importer in (
+            ('activity_fit', import_fit_activity_samples),
+            ('activity_xml', import_xml_activity_details),
+            ('health_fit', import_health_fit_samples),
+            ('wellness', import_wellness_records),
+            ('extended', import_extended_archive),
+        ):
+            try:
+                stages[name] = importer()
+            except (ValueError, OSError, RuntimeError) as error:
+                stages[name] = {'status': 'failed', 'error': str(error)}
+        result['stages'] = stages
+        if any(stage.get('status') != 'completed' for stage in stages.values()):
+            result['status'] = 'completed_with_failures'
+        return result
     except FileNotFoundError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
     except GarminImportError as error:

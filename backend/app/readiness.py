@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from .database import connect
 from .time_utils import timezone_info
 
-FORMULA_VERSION = 'readiness-v1'
+FORMULA_VERSION = 'readiness-v2'
 DEFAULTS = {
     'sleep_target_hours': 8.0, 'load_half_life_hours': 36.0,
     'autonomic_weight': 40.0, 'sleep_weight': 35.0, 'workload_weight': 25.0,
@@ -66,6 +66,10 @@ def get_readiness_settings(path: Path | None = None):
         version = _config(c, {})
         c.execute('INSERT OR IGNORE INTO readiness_settings(id,config_version) VALUES (1,?)', (version,))
         row = c.execute('SELECT r.* FROM readiness_configs r JOIN readiness_settings s ON s.config_version=r.version WHERE s.id=1').fetchone()
+        if row['formula_version'] != FORMULA_VERSION:
+            version = _config(c, json.loads(row['parameters_json']))
+            c.execute('UPDATE readiness_settings SET config_version=? WHERE id=1',(version,))
+            row = c.execute('SELECT * FROM readiness_configs WHERE version=?',(version,)).fetchone()
         return {'config_version': row['version'], 'formula_version': row['formula_version'], 'parameters': json.loads(row['parameters_json']), 'caution': CAUTION}
 
 
@@ -200,7 +204,7 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
     sleep = series.get('sleep_duration', {}).get(key)
     wake = stamp(sleep.get('period_end')) if sleep else None
     cutoff = datetime.combine(day, time(p['morning_hour']), zone).astimezone(timezone.utc)
-    if wake and wake > cutoff:
+    if wake:
         cutoff = wake
     warnings = ['rhr_previous_day_context', 'historical_estimate_uses_current_corrected_records']
     inputs = {}
@@ -313,12 +317,12 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
 
 
 def _load(c, start, end):
-    rows = [dict(r) for r in c.execute('''SELECT * FROM metric_readings WHERE metric_type IN
+    rows = [dict(r) for r in c.execute('''SELECT * FROM metric_readings WHERE source_name != 'synthetic_fixture' AND metric_type IN
         ('hrv_last_night_average','resting_heart_rate','sleep_duration','sleep_score') AND substr(recorded_at,1,10) BETWEEN ? AND ?''',
         ((start-timedelta(days=2)).isoformat(),(end+timedelta(days=1)).isoformat()))]
     activities = [dict(r) for r in c.execute('''SELECT a.*,m.value AS load,m.source_method AS load_method,m.source_field FROM activities a
         LEFT JOIN activity_metrics m ON m.activity_id=a.id AND m.metric_type='exercise_load' AND m.unit='garmin_load'
-        WHERE a.deleted_at IS NULL AND substr(a.started_at,1,10) BETWEEN ? AND ?''',
+        WHERE a.deleted_at IS NULL AND a.source_name != 'synthetic_fixture' AND substr(a.started_at,1,10) BETWEEN ? AND ?''',
         ((start-timedelta(days=2)).isoformat(),(end+timedelta(days=1)).isoformat()))]
     checkpoint = c.execute("SELECT coverage_start,coverage_end,history_backfill_next FROM sync_checkpoints WHERE data_type='activities'").fetchone()
     return rows, activities, dict(checkpoint) if checkpoint else {}

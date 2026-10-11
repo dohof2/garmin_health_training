@@ -16,6 +16,11 @@ def matched_scope(message):
     return bool(re.search(r'\b(?:matched|matching)\s+(?:cycling\s+)?rides?\b|\brides?\s+matched\b|\bsame (?:course|route)\b',canonical(message),re.I))
 
 
+def plot_parts(message):
+    # Split AND only after a complete date range, so "power and speed" stays intact.
+    return [p.strip() for p in re.split(r';|\n|(?<=\d)\s+and\s+(?=(?:plot\s+)?[a-zA-Z])', message) if p.strip()]
+
+
 def period(message, today):
     dates = re.findall(r'\b\d{4}-\d{2}-\d{2}\b', message)
     if len(dates) == 2:
@@ -100,9 +105,11 @@ def refine(message, context, parse, today, path):
                 for key in ('metric','x_metric'):
                     if str(spec.get(key,'')).startswith('vo2_'): spec[key]='vo2_'+sport
                 spec.pop('title',None)
+        if re.search(r'\b(?:time|date)\b.*\bx[ -]?axis\b|\bx[ -]?axis\b.*\b(?:time|date)\b|\b(?:against|versus|vs)\s+(?:time|date)\b',message,re.I):
+            spec.update(kind='scatter',x_metric='date');spec.pop('title',None)
         overlays(spec,message)
         if re.search(r'\b(improvement|improving|progress)\b',message,re.I):
-            if spec['kind']=='scatter':
+            if spec['kind']=='scatter' and spec.get('x_metric')!='date':
                 raise ValueError('To assess change over time, request a date-versus-speed or date-versus-power graph.')
             spec.update(trend_line=True,correlation=True)
     return {'plots':specs}

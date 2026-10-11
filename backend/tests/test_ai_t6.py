@@ -181,7 +181,7 @@ class T6Tests(unittest.TestCase):
         with ThreadPoolExecutor(max_workers=4) as pool:
             list(pool.map(lambda _: ensure_sync_checkpoints(self.path), range(8)))
         with connect(self.path) as connection:
-            self.assertEqual(connection.execute('SELECT COUNT(*) FROM sync_checkpoints').fetchone()[0], 5)
+            self.assertEqual(connection.execute('SELECT COUNT(*) FROM sync_checkpoints').fetchone()[0], 7)
 
     @patch('app.ai_chat._ollama_request')
     def test_local_planner_cannot_override_forced_assessment_tool(self, request):

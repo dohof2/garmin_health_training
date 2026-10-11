@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import statistics
 import uuid
 from datetime import date
 from pathlib import Path
@@ -16,38 +17,41 @@ ACTIVITY_FIELDS = {'distance': ('distance_meters', 'km', .001),
                    'elevation': ('elevation_gain_meters', 'm', 1),
                    'power': ('average_power', 'W', 1),
                    'speed': ('speed', 'km/h', 3.6),
-                   'heart_rate': ('average_heart_rate', 'bpm', 1)}
+                   'heart_rate': ('average_heart_rate', 'bpm', 1),
+                   'cadence': ('average_cadence', 'rpm', 1)}
 KINDS = {'line', 'bar', 'scatter', 'dial'}
 
 
 def catalog(path: Path | None = None):
     with connect(path) as c:
-        rows = c.execute('SELECT metric_type, unit, COUNT(*) AS count FROM metric_readings GROUP BY metric_type, unit ORDER BY metric_type').fetchall()
+        rows = c.execute("SELECT metric_type, unit, COUNT(*) AS count FROM metric_readings WHERE source_name != 'synthetic_fixture' GROUP BY metric_type, unit ORDER BY metric_type").fetchall()
+    from .archive_charts import archive_metrics
+    extras = list(archive_metrics(path))
+    extras += [{'id': 'hydration', 'label': 'Hydration', 'unit': 'mL', 'count': None},
+               {'id': 'acute_training_load', 'label': 'Acute training load', 'unit': 'garmin_load', 'count': None}]
     if not any(r['metric_type'] == 'weight' for r in rows):
         rows = [*rows, {'metric_type': 'weight', 'unit': 'kg', 'count': None}]
-    return {'metrics': [{'id': r['metric_type'], 'label': r['metric_type'].replace('_', ' ').capitalize(),
-                         'unit': r['unit'], 'count': r['count']} for r in rows]
-            + [{'id': 'vo2_cycling', 'label': 'VO₂ max · cycling', 'unit': 'mL/kg/min', 'count': None},
+    return {'x_axes': [{'id':'date','label':'Date / time','unit':'Date'}], 'metrics': [{'id': r['metric_type'], 'label': r['metric_type'].replace('_', ' ').capitalize(),
+                         'unit': r['unit'], 'count': r['count']} for r in rows if r['metric_type'] not in ('vo2_cycling','vo2_running')]
+            + [m for m in extras if m['id'] not in {r['metric_type'] for r in rows}] + [{'id': 'vo2_cycling', 'label': 'VO₂ max · cycling', 'unit': 'mL/kg/min', 'count': None},
                {'id': 'vo2_running', 'label': 'VO₂ max · running', 'unit': 'mL/kg/min', 'count': None}],
-            'activity_fields': [{'id': 'activity_' + key, 'label': 'Activity ' + key.replace('_', ' '), 'unit': unit}
+            'activity_fields': [{'id': 'activity_' + key, 'label': 'Total climb' if key == 'elevation' else 'Activity ' + key.replace('_', ' '), 'unit': unit}
                                 for key, (_, unit, _) in ACTIVITY_FIELDS.items()]}
 
 
 def validate_spec(spec, path=None):
     if not isinstance(spec, dict):
         raise ValueError('Chart must be an object')
-    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation'}
+    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days'}
     if set(spec) - allowed:
         raise ValueError('Unsupported chart fields')
     known = {m['id'] for m in catalog(path)['metrics']} | {'activity_' + f for f in ACTIVITY_FIELDS}
-    if spec.get('metric') not in known or (spec.get('x_metric') and spec['x_metric'] not in known):
+    if spec.get('metric') not in known or (spec.get('x_metric') and spec['x_metric'] not in known | {'date'}):
         raise ValueError('Choose a supported metric')
     if spec.get('kind') not in KINDS or spec.get('size', 'half') not in {'half', 'full'}:
         raise ValueError('Unsupported chart type or size')
     if spec['kind'] == 'scatter' and not spec.get('x_metric'):
         raise ValueError('Scatter plots require an X metric')
-    if spec.get('x_metric') and (spec['metric'].startswith('activity_') != spec['x_metric'].startswith('activity_')):
-        raise ValueError('Pair health metrics with health metrics, or activity fields with activity fields')
     for key in ('id', 'title', 'sport', 'timezone', 'gps_reference_id'):
         if key in spec and (not isinstance(spec[key], str) or len(spec[key]) > 160):
             raise ValueError(f'Invalid {key}')
@@ -66,8 +70,16 @@ def validate_spec(spec, path=None):
         raise ValueError('Use up to four mean or finite numeric reference lines')
     if spec['kind'] == 'dial' and (lines or spec.get('trend_line') or spec.get('correlation')):
         raise ValueError('Analysis overlays require a line, bar or scatter plot')
+    if spec.get('aggregation') and spec['aggregation'] not in {'daily_mean','daily_median','daily_sum','weekly_mean','weekly_median','weekly_sum','monthly_mean','monthly_median','monthly_sum'}:
+        raise ValueError('Choose daily, weekly or monthly mean, median or sum')
+    if 'rolling_days' in spec and (not isinstance(spec['rolling_days'],int) or isinstance(spec['rolling_days'],bool) or not 1 <= spec['rolling_days'] <= 365):
+        raise ValueError('Rolling window must be 1–365 days')
+    if (spec.get('aggregation') or spec.get('rolling_days')) and (spec['kind']=='dial' or (spec['kind']=='scatter' and spec.get('x_metric')!='date')):
+        raise ValueError('Aggregation and rolling averages require a date axis')
     timezone_info(spec.get('timezone'))
-    return dict(spec)
+    normalized=dict(spec)
+    if normalized.get('title','').lower() in ('activity elevation','activity_elevation','elevation') and normalized['metric']=='activity_elevation': normalized['title']='Total climb'
+    return normalized
 
 
 def _valid(value):
@@ -79,9 +91,29 @@ def _observations(metric, spec, path=None, activity_ids=None):
     excluded = 0
     unit = ''
     with connect(path) as c:
-        if metric.startswith('vo2_'):
+        if metric.startswith('archive:'):
+            _, category, field = metric.split(':', 2)
+            rows = c.execute("""SELECT id,source_name,record_date,json_extract(payload_json,?) AS value
+                FROM garmin_archive_records WHERE category=? AND source_name != 'synthetic_fixture'
+                AND record_date IS NOT NULL ORDER BY record_date,id""", (field,category)).fetchall()
+            unit = 'source units'
+            observations = [{'key':r['record_date'], 'date':r['record_date'], 'id':r['id'], 'source':r['source_name'], 'value':r['value']} for r in rows if _valid(r['value'])]
+        elif metric == 'hydration':
+            unit = 'mL'
+            totals = {}
+            for r in c.execute("SELECT * FROM hydration_events WHERE source_name != 'synthetic_fixture' ORDER BY recorded_at,id"):
+                totals.setdefault(r['calendar_date'], []).append(r)
+            observations = [{'key':day,'date':day,'id':rs[-1]['id'],'source':rs[-1]['source_name'],'value':math.fsum(r['value_ml'] for r in rs)} for day,rs in totals.items()]
+            # Live daily totals override archive daily event totals, avoiding double counting.
+            live = {calendar_date(r['recorded_at'],spec.get('timezone')).isoformat(): r for r in c.execute("SELECT * FROM metric_readings WHERE metric_type='hydration' AND source_name != 'synthetic_fixture' ORDER BY recorded_at,created_at,rowid")}
+            observations = [r for r in observations if r['date'] not in live] + [{'key':day,'date':day,'id':r['id'],'source':r['source_name'],'value':r['value']} for day,r in live.items() if r['unit']=='mL' and _valid(r['value'])]
+        elif metric == 'acute_training_load':
+            unit = 'garmin_load'
+            rows = c.execute("SELECT id,source_name,record_date,json_extract(payload_json,'$.dailyTrainingLoadAcute') AS value FROM garmin_archive_records WHERE category='acute_training_load' AND source_name != 'synthetic_fixture' ORDER BY record_date,id").fetchall()
+            observations = [{'key':r['record_date'],'date':r['record_date'],'id':r['id'],'source':r['source_name'],'value':r['value']} for r in rows if r['record_date'] and _valid(r['value'])]
+        elif metric.startswith('vo2_'):
             sport = 'CYCLING' if metric == 'vo2_cycling' else 'RUNNING'
-            rows = c.execute("SELECT id, record_date, payload_json FROM garmin_archive_records WHERE category IN ('max_met_fitness','activity_vo2_max') ORDER BY record_date, id").fetchall()
+            rows = c.execute("SELECT id, record_date, payload_json FROM garmin_archive_records WHERE category IN ('max_met_fitness','activity_vo2_max') AND source_name != 'synthetic_fixture' ORDER BY record_date, id").fetchall()
             seen = set()
             for row in rows:
                 p = json.loads(row['payload_json'])
@@ -96,13 +128,23 @@ def _observations(metric, spec, path=None, activity_ids=None):
                     continue
                 seen.add((day, value))
                 observations.append({'key': day, 'date': day, 'value': value, 'source': 'garmin_export', 'id': row['id']})
+            live = {}
+            for row in c.execute("SELECT * FROM metric_readings WHERE metric_type=? AND source_name != 'synthetic_fixture' ORDER BY recorded_at, created_at, id", (metric,)):
+                day = calendar_date(row['recorded_at'], spec.get('timezone', 'UTC')).isoformat()
+                if not _valid(row['value']) or row['value'] <= 0 or row['unit'] != 'mL/kg/min':
+                    excluded += 1
+                    continue
+                live[day] = {'key': day, 'date': day, 'value': row['value'], 'source': row['source_name'], 'id': row['id']}
+            observations = [r for r in observations if r['date'] not in live] + list(live.values())
             unit = 'mL/kg/min'
         elif metric.startswith('activity_'):
             field, unit, multiplier = ACTIVITY_FIELDS[metric[9:]]
-            rows = c.execute('''SELECT a.*, p.value AS average_power, h.value AS average_heart_rate
+            rows = c.execute('''SELECT a.*, p.value AS average_power, h.value AS average_heart_rate, cad.value AS average_cadence
                 FROM activities a
                 LEFT JOIN activity_metrics p ON p.activity_id=a.id AND p.metric_type='average_power'
                 LEFT JOIN activity_metrics h ON h.activity_id=a.id AND h.metric_type='average_heart_rate'
+                LEFT JOIN activity_metrics cad ON cad.activity_id=a.id AND cad.metric_type='average_cadence'
+                WHERE a.deleted_at IS NULL AND a.source_name != 'synthetic_fixture'
                 ORDER BY a.started_at''').fetchall()
             for row in rows:
                 if activity_ids is not None and row['id'] not in activity_ids:
@@ -126,13 +168,16 @@ def _observations(metric, spec, path=None, activity_ids=None):
                         sessions = raw.get('fit_sessions') or []
                         if not _valid(value) and len(sessions) == 1:
                             value = sessions[0].get('enhanced_avg_speed', sessions[0].get('avg_speed'))
+                if field == 'average_cadence' and not _valid(value):
+                    sample = c.execute('SELECT AVG(cadence_rpm) FROM activity_samples WHERE activity_id=? AND cadence_rpm IS NOT NULL',(row['id'],)).fetchone()
+                    value = sample[0]
                 if not _valid(value):
                     excluded += 1
                     continue
                 observations.append({'key': row['id'], 'id': row['id'], 'date': day,
                                      'value': value * multiplier, 'source': row['source_name']})
         else:
-            rows = c.execute('SELECT * FROM metric_readings WHERE metric_type=? ORDER BY recorded_at,created_at,rowid', (metric,)).fetchall()
+            rows = c.execute("SELECT * FROM metric_readings WHERE metric_type=? AND source_name != 'synthetic_fixture' ORDER BY recorded_at,created_at,rowid", (metric,)).fetchall()
             units = {r['unit'] for r in rows}
             if len(units) > 1:
                 raise ValueError('This metric contains incompatible units; normalize it before plotting')
@@ -144,7 +189,7 @@ def _observations(metric, spec, path=None, activity_ids=None):
         if metric == 'weight':
             # The ZIP importer preserves historic biometric records separately
             # from live-sync readings. Include their explicitly recorded weights.
-            rows = c.execute("SELECT id, record_date, payload_json FROM garmin_archive_records WHERE category='biometrics_history' ORDER BY record_date, id").fetchall()
+            rows = c.execute("SELECT id, record_date, payload_json FROM garmin_archive_records WHERE category='biometrics_history' AND source_name != 'synthetic_fixture' ORDER BY record_date, id").fetchall()
             seen = {(p['date'], round(p['value'], 6)) for p in observations if p['source'] != 'manual'}
             for row in rows:
                 payload = json.loads(row['payload_json'])
@@ -195,7 +240,7 @@ def analyze_points(points, spec):
                                            'value': mean_y if v == 'mean' else v})
     if not (spec.get('trend_line') or spec.get('correlation')):
         return result
-    xs = [float(p['x']) if spec['kind'] == 'scatter' else date.fromisoformat(p['date']).toordinal() for p in points]
+    xs = [float(p['x']) if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date' else date.fromisoformat(p['date']).toordinal() for p in points]
     if len(points) < 3:
         result['reason'] = 'At least three paired observations are required for trend and correlation.'
         return result
@@ -212,8 +257,8 @@ def analyze_points(points, spec):
     if spec.get('trend_line'):
         slope = xy / xx
         lo, hi = min(xs), max(xs)
-        result['trend'] = {'x_start': lo if spec['kind'] == 'scatter' else date.fromordinal(int(lo)).isoformat(),
-                           'x_end': hi if spec['kind'] == 'scatter' else date.fromordinal(int(hi)).isoformat(),
+        result['trend'] = {'x_start': lo if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date' else date.fromordinal(int(lo)).isoformat(),
+                           'x_end': hi if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date' else date.fromordinal(int(hi)).isoformat(),
                            'y_start': mean_y + slope*(lo-mean_x), 'y_end': mean_y + slope*(hi-mean_x),
                            'slope': slope, 'r_squared': r*r}
     return result
@@ -223,7 +268,7 @@ def chart_data(spec, path=None):
     spec = validate_spec(spec, path)
     if not spec.get('title'):
         def metric_label(metric):
-            return ('VO₂ max · ' + metric[4:]) if metric.startswith('vo2_') else metric.replace('_', ' ').capitalize()
+            return 'Total climb' if metric == 'activity_elevation' else ('VO₂ max · ' + metric[4:]) if metric.startswith('vo2_') else metric.replace('_', ' ').capitalize()
         spec['title'] = metric_label(spec['metric'])
         if spec['kind'] == 'scatter':
             spec['title'] += ' vs ' + metric_label(spec['x_metric'])
@@ -240,35 +285,62 @@ def chart_data(spec, path=None):
     points = []
     x_unit = 'Date'
     unpaired = 0
-    if spec['kind'] == 'scatter':
+    if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date':
         xs, x_unit, _ = _observations(spec['x_metric'], spec, path, activity_ids)
+        if spec['x_metric'].startswith('activity_') and not spec['metric'].startswith('activity_'):
+            health_by_date = {p['date']: p for p in sorted(ys, key=lambda p: (p['date'], p['source'] == 'manual'))}
+            paired = [(p, health_by_date.get(p['date'])) for p in xs]
+            points = [{**p, 'x': p['value'], 'y': h['value']} for p,h in paired if h]
+            unpaired = sum(h is None for _,h in paired)
+            xs = []
+            ys = []
         # Last stored reading per date, manual takes precedence, without inventing missing dates.
         xs = sorted(xs, key=lambda p: (p['date'], p['source'] == 'manual'))
-        by_key = {p['key']: p for p in xs}
+        mixed = spec['metric'].startswith('activity_') != spec['x_metric'].startswith('activity_')
+        by_key = {p['date'] if mixed else p['key']: p for p in xs}
         ys = sorted(ys, key=lambda p: (p['date'], p['source'] == 'manual'))
-        ys = list({p['key']: p for p in ys}.values())
+        if not spec['metric'].startswith('activity_'):
+            ys = list({p['key']: p for p in ys}.values())
         for p in ys:
-            x = by_key.get(p['key'])
+            x = by_key.get(p['date'] if mixed else p['key'])
             if x:
                 points.append({**p, 'x': x['value'], 'y': p['value']})
             else:
                 unpaired += 1
     else:
         points = [{**p, 'x': p['date'], 'y': p['value']} for p in ys]
+    transform_notes = []
+    if spec.get('aggregation'):
+        frequency, operation = spec['aggregation'].split('_')
+        groups = {}
+        for p in points:
+            day = date.fromisoformat(p['date'])
+            bucket = day if frequency=='daily' else date.fromordinal(day.toordinal()-day.weekday()) if frequency=='weekly' else day.replace(day=1)
+            groups.setdefault(bucket.isoformat(), []).append(p)
+        aggregate = {'mean': statistics.fmean, 'median': statistics.median, 'sum': math.fsum}[operation]
+        points = [{**rs[-1], 'date':day, 'x':day, 'y':aggregate(r['y'] for r in rs)} for day,rs in sorted(groups.items())]
+        transform_notes.append(f'{frequency.capitalize()} {operation} of recorded observations; weeks start Monday. Empty periods are omitted.')
+    if spec.get('rolling_days'):
+        original = sorted(points,key=lambda p:p['date'])
+        days = spec['rolling_days']
+        points = [{**p,'y':statistics.fmean(q['y'] for q in original if 0 <= (date.fromisoformat(p['date'])-date.fromisoformat(q['date'])).days < days)} for p in original]
+        transform_notes.append(f'{days}-day trailing mean of recorded observations; gaps are not filled.')
     analysis = analyze_points(points, spec)
     count = len(points)
     latest = max(points, key=lambda p: (p['date'], p['source'] == 'manual'), default=None)
     # Preserve latest point and chronological ends when reducing very large histories.
     if count > 2000:
         points = [points[round(i * (count - 1) / 1999)] for i in range(2000)]
-    notes = ['Actual recorded observations only; missing days are not filled.']
+    notes = ['Actual recorded observations only; missing days are not filled.', *transform_notes]
+    if spec['metric'].startswith('archive:') or str(spec.get('x_metric','')).startswith('archive:'):
+        notes.append('Numeric archive field in source units; no unit conversion or missing-value imputation. Check the field definition before interpreting it.')
     if scope:
         reference = scope['reference_ride']
         notes.append(f"GPS course matches for {reference['name']} on {reference['local_date']}: {scope['total_matches']} matching rides plus the reference ride. Uses the entire matching set, not the displayed top ten. {excluded} attempts lack this metric. Matching is recomputed when the chart is refreshed.")
     if spec['metric'] == 'weight' or spec.get('x_metric') == 'weight':
         notes.append('Includes dated weights from Garmin biometric history, live sync and manual entries. Duplicate Garmin values on the same date are shown once; no profile weight is carried forward into missing dates.')
-    if spec['kind'] == 'scatter':
-        notes.append('Paired by activity ID.' if spec['metric'].startswith('activity_') else 'Paired on the same local date; latest reading per date, manual takes precedence.')
+    if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date':
+        notes.append('Paired by activity ID.' if spec['metric'].startswith('activity_') and spec['x_metric'].startswith('activity_') else 'Paired on the same local date; latest health reading per date, manual takes precedence. Each activity is retained when pairing activity and health data.')
     if spec['metric'] == 'activity_speed' or spec.get('x_metric') == 'activity_speed':
         notes.append('Speed uses the recorded Garmin/FIT mean, not distance divided by elapsed time. Conditions are not adjusted.')
     if spec.get('correlation') or spec.get('trend_line'):

@@ -1,4 +1,4 @@
-export type DialBand = { label: string; color: string; end: number };
+export type DialBand = { label: string; color: string; end: number; detail?: string };
 export const fitnessBands: DialBand[] = [
   { label: 'Poor', color: '#dc545c', end: .2 },
   { label: 'Fair', color: '#e79938', end: .4 },
@@ -35,6 +35,6 @@ export default function StatusDial({ value, unit, bands, position, range, interp
       <text x="140" y="142" textAnchor="middle" className="status-dial-unit">{unit}</text>
     </svg>
     <p className="status-dial-interpretation">{interpretation}</p>
-    <div className="dial-legend" aria-label="Status scale">{bands.map(band => <span key={band.label}><i style={{ backgroundColor: band.color }} aria-hidden="true" />{band.label}</span>)}</div>
+    <div className="dial-legend" aria-label="Status scale">{bands.map(band => <span key={band.label}><i style={{ backgroundColor: band.color }} aria-hidden="true" />{band.label}{band.detail && <>: {band.detail}</>}</span>)}</div>
   </div>;
 }

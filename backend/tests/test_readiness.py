@@ -147,7 +147,7 @@ class ReadinessCalculationTests(unittest.TestCase):
             if row['metric_type'].startswith('sleep') and row['recorded_at']=='2026-10-09':
                 row['period_end']='2026-10-09T23:30:00Z'
         result=self.run_model(rows=rows,zone='Asia/Jerusalem')
-        self.assertEqual(result['cutoff'],'2026-10-10T05:00:00+00:00')
+        self.assertEqual(result['cutoff'],'2026-10-09T23:30:00+00:00')
         for day,expected in [(date(2026,3,29),'06:00'),(date(2026,10,25),'07:00')]:
             result=calculate(day,'Europe/Berlin',[],[],COVERAGE,DEFAULTS,now=NOW)
             self.assertIn(expected,result['cutoff'])

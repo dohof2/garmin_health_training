@@ -174,6 +174,7 @@ type SyncStatus = {
   supports_updated_since: boolean;
   checkpoints: SyncCheckpoint[];
   verified_empty_intervals: number;
+  additional_data?: {date: string; successful_endpoints: string[]; failures: Record<string,string>; unsupported: string[]; unavailable: Record<string,string>} | null;
   last_job: null | {
     id: string;
     status: string;
@@ -207,7 +208,7 @@ type SyncPlan = {
 };
 
 type GarminConnection = {
-  status: "not_connected" | "connected" | "reconnect_required" | "mfa_required";
+  status: "not_connected" | "connected" | "reconnect_required" | "mfa_required" | "unavailable";
   has_saved_session: boolean;
   mfa_pending: boolean;
   token_storage: "local_private_file";
@@ -278,6 +279,7 @@ function proposalRows(proposal: SettingsProposal) {
 }
 
 type ChatEvidence = {
+  coaching?: {brief: import("./TrainingCoachPanel").CoachingBrief;week_start:string;timezone:string;status:string};
   plots?: ChartResult[];
   maintenance?: MaintenanceResult;
   proposal?: SettingsProposal;
@@ -383,7 +385,7 @@ type ConnectionState =
       settings: AppSettings;
       aiProviderStatus: AiProviderStatus;
     }
-  | { kind: "offline" };
+  | { kind: "offline"; message?: string };
 
 type GarminPreview = {
   ready: boolean;
@@ -410,7 +412,8 @@ type GarminPreview = {
 };
 
 type GarminImportResult = {
-  status: "completed";
+  status: "completed" | "completed_with_failures";
+  stages?: Record<string, {status: string; error?: string; failed_files?: number}>;
   activities: { total: number; created: number; updated: number };
   daily_metrics: { total: number; created: number; updated: number };
   sleep_metrics: { total: number; created: number; updated: number };
@@ -721,6 +724,8 @@ export default function App() {
   });
   const [importState, setImportState] = useState<ImportState>({ kind: "idle" });
   const [activityRange, setActivityRange] = useState({ start: "", end: "" });
+  const [activityOffset, setActivityOffset] = useState(0);
+  const [activityHasMore, setActivityHasMore] = useState(false);
   const [activityState, setActivityState] = useState<ActivityState>({
     kind: "idle",
     items: [],
@@ -745,7 +750,7 @@ export default function App() {
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
-  const [initialChatContext] = useState<{plots?: ChartSpec[]; ride?: string}>(() => {
+  const [initialChatContext] = useState<{plots?: ChartSpec[]; ride?: string; coaching?: ChatEvidence["coaching"]}>(() => {
     try { return JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
   });
   const chatContext = useRef(initialChatContext);
@@ -790,11 +795,10 @@ export default function App() {
           !originalsResponse.ok ||
           !syncStatusResponse.ok ||
           !syncPlanResponse.ok ||
-          !garminConnectionResponse.ok ||
           !settingsResponse.ok ||
           !aiStatusResponse.ok
         ) {
-          throw new Error("Backend is unavailable");
+          throw new Error(healthResponse.ok ? "The backend is running, but a workspace service failed to load. Reload to retry." : "Backend is unavailable");
         }
         const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection, settings, aiProviderStatus] = await Promise.all([
           healthResponse.json() as Promise<HealthResponse>,
@@ -805,7 +809,7 @@ export default function App() {
           originalsResponse.json() as Promise<OriginalActivityInventory>,
           syncStatusResponse.json() as Promise<SyncStatus>,
           syncPlanResponse.json() as Promise<SyncPlan>,
-          garminConnectionResponse.json() as Promise<GarminConnection>,
+          garminConnectionResponse.ok ? garminConnectionResponse.json() as Promise<GarminConnection> : Promise.resolve({status: "unavailable", has_saved_session: false, mfa_pending: false, token_storage: "local_private_file", updated_at: ""} as GarminConnection),
           settingsResponse.json() as Promise<AppSettings>,
           aiStatusResponse.json() as Promise<AiProviderStatus>,
         ]);
@@ -837,7 +841,7 @@ export default function App() {
       })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
-        setConnection({ kind: "offline" });
+        setConnection({ kind: "offline", message: error instanceof Error ? error.message : "Workspace could not be loaded. Reload to retry." });
       });
 
     return () => controller.abort();
@@ -857,6 +861,7 @@ export default function App() {
     const controller = new AbortController();
     const parameters = new URLSearchParams({
       limit: "50",
+      offset: String(activityOffset),
       start_date: activityRange.start,
       end_date: activityRange.end,
       timezone: browserTimeZone,
@@ -871,7 +876,10 @@ export default function App() {
         if (!response.ok) throw new Error("Activities could not be loaded.");
         return response.json() as Promise<Activity[]>;
       })
-      .then((items) => setActivityState({ kind: "ready", items }))
+      .then((items) => {
+        setActivityHasMore(items.length === 50);
+        setActivityState(current => ({ kind: "ready", items: activityOffset ? [...current.items, ...items] : items }));
+      })
       .catch((error: unknown) => {
         if (error instanceof DOMException && error.name === "AbortError") return;
         setActivityState({
@@ -882,13 +890,13 @@ export default function App() {
       });
 
     return () => controller.abort();
-  }, [activityRange.start, activityRange.end]);
+  }, [activityRange.start, activityRange.end, activityOffset]);
 
   const statusText =
     connection.kind === "ready"
       ? `Connected · ${connection.health.schema.tables} database tables`
       : connection.kind === "offline"
-        ? "Backend is not running"
+        ? connection.message ?? "Workspace could not be loaded"
         : "Checking local backend…";
 
   const summary = connection.kind === "ready" ? connection.summary : null;
@@ -1073,6 +1081,7 @@ export default function App() {
           slow: false,
         });
       } else if (event.type === "tool") {
+        if (event.evidence.coaching) chatContext.current.coaching = event.evidence.coaching;
         if (event.evidence.plots?.length) {
           chatContext.current.plots = event.evidence.plots.map(p => p.spec);
           const references = [...new Set(chatContext.current.plots.map(p => p.gps_reference_id).filter(Boolean))];
@@ -1082,7 +1091,7 @@ export default function App() {
         try { sessionStorage.setItem('garmin-assistant-query-context', JSON.stringify(chatContext.current)); } catch { /* Continue with in-memory context if browser storage is unavailable. */ }
         if (event.evidence.plots?.length) {
           setPlotMessageId(assistantId);
-          window.setTimeout(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"}), 100);
+
         }
         if (event.evidence.maintenance?.saved) setMaintenanceVersion((current) => current + 1);
         setChatMessages((current) => current.map((item) => item.id === assistantId
@@ -1093,6 +1102,7 @@ export default function App() {
           ? { ...item, content: item.content + event.text }
           : item));
       } else if (event.type === "complete") {
+        window.requestAnimationFrame(() => document.getElementById(`chat-message-${assistantId}`)?.scrollIntoView({ behavior: "instant", block: "start" }));
         setChatStatus({
           kind: "idle",
           provider: event.provider,
@@ -1103,6 +1113,7 @@ export default function App() {
           ? { ...item, content: item.content ? `${item.content}\n\n${event.message}` : event.message }
           : item));
         setChatStatus({ kind: "error", message: event.message });
+        window.requestAnimationFrame(() => document.getElementById(`chat-message-${assistantId}`)?.scrollIntoView({ behavior: "instant", block: "start" }));
       }
     };
 
@@ -1110,7 +1121,7 @@ export default function App() {
       const response = await fetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history,
+        body: JSON.stringify({ message, history, coaching_context: chatContext.current.coaching,
           plot_context: chatMessages.find(item => item.id === plotMessageId)?.evidence.flatMap(e => e.plots ?? []).map(p => p.spec) ?? chatContext.current.plots,
           ride_context: chatContext.current.ride ?? chatMessages.flatMap(item => item.evidence).filter(e => e.tool === 'find_same_course_rides').at(-1)?.reference_record?.id,
           timezone: browserTimeZone, operation_id: userMessage.id,
@@ -1733,7 +1744,7 @@ export default function App() {
                   ? "Verification required"
                   : garminConnectionValue?.status === "reconnect_required"
                   ? "Reconnect required"
-                  : "Not connected yet"}
+                  : garminConnectionValue?.status === "unavailable" ? "Connection status unavailable; reload to retry" : "Not connected yet"}
             </strong>
           </div>
           <div>
@@ -1857,6 +1868,13 @@ export default function App() {
             </div>
           ))}
         </div>
+        {syncStatusValue?.additional_data && <details>
+          <summary>Additional data collected on {formatLongDate(syncStatusValue.additional_data.date)}</summary>
+          <p>{syncStatusValue.additional_data.successful_endpoints.length} source responses retained, including fields not currently used in charts. These records are included in data exports and backups.</p>
+          {Object.entries(syncStatusValue.additional_data.failures).map(([name, error]) => <p key={name}>{name.replace(/^get_/, '').replaceAll('_', ' ')}: failed — {error}</p>)}
+          {Object.entries(syncStatusValue.additional_data.unavailable).map(([name, reason]) => <p key={name}>{name.replace(/^get_/, '').replaceAll('_', ' ')}: unavailable — {reason}</p>)}
+          {!!syncStatusValue.additional_data.unsupported.length && <p>Unsupported by this Garmin client: {syncStatusValue.additional_data.unsupported.map(name => name.replace(/^get_/, '').replaceAll('_', ' ')).join(', ')}.</p>}
+        </details>}
         {syncStatusValue?.last_job && (
           <div className={`sync-last-job sync-last-job--${syncStatusValue.last_job.status}`}>
             <strong>Last sync: {syncStatusValue.last_job.status}</strong>
@@ -1952,7 +1970,7 @@ export default function App() {
         )}
         <div className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
-            <article className="data-card" key={card.id}>
+            <article className={`data-card ${card.id === "training_readiness" ? "readiness-dashboard-card" : ""}`} key={card.id}>
               {card.id === "training_readiness" ? <ReadinessCard timezone={browserTimeZone} refreshToken={`${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /> : <>
               <p>
                 {card.label}{" "}
@@ -1979,7 +1997,7 @@ export default function App() {
             end={activityRange.end}
             minimum={summary?.activity_date_start ?? null}
             maximum={summary?.activity_date_end ?? null}
-            onChange={(start, end) => setActivityRange({ start, end })}
+            onChange={(start, end) => { setActivityOffset(0); setActivityHasMore(false); setActivityRange({ start, end }); }}
           />
         </div>
 
@@ -1997,7 +2015,7 @@ export default function App() {
             <div className="activity-list-summary">
               <span>
                 {activityState.items.length.toLocaleString()}
-                {activityState.items.length === 50 ? " most recent " : " "}
+                {activityHasMore ? " loaded " : " "}
                 {activityState.items.length === 1 ? "activity" : "activities"}
               </span>
               {activityState.kind === "loading" && <span>Refreshing…</span>}
@@ -2048,6 +2066,7 @@ export default function App() {
                 </article>
               );
             })}
+            {activityHasMore && <button type="button" disabled={activityState.kind === "loading"} onClick={() => setActivityOffset(current => current + 50)}>{activityState.kind === "loading" ? "Loading…" : "Load more activities"}</button>}
           </div>
         )}
       </section>
@@ -2100,9 +2119,10 @@ export default function App() {
           ) : (
             <div className="chat-messages" aria-live="polite">
               {chatMessages.map((message) => (
-                <article className={`chat-message chat-message--${message.role}`} key={message.id}>
+                <article id={`chat-message-${message.id}`} className={`chat-message chat-message--${message.role}`} key={message.id}>
                   <span>{message.role === "user" ? "You" : "Assistant"}</span>
                   <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
+                  {message.evidence.find(e=>e.coaching)?.coaching && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)!.coaching}));window.location.hash='training';}}>Review coaching proposal in Training</button>}
                   {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
                   {message.evidence.length > 0 && (
                     <div className="chat-evidence">
@@ -2338,7 +2358,7 @@ export default function App() {
           start={activityRange.start} end={activityRange.end}
           minimum={summary?.activity_date_start ?? null}
           maximum={summary?.activity_date_end ?? null}
-          onChange={(start, end) => setActivityRange({ start, end })}
+          onChange={(start, end) => { setActivityOffset(0); setActivityHasMore(false); setActivityRange({ start, end }); }}
         />
         <p className="export-copy">
           CSV and JSON use the activity date range selected above. Exports are generated
@@ -2483,11 +2503,12 @@ export default function App() {
           </button>
         )}
         {importState.kind === "importing" && (
-          <p className="import-message">Importing in one database transaction…</p>
+          <p className="import-message">Importing activity summaries, FIT/XML details, monitoring, wellness and extended records. Large archives may take several minutes; completed stages are safe to retry.</p>
         )}
+        {importState.kind === "complete" && importState.result.stages && <ul aria-label="Import stages">{Object.entries(importState.result.stages).map(([name, stage]) => <li key={name}>{name.replaceAll('_', ' ')}: {stage.status.replaceAll('_', ' ')}{stage.error ? ` — ${stage.error}` : ''}</li>)}</ul>}
         {importState.kind === "complete" && (
-          <p className="import-message import-message--success">
-            Import complete: {importState.result.activities.created.toLocaleString()} new activities, {importState.result.daily_metrics.created.toLocaleString()} new daily metrics, and {importState.result.sleep_metrics.created.toLocaleString()} new sleep metrics. Existing records updated safely: {(
+          <p className={`import-message import-message--${importState.result.status === "completed" ? "success" : "error"}`}>
+            {importState.result.status === 'completed' ? 'All import stages complete' : 'Import needs attention; some stages failed'}: {importState.result.activities.created.toLocaleString()} new activities, {importState.result.daily_metrics.created.toLocaleString()} new daily metrics, and {importState.result.sleep_metrics.created.toLocaleString()} new sleep metrics. Existing records updated safely: {(
               importState.result.activities.updated +
               importState.result.daily_metrics.updated +
               importState.result.sleep_metrics.updated

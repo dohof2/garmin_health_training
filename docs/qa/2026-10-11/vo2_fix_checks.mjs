@@ -1,0 +1,36 @@
+import fs from 'node:fs';
+import vm from 'node:vm';
+import assert from 'node:assert/strict';
+const source=fs.readFileSync('frontend/src/GraphCanvas.tsx','utf8');
+const table=source.match(/const bands = (\{[\s\S]*?\n\});/)[1];
+const dialSource=fs.readFileSync('frontend/src/StatusDial.tsx','utf8');
+const fitness=dialSource.match(/export const fitnessBands: DialBand\[\] = (\[[\s\S]*?\n\]);/)[1];
+const fn=source.slice(source.indexOf('function rating('),source.indexOf('\nexport function Plot')).replace('value: number, profile?: Profile | null, measurementDate?: string','value, profile, measurementDate');
+const context=vm.createContext({Date});
+vm.runInContext(`const bands=${table}; const fitnessBands=${fitness}; ${fn}; globalThis.rating=rating`,context);
+const official={male:[[41.7,45.4,51.1,55.4],[40.5,44,48.3,54],[38.5,42.4,46.4,52.5],[35.6,39.2,43.4,48.9],[32.3,35.5,39.5,45.7],[29.4,32.3,36.7,42.1]],female:[[36.1,39.5,43.9,49.6],[34.4,37.8,42.4,47.4],[33,36.3,39.7,45.3],[30.1,33,36.7,41.1],[27.5,30,33,37.8],[25.9,28.1,30.9,36.7]]};
+const labels=['Poor','Fair','Good','Excellent','Superior'];
+let checks=0;
+for(const sex of ['male','female']) for(let band=0;band<6;band++) for(let i=0;i<4;i++) for(const delta of [-0.001,0]){
+ const actual=context.rating(official[sex][band][i]+delta,{sex,birth_date:`${2026-(25+10*band)}-01-01`},'2026-10-11');
+ assert.equal(actual.text.split(' · ')[0],labels[i+(delta===0?1:0)]);
+ if(delta===0) assert.equal(actual.fraction,actual.dialBands[i].end);
+ else assert(actual.fraction<actual.dialBands[i].end);
+ assert(actual.fraction>=0 && actual.fraction<=1);
+ assert(actual.dialBands.every((b,j,all)=>b.end>(j?all[j-1].end:0)));
+ checks++;
+}
+const p={sex:'male',birth_date:'1985-12-31'};
+const result=context.rating(46.4,p,'2026-10-09');
+assert(result.text.startsWith('Excellent'));
+assert.equal(result.dialBands[3].detail,'46.4–< 52.5');
+assert(context.rating(46.3,p,'2026-10-09').fraction>context.rating(42.4,p,'2026-10-09').fraction);
+assert(context.rating(43,p,'2023-06-29').text.startsWith('Fair · age 37 at measurement'));
+assert(context.rating(43,p,'2026-10-09').text.startsWith('Good · age 40 at measurement'));
+assert(context.rating(43,p,'2025-12-30').text.includes('age 39'));
+assert(context.rating(43,p,'2025-12-31').text.includes('age 40'));
+assert.equal(context.rating(43,null,'2026-10-09').fraction,null);
+assert.equal(context.rating(43,{sex:'unspecified',birth_date:p.birth_date},'2026-10-09').fraction,null);
+assert.equal(context.rating(43,{sex:'male',birth_date:'2010-01-01'},'2026-10-09').fraction,null);
+for(const value of [0,10,100]) assert(context.rating(value,p,'2026-10-09').fraction>=0 && context.rating(value,p,'2026-10-09').fraction<=1);
+console.log(`PASS: ${checks} reference boundary cases; numeric pointer, historical age/birthday, legend and unavailable-reference checks`);

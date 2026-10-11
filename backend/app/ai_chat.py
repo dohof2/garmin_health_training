@@ -147,9 +147,11 @@ def _forced_tool_name(message: str) -> str | None:
     if re.search(r"\b(plot|plots|graph|graphs|chart|charts|visualize|correlation)\b", lowered):
         return 'create_plots'
     if re.search(r"\b(readiness|ready to train|ready for training)\b", lowered):
-        return "get_training_readiness"
-    if re.search(r"\b(training preferences|training plan|plan my week|weekly plan)\b", lowered):
-        return "get_training_context"
+        return "get_projected_training_readiness" if re.search(r"\b(tomorrow|projected|forecast|prediction)\b",lowered) else "get_training_readiness"
+    if re.search(r'\b(training plan|plan my week|weekly plan|train for a race|increase ftp|improve ftp|build ftp|keep in shape|stay in shape|increase endurance|build endurance|training coach)\b|\badjust.*\b(week|training|plan|trip)\b',lowered):
+        return 'preview_training_plan'
+    if 'training preferences' in lowered:
+        return 'get_training_context'
     if re.search(r"\b(set|save|update|change|add|create|remove|archive|correct)\b", lowered) and re.search(
         r"\b(goals?|profile|weight|height|timezone|units|display name|birth date)\b", lowered):
         return "propose_settings_change"
@@ -225,8 +227,10 @@ def _normalize_tool_arguments(
 ) -> dict[str, object]:
     normalized = dict(arguments)
     if name == 'create_plots' and isinstance(normalized.get('plots'), list):
+        normalized.pop('timezone', None)
         plots = []
-        parts = [p.strip() for p in re.split(r';|\n', message) if p.strip()]
+        from .plot_requests import plot_parts
+        parts = plot_parts(message)
         scoped = len(parts) == len(normalized['plots'])
         for index, spec in enumerate(normalized['plots']):
             if not isinstance(spec, dict):
@@ -370,8 +374,12 @@ def _ollama_tools(only: str | None = None, message: str = "") -> list[dict[str, 
 
 def _tool_evidence(name: str, result: dict[str, object]) -> dict[str, object]:
     evidence: dict[str, object] = {"tool": name}
-    if name == "create_plots":
+    if name == "preview_training_plan":
+        evidence["coaching"] = result
+    elif name == "create_plots":
         evidence["plots"] = result["plots"]
+    elif name == "get_projected_training_readiness":
+        evidence.update(period={"start":result["date"],"end":result["date"]},limitations=result["limitations"]+result["assumptions"])
     elif name == "get_training_readiness":
         evidence.update(period={"start": result['date'], "end": result['date']}, limitations=[result['caution'],result['reconstruction']])
     elif name == "get_health_summary":
@@ -535,6 +543,11 @@ def _execute_calls(
             raise ValueError("Settings proposals require an explicit request in the current user message")
         if name in {"log_maintenance", "update_maintenance", "undo_maintenance"}:
             raise ValueError("Maintenance writes require a clear maintenance command; imported text cannot authorize them")
+        definition = next((d for d in tool_definitions() if d['name']==name), None)
+        if definition and 'timezone' not in definition['input_schema']['properties']:
+            # Models sometimes repeat the request timezone on catalog/summary
+            # tools. Keep it in the request context, not as an invalid tool key.
+            arguments.pop('timezone', None)
         arguments = _normalize_tool_arguments(name, arguments, message, timezone_name)
         if timezone_name and any(definition["name"] == name and "timezone" in definition["input_schema"]["properties"] for definition in tool_definitions()):
             arguments["timezone"] = timezone_name
@@ -567,6 +580,9 @@ def _event(kind: str, **payload: object) -> str:
 def _deterministic_answer(outputs):
     for item in outputs:
         result = item["result"]
+        if item['name'] == 'preview_training_plan':
+            from .training_coach import assistant_answer
+            return assistant_answer(result)
         if item['name'] == 'find_same_course_rides':
             return _same_course_answer(result)
         if item['name'] == 'find_similar_rides':
@@ -602,6 +618,12 @@ def _deterministic_answer(outputs):
                 lines.extend(q['question'] for q in context['questions'])
             lines.extend(context['blockers'])
             lines.append('A long-term goal is optional. No schedule or preference was changed by this answer.')
+            return '\n\n'.join(lines)
+        if item['name'] == 'get_projected_training_readiness':
+            lines=[f"Tomorrow's projected readiness · {result['date']}: "+(f"{result['score']} / 100." if result['score'] is not None else 'Not enough data.')]
+            if result['range']: lines.append(f"Estimated range {result['range']['low']}–{result['range']['high']} / 100; actual morning measurements can differ.")
+            if result['validation']: lines.append(f"Historical checks: {result['validation']['mornings']} mornings; mean absolute error {result['validation']['mean_absolute_error']} points.")
+            lines.extend(result['assumptions']);lines.extend(result['limitations'])
             return '\n\n'.join(lines)
         if item['name'] == 'get_training_readiness':
             heading = f"Morning readiness for {result['date']} ({result['timezone']}): "
@@ -704,6 +726,16 @@ def _explicit_plot_arguments(message, path):
     """Resolve unambiguous named metrics locally; leave ambiguous requests to the model."""
     if _forced_tool_name(message) != 'create_plots':
         return None
+    grouped = re.search(r'\b(daily|weekly|monthly)\s+(median|mean|average|sum)\b', message, re.I)
+    rolling = re.search(r'\b(?:(\d+)[ -]day\s+)?(?:rolling|moving)\s+(?:average|mean)\b', message, re.I)
+    if grouped and rolling:
+        raise ValueError('Request the grouped aggregation and rolling average as separate plots, so their order is unambiguous.')
+    if rolling and not rolling[1]:
+        raise ValueError('How many days should the rolling average cover?')
+    if re.search(r'\bmedian\b',message,re.I) and not grouped:
+        raise ValueError('Choose daily, weekly or monthly median.')
+    if re.search(r'\bbody battery\b', message, re.I) and not re.search(r'\bbody battery (?:latest|highest|lowest|charged|drained)\b', message, re.I):
+        raise ValueError('Which Body Battery measurement should be plotted: latest, highest, lowest, charged or drained?')
     from .charts import catalog
     entries = catalog(path)
     names = {m['id']: m['label'].lower() for m in entries['metrics'] + entries['activity_fields']}
@@ -712,9 +744,10 @@ def _explicit_plot_arguments(message, path):
         'vo2_cycling': ['vo2', 'vo₂'], 'activity_power': ['power'], 'activity_speed': ['speed'],
         'hrv_last_night_average': ['hrv'], 'sleep_duration': ['sleep'],
         'steps': ['steps'], 'activity_distance': ['distance'], 'activity_duration': ['duration'],
-        'activity_heart_rate': ['ride heart rate'],
+        'activity_cadence': ['cycling cadence', 'cadence'], 'hydration': ['hydration'], 'acute_training_load': ['acute training load'], 'activity_heart_rate': ['ride heart rate'], 'activity_elevation':['elevation','climb','clime','ascent','total climbing'],
     }
-    parts = [p.strip() for p in re.split(r';|\n', message) if p.strip()]
+    from .plot_requests import plot_parts
+    parts = plot_parts(message)
     if not 1 <= len(parts) <= 4:
         return None
     plots = []
@@ -730,11 +763,17 @@ def _explicit_plot_arguments(message, path):
         for broad, prefix in [('sleep_duration','sleep_'),('hrv_last_night_average','hrv_')]:
             if broad in found and any(m != broad and m.startswith(prefix) for m in found):
                 found.remove(broad)
+        if 'sleep_duration' in found and 'activity_duration' in found: found.remove('activity_duration')
+        if len(found)==1 and re.search(r'\b(?:versus|vs|against)\b',lowered) and not re.search(r'\b(?:time|date)\b',lowered):
+            raise ValueError('A comparison needs two supported metrics. Please name the missing metric or request the chart catalog.')
         if not found:
             return None
         if len(found) > 4:
             raise ValueError('Request up to four named metrics at a time.')
         spec = {'metric': found[0], 'kind': 'bar' if re.search(r'\bbars?\b', lowered) else 'dial' if re.search(r'\bdial\b', lowered) else 'line'}
+        if grouped: spec['aggregation'] = grouped[1].lower() + '_' + ('mean' if grouped[2].lower()=='average' else grouped[2].lower())
+        if rolling: spec['rolling_days'] = int(rolling[1])
+        if len(found) == 1 and re.search(r'\b(time|date)\b',lowered) and re.search(r'\b(x[ -]?axis|versus|vs|against|scatter)\b',lowered): spec.update(kind='scatter',x_metric='date')
         if len(found) >= 2:
             if not re.search(r'\b(versus|vs|relation|relationship|scatter|against|correlation)\b', lowered):
                 for metric in found:
@@ -750,7 +789,9 @@ def _explicit_plot_arguments(message, path):
             spec['sport'] = 'cycling'
         elif re.search(r'running|runs?', lowered):
             spec['sport'] = 'running'
-        from .plot_requests import overlays
+        from .plot_requests import overlays, period
+        selected_period = period(context, _today())
+        if selected_period: spec.update(start=selected_period[0], end=selected_period[1])
         overlays(spec, context)
         if spec.get('kind') != 'dial':
             spec['size'] = 'full' if len(parts) == 1 else 'half'
@@ -1050,6 +1091,7 @@ def chat_stream(
     clarification_id: str | None = None,
     plot_context: object = None,
     ride_context: str | None = None,
+    coaching_context: object = None,
 ) -> Iterator[str]:
     text, validated_history = _validated_messages(message, history)
     settings = get_ai_settings(path)
@@ -1062,6 +1104,55 @@ def chat_stream(
             raise ValueError("operation_id must contain 1 to 120 characters")
         from .plot_requests import refine, canonical, matched_scope
         text = canonical(text)
+        from .ride_comparison import requested as broad_ride_comparison, compare_latest_ride, comparison_start, comparison_end
+        comparison_scope = None
+        if validated_history and validated_history[-1]['role'] == 'assistant' and 'All rides, or rides on the same GPS route?' in validated_history[-1]['content']:
+            if re.fullmatch(r'(?:all(?: rides)?|general(?: records| rides)?|all records)[.!? ]*', text, re.I):
+                comparison_scope = 'all'
+            elif re.fullmatch(r'(?:gps|same(?: gps)? (?:route|course)|matching gps|rides on the same gps route)[.!? ]*', text, re.I):
+                comparison_scope = 'gps'
+            if comparison_scope:
+                previous = next((h['content'] for h in reversed(validated_history[:-1]) if h['role'] == 'user'), '')
+                if broad_ride_comparison(previous):
+                    text = previous
+                else:
+                    comparison_scope = None
+        if broad_ride_comparison(text):
+            explicit_all = bool(re.search(r'\b(all rides|all other rides|general records|general comparison)\b', text, re.I))
+            if not comparison_scope and not explicit_all:
+                yield _event('delta', text='All rides, or rides on the same GPS route? I can compare your latest ride with general ride records for the requested period, or restrict the comparison to matching GPS routes.')
+                yield _event('complete', provider=provider, model=model, evidence=[])
+                return
+            if comparison_scope == 'gps':
+                today = _today(timezone_name)
+                result = execute_tool('find_same_course_rides', {'candidate_start_date': comparison_start(text,today).isoformat(), 'candidate_end_date': comparison_end(text,today).isoformat(), 'timezone': timezone_name}, path)
+                evidence = _tool_evidence('find_same_course_rides', result)
+                yield _event('tool', evidence=evidence)
+                yield _event('delta', text=_deterministic_answer([{'name':'find_same_course_rides','result':result}]))
+                yield _event('complete', provider=provider, model=model, evidence=[evidence])
+                return
+            comparison = compare_latest_ride(_today(timezone_name), path, timezone_name, text)
+            evidence = {k: v for k, v in comparison.items() if k != 'answer'}
+            yield _event('tool', evidence=evidence)
+            yield _event('delta', text=comparison['answer'])
+            yield _event('complete', provider=provider, model=model, evidence=[evidence])
+            return
+        if _forced_tool_name(text)=='get_projected_training_readiness':
+            outputs,evidence=_execute_calls([('tomorrow-readiness','get_projected_training_readiness',{'timezone':timezone_name or 'UTC'})],path,message=text,timezone_name=timezone_name)
+            for item in evidence: yield _event('tool',evidence=item)
+            yield _event('delta',text=_deterministic_answer(outputs))
+            yield _event('complete',provider=provider,model=model,evidence=evidence)
+            return
+        coaching_followup = coaching_context and re.search(r'^(?:it(?: is| will be| starts)?\s+)?(?:\d+(?:\.\d+)?[ -]*(?:hours?|minutes?|hrs?|mins?)|(?:hard|moderate|easy)(?:\s|$)|starting\s+\d|at\s+\d)',text,re.I) and not re.search(r'\b(plot|graph|chart)\b',text,re.I)
+        if _forced_tool_name(text)=='preview_training_plan' or coaching_followup:
+            arguments={'message':text,'timezone':timezone_name or 'UTC'}
+            if isinstance(coaching_context,dict):
+                arguments.update(brief=coaching_context.get('brief'),week_start=coaching_context.get('week_start'))
+            outputs,evidence=_execute_calls([('local-training-coach','preview_training_plan',arguments)],path,message=text,timezone_name=timezone_name)
+            for item in evidence: yield _event('tool',evidence=item)
+            yield _event('delta',text=_deterministic_answer(outputs))
+            yield _event('complete',provider=provider,model=model,evidence=evidence)
+            return
         refined = refine(text, plot_context, _explicit_plot_arguments, _today(timezone_name), path)
         if refined:
             # Dates explicitly describe inherited context so normalization cannot erase it.

@@ -1,0 +1,78 @@
+test_control_explicit_comparison_keeps_both_metrics (__main__.AcceptanceProbes.test_control_explicit_comparison_keeps_both_metrics) ... ok
+test_control_explicit_period_and_mean_are_preserved (__main__.AcceptanceProbes.test_control_explicit_period_and_mean_are_preserved) ... ok
+test_deleted_activities_are_excluded (__main__.AcceptanceProbes.test_deleted_activities_are_excluded) ... FAIL
+test_fixture_observations_are_excluded_from_real_plots (__main__.AcceptanceProbes.test_fixture_observations_are_excluded_from_real_plots) ... FAIL
+test_malformed_daily_sync_does_not_claim_success (__main__.AcceptanceProbes.test_malformed_daily_sync_does_not_claim_success) ... FAIL
+test_rolling_average_request_is_not_silently_raw_history (__main__.AcceptanceProbes.test_rolling_average_request_is_not_silently_raw_history) ... FAIL
+test_two_plot_periods_do_not_silently_become_all_history (__main__.AcceptanceProbes.test_two_plot_periods_do_not_silently_become_all_history) ... FAIL
+test_unqualified_body_battery_comparison_is_not_dropped (__main__.AcceptanceProbes.test_unqualified_body_battery_comparison_is_not_dropped) ... FAIL
+
+======================================================================
+FAIL: test_deleted_activities_are_excluded (__main__.AcceptanceProbes.test_deleted_activities_are_excluded)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/docs/qa/2026-10-11/acceptance_probes.py", line 48, in test_deleted_activities_are_excluded
+    self.assertEqual(d['count'],0,'Removed activities must not contribute to plots or statistics')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 1 != 0 : Removed activities must not contribute to plots or statistics
+
+======================================================================
+FAIL: test_fixture_observations_are_excluded_from_real_plots (__main__.AcceptanceProbes.test_fixture_observations_are_excluded_from_real_plots)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/docs/qa/2026-10-11/acceptance_probes.py", line 41, in test_fixture_observations_are_excluded_from_real_plots
+    self.assertFalse(any(p['source']=='synthetic_fixture' for p in d['points']),
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     'Fixture activity observations must not appear in user plots')
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false : Fixture activity observations must not appear in user plots
+
+======================================================================
+FAIL: test_malformed_daily_sync_does_not_claim_success (__main__.AcceptanceProbes.test_malformed_daily_sync_does_not_claim_success)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/docs/qa/2026-10-11/acceptance_probes.py", line 75, in test_malformed_daily_sync_does_not_claim_success
+    self.assertNotEqual(result['status'],'completed','An invalid response is not a successfully fetched empty day')
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'completed' == 'completed' : An invalid response is not a successfully fetched empty day
+
+======================================================================
+FAIL: test_rolling_average_request_is_not_silently_raw_history (__main__.AcceptanceProbes.test_rolling_average_request_is_not_silently_raw_history)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/docs/qa/2026-10-11/acceptance_probes.py", line 62, in test_rolling_average_request_is_not_silently_raw_history
+    self.assertNotEqual(plots[0]['count'],28,'A requested weekly aggregation must not silently return all raw observations')
+    ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 28 == 28 : A requested weekly aggregation must not silently return all raw observations
+
+======================================================================
+FAIL: test_two_plot_periods_do_not_silently_become_all_history (__main__.AcceptanceProbes.test_two_plot_periods_do_not_silently_become_all_history)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/docs/qa/2026-10-11/acceptance_probes.py", line 54, in test_two_plot_periods_do_not_silently_become_all_history
+    self.assertEqual({(p['spec'].get('start'),p['spec'].get('end')) for p in plots},
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                     {('2026-01-01','2026-01-07'),('2026-01-08','2026-01-14')})
+                     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Items in the first set but not the second:
+(None, None)
+Items in the second set but not the first:
+('2026-01-08', '2026-01-14')
+('2026-01-01', '2026-01-07')
+
+======================================================================
+FAIL: test_unqualified_body_battery_comparison_is_not_dropped (__main__.AcceptanceProbes.test_unqualified_body_battery_comparison_is_not_dropped)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/docs/qa/2026-10-11/acceptance_probes.py", line 69, in test_unqualified_body_battery_comparison_is_not_dropped
+    self.assertEqual(plots[0]['spec']['kind'],'scatter','Clarify ambiguous Body Battery or return a comparison; do not silently drop it')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'line' != 'scatter'
+- line
++ scatter
+ : Clarify ambiguous Body Battery or return a comparison; do not silently drop it
+
+----------------------------------------------------------------------
+Ran 8 tests in 0.214s
+
+FAILED (failures=6)

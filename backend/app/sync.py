@@ -22,6 +22,8 @@ SYNC_DATA_TYPES = (
     "sleep_metrics",
     "hrv_metrics",
     "weight_metrics",
+    "vo2_metrics",
+    "supplementary_metrics",
 )
 
 
@@ -80,7 +82,7 @@ def _source_bounds(connection: object, data_type: str) -> tuple[str | None, str 
         row = connection.execute(
             """
             SELECT MIN(substr(started_at, 1, 10)), MAX(substr(started_at, 1, 10))
-            FROM activities WHERE deleted_at IS NULL
+            FROM activities WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
             """
         ).fetchone()
     elif data_type == "daily_metrics":
@@ -104,6 +106,17 @@ def _source_bounds(connection: object, data_type: str) -> tuple[str | None, str 
             FROM metric_readings WHERE source_record_id LIKE 'hrv:%'
             """
         ).fetchone()
+    elif data_type == "vo2_metrics":
+        row = connection.execute("""
+            SELECT MIN(day), MAX(day) FROM (
+                SELECT substr(recorded_at,1,10) AS day FROM metric_readings
+                WHERE metric_type IN ('vo2_cycling','vo2_running')
+                UNION ALL SELECT substr(record_date,1,10) FROM garmin_archive_records
+                WHERE category IN ('max_met_fitness','activity_vo2_max')
+            )
+        """).fetchone()
+    elif data_type == 'supplementary_metrics':
+        row = connection.execute("SELECT MIN(calendar_date), MAX(calendar_date) FROM garmin_sync_payloads WHERE data_type='supplementary_metrics'").fetchone()
     else:
         row = connection.execute(
             """
@@ -425,7 +438,7 @@ def _fit_content(payload: bytes) -> bytes:
 
 
 def _upsert_activity_detail(
-    connection: object, source_record_id: str, payload: bytes
+    connection: object, source_record_id: str, payload: bytes, path: Path | None = None
 ) -> int:
     activity = connection.execute(
         "SELECT id FROM activities WHERE source_record_id = ? LIMIT 1",
@@ -458,6 +471,21 @@ def _upsert_activity_detail(
         """,
         samples,
     )
+    from .config import database_path
+    root = (path or database_path()).parent / 'sync-originals'
+    root.mkdir(parents=True, exist_ok=True)
+    digest = hashlib.sha256(payload).hexdigest()
+    zipped = zipfile.is_zipfile(io.BytesIO(payload))
+    filename = digest + ('.zip' if zipped else '.fit')
+    target = root / filename
+    if not target.exists():
+        temporary = root / (filename + '.' + str(uuid.uuid4()) + '.tmp')
+        temporary.write_bytes(payload)
+        temporary.replace(target)
+    connection.execute("""INSERT INTO source_files(id,original_name,content_hash,media_type,byte_size,stored_path)
+        VALUES(?,?,?,?,?,?) ON CONFLICT(content_hash) DO NOTHING""",
+        (str(uuid.uuid4()), 'activity-' + source_record_id + ('.zip' if zipped else '.fit'), digest,
+         'application/zip' if zipped else 'application/vnd.ant.fit', len(payload), str(target)))
     preserve_fit_summary(connection, str(activity['id']), messages)
     return len(samples)
 
@@ -481,6 +509,7 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
         incoming = json.loads(values['raw_json'])
         old.update(incoming)
         values['raw_json'] = encoded(old)
+        if values['elevation_gain_meters'] is None: values['elevation_gain_meters'] = existing['elevation_gain_meters']
     if record.get("deleted") and existing is None:
         return "unchanged"
     if record.get("deleted") and existing["deleted_at"]:
@@ -683,6 +712,7 @@ def _commit_interval(
                     connection,
                     str(record["source_record_id"]),
                     detail,
+                    path,
                 )
         day = interval_date.isoformat()
         if source_response is not None:
@@ -707,7 +737,7 @@ def _commit_interval(
                 counts["created"],
                 counts["updated"],
                 counts["unchanged"],
-                int(not records),
+                int(not records and not (data_type=='supplementary_metrics' and isinstance(source_response,dict) and any(source_response.get('endpoints',{}).values()))),
             ),
         )
         coverage_end = max(old_coverage_end, interval_date) if old_coverage_end else interval_date
@@ -902,6 +932,13 @@ def run_sync(
                 except SyncInterrupted:
                     raise
                 except Exception as error:
+                    partial = getattr(provider, 'interval_payload', None)
+                    if partial is not None:
+                        with connect(path) as connection:
+                            connection.execute("""INSERT INTO garmin_sync_payloads(data_type,calendar_date,payload_json)
+                                VALUES(?,?,?) ON CONFLICT(data_type,calendar_date) DO UPDATE SET
+                                payload_json=excluded.payload_json,updated_at=CURRENT_TIMESTAMP""",
+                                (data_type,interval_date.isoformat(),encoded(partial)))
                     _record_failure(job_id, data_type, interval_date, interval_kind, error, path)
                     failures.append({"data_type": data_type, "date": interval_date.isoformat(), "error": str(error)})
                     break
@@ -958,6 +995,12 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
         empty_intervals = connection.execute(
             "SELECT COUNT(*) FROM sync_intervals WHERE status = 'completed' AND empty_result = 1"
         ).fetchone()[0]
+        extra_row = connection.execute("SELECT calendar_date,payload_json FROM garmin_sync_payloads WHERE data_type='supplementary_metrics' ORDER BY calendar_date DESC LIMIT 1").fetchone()
+    additional_data = None
+    if extra_row:
+        raw = json.loads(extra_row['payload_json'])
+        additional_data = {'date':extra_row['calendar_date'], 'successful_endpoints':sorted(raw.get('endpoints',{})),
+                           'failures':raw.get('failures',{}), 'unsupported':raw.get('unsupported',[]), 'unavailable':raw.get('unavailable',{})}
     last_job = dict(last_job_row) if last_job_row else None
     if last_job and last_job.get("checkpoint_json"):
         last_job["checkpoint"] = json.loads(str(last_job.pop("checkpoint_json")))
@@ -979,6 +1022,7 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
         "supports_updated_since": False,
         "checkpoints": _checkpoint_rows(path),
         "verified_empty_intervals": empty_intervals,
+        "additional_data": additional_data,
         "last_job": last_job,
         "live_sync_ready": connection_ready,
         "next_action": next_action,

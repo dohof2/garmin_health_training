@@ -27,6 +27,9 @@ photos/
 *.sqlite3
 *.sqlite3-*
 
+# Detailed local QC evidence may contain personal health records or account IDs.
+docs/qa/**/*.json
+
 # Python
 __pycache__/
 *.py[cod]

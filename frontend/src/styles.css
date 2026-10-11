@@ -1673,3 +1673,22 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .chart-trend { stroke: #d39225; stroke-width: 3; stroke-dasharray: 9 5; }
 .plot-analysis { display: grid; gap: .4rem; padding: .75rem 1rem; border-radius: .6rem; background: var(--surface-soft, #f5f5f9); font-size: .9rem; }
 .assistant-plots { scroll-margin-top: 110px; }
+
+.coach-panel { margin: 1.5rem 0; padding: 1.5rem; background: #f4f6fb; border: 1px solid #dce2ed; border-radius: 18px; }
+.coach-panel textarea { min-height: 100px; width: 100%; }
+.coach-commitments { margin: 1.25rem 0; }
+.coach-commitments fieldset { padding: 1rem; margin: 1rem 0; border: 1px solid #dce2ed; border-radius: 12px; }
+.coach-roadmap { display: grid; grid-template-columns: repeat(auto-fit,minmax(220px,1fr)); gap: .75rem; margin-top: 1rem; }
+.coach-roadmap article { padding: 1rem; border-radius: 12px; background: white; border: 1px solid #dce2ed; }
+.coach-preview { margin-top: 1.5rem; }
+
+.coach-roadmap p { text-transform: none; letter-spacing: normal; font-size: .9rem; line-height: 1.5; }
+
+.readiness-forecast { border-top: 1px solid #dce2ed; margin-top: 1rem; padding-top: 1rem; }
+.readiness-forecast > p, .readiness-explanation { text-transform: none !important; letter-spacing: normal !important; font-size: .9rem !important; line-height: 1.5; }
+.readiness-forecast small { display: block; margin: .4rem 0; }
+
+.readiness-dashboard-card { grid-column: 1 / -1; }
+.readiness-overview { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 2rem; }
+.readiness-overview .readiness-forecast { border-top: 0; border-left: 1px solid #dce2ed; margin-top: 0; padding: 0 0 0 2rem; }
+@media (max-width: 700px) { .readiness-overview { grid-template-columns: 1fr; } .readiness-overview .readiness-forecast { border-left: 0; border-top: 1px solid #dce2ed; padding: 1rem 0 0; } }

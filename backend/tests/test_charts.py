@@ -23,6 +23,25 @@ class ChartTests(unittest.TestCase):
                 c.execute("INSERT INTO garmin_archive_records(id,source_name,category,source_record_id,record_date,payload_json) VALUES(?, 'garmin_export','max_met_fitness',?,?,?)", (str(i),str(i),day,payload))
             c.execute("INSERT INTO metric_readings(id,source_name,metric_type,recorded_at,value,unit) VALUES('hr','garmin_export','resting_heart_rate','2026-09-01',52,'bpm')")
 
+    def test_time_scatter_preserves_all_dates_and_regression(self):
+        with connect(self.path) as c: c.execute("INSERT INTO garmin_archive_records(id,source_name,category,source_record_id,record_date,payload_json) VALUES('third','garmin_export','max_met_fitness','third','2026-09-05',?)",(json.dumps({'sport':'CYCLING','vo2MaxValue':46}),))
+        result=chart_data({'metric':'vo2_cycling','kind':'scatter','x_metric':'date','trend_line':True,'correlation':True},self.path)
+        self.assertEqual(result['x_unit'],'Date')
+        self.assertTrue(all(p['x']==p['date'] for p in result['points']))
+        self.assertEqual(result['analysis']['sample_count'],len(result['points']))
+        self.assertIsInstance(result['analysis']['trend']['x_start'],str)
+        line=chart_data({'metric':'vo2_cycling','kind':'line','trend_line':True},self.path)
+        self.assertEqual(result['analysis']['trend'],line['analysis']['trend'])
+
+    def test_assistant_time_axis_request_and_context_refinement(self):
+        from app.ai_chat import _explicit_plot_arguments
+        from app.plot_requests import refine
+        spec=_explicit_plot_arguments('Plot cycling VO2 max against time with a trend line',self.path)['plots'][0]
+        self.assertEqual(spec['x_metric'],'date')
+        result=refine('Use time on the x axis with a trend line',[{'metric':'activity_speed','x_metric':'activity_power','kind':'scatter'}],_explicit_plot_arguments,date(2026,10,11),self.path)
+        self.assertEqual(result['plots'][0]['x_metric'],'date')
+        self.assertEqual(result['plots'][0]['metric'],'activity_speed')
+
     def test_matched_speed_plot_and_plot_it_use_full_gps_set_not_all_rides(self):
         with connect(self.path) as c:
             for index in range(32):
@@ -113,8 +132,8 @@ class ChartTests(unittest.TestCase):
         self.assertAlmostEqual(r['points'][0]['y'],28.8)
 
     def test_validation_and_assistant_evidence(self):
-        with self.assertRaises(ValueError):
-            chart_data({'metric':'vo2_cycling','kind':'scatter','x_metric':'activity_power'},self.path)
+        mixed = chart_data({'metric':'vo2_cycling','kind':'scatter','x_metric':'activity_power'},self.path)
+        self.assertEqual(mixed['count'], 0)  # Same-date pairing is supported; missing rides are not fabricated.
         with self.assertRaises(ValueError):
             chart_data({'metric':'vo2_cycling','kind':'line','sql':'DROP TABLE activities'},self.path)
         r=execute_tool('create_plots',{'plots':[{'metric':'vo2_cycling','kind':'line'}]},self.path)

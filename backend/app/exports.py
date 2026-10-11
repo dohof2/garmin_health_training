@@ -68,6 +68,8 @@ CSV_DATASETS: dict[str, tuple[str, str]] = {
 }
 
 PORTABLE_TABLES = (
+    "training_coach_brief",
+    "training_coach_brief_revisions",
     "meal_revisions",
     "food_library",
     "food_library_revisions",
@@ -298,14 +300,14 @@ def original_activity_inventory(path: Path | None = None) -> dict[str, object]:
             SELECT DISTINCT sf.id, sf.original_name, sf.media_type, sf.byte_size,
                             sf.content_hash, sf.stored_path
             FROM source_files AS sf
-            JOIN (
+            LEFT JOIN (
                 SELECT fit_source_file_id AS source_file_id
                 FROM fit_import_files WHERE status = 'completed'
                 UNION
                 SELECT detail_source_file_id AS source_file_id
                 FROM xml_activity_import_files WHERE status = 'completed'
             ) AS activity_sources ON activity_sources.source_file_id = sf.id
-            WHERE sf.stored_path IS NOT NULL
+            WHERE sf.stored_path IS NOT NULL AND (activity_sources.source_file_id IS NOT NULL OR sf.stored_path LIKE '%/sync-originals/%')
             ORDER BY sf.original_name, sf.id
             """
         ).fetchall()
@@ -329,14 +331,14 @@ def _original_activity_rows(path: Path | None) -> list[sqlite3.Row]:
             """
             SELECT DISTINCT sf.id, sf.original_name, sf.content_hash, sf.stored_path
             FROM source_files AS sf
-            JOIN (
+            LEFT JOIN (
                 SELECT fit_source_file_id AS source_file_id
                 FROM fit_import_files WHERE status = 'completed'
                 UNION
                 SELECT detail_source_file_id AS source_file_id
                 FROM xml_activity_import_files WHERE status = 'completed'
             ) AS activity_sources ON activity_sources.source_file_id = sf.id
-            WHERE sf.stored_path IS NOT NULL
+            WHERE sf.stored_path IS NOT NULL AND (activity_sources.source_file_id IS NOT NULL OR sf.stored_path LIKE '%/sync-originals/%')
             ORDER BY sf.id
             """
         ).fetchall()

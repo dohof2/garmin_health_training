@@ -44,14 +44,14 @@ const fields = ["equipment_label", "action", "event_date", "category", "part", "
 const numericFields = new Set<string>(["quantity", "cost_amount", "usage_value"]);
 const labels: Record<typeof fields[number], string> = {
   equipment_label: "Equipment or item", action: "Work performed", event_date: "Completed date", category: "Category",
-  part: "Part", quantity: "Quantity", cost_amount: "Cost", cost_currency: "Currency (e.g. EUR)",
+  part: "Part", quantity: "Quantity", cost_amount: "Cost", cost_currency: "Currency (ILS / ₪)",
   provider: "Service provider", usage_value: "Manual usage", usage_unit: "Usage unit (e.g. km)", details: "Notes",
 };
 const categories = ["general", "replacement", "service", "repair", "inspection"];
 type Draft = Record<typeof fields[number], string>;
 const emptyDraft = (timezone: string): Draft => ({
   equipment_label: "", action: "", event_date: new Date().toLocaleDateString("en-CA", { timeZone: timezone }), category: "general",
-  part: "", quantity: "", cost_amount: "", cost_currency: "", provider: "", usage_value: "", usage_unit: "", details: "",
+  part: "", quantity: "", cost_amount: "", cost_currency: "ILS", provider: "", usage_value: "", usage_unit: "", details: "",
 });
 function EventDetails({ event }: { event: MaintenanceEvent }) {
   return <dl>{fields.map((field) => <div key={field}><dt>{labels[field]}</dt><dd>{event[field] == null ? "Not recorded" : String(event[field])}</dd></div>)}
@@ -115,6 +115,7 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
   const save = () => perform(async () => {
     const values = Object.fromEntries(fields.map((field) => [field,
       draft[field] === "" ? null : numericFields.has(field) ? Number(draft[field]) : draft[field]]));
+    if (draft.cost_amount === "") values.cost_currency = null;
     if (editing) await mutate(`/api/maintenance/events/${encodeURIComponent(editing.id)}`, { changes: values, expected_revision: editing.revision, timezone }, "PATCH");
     else await mutate("/api/maintenance", { events: [values], timezone });
     setDraft(emptyDraft(timezone)); setEditing(null); setRevisions(null);

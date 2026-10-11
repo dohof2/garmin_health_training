@@ -20,6 +20,7 @@ type Result = {
   sensitivity?: { low: number; high: number; band_changes: boolean };
   calculation_id: number; calculated_at: string;
 };
+type Forecast = {date:string;as_of:string;status:string;score:number|null;range:{low:number;high:number}|null;reason?:string;model?:{lookback_days:number;usable_mornings:number;selected:string;baseline_mae:number|null;regression_mae:number|null;evaluation_mornings:number};assumptions:string[];limitations:string[];validation:{mornings:number;mean_absolute_error:number|null;range_method?:string}|null};
 type Response = {
   latest: Result; trend: Result[]; settings: { parameters: Record<string, number> }; reconstruction: string;
 };
@@ -33,7 +34,7 @@ const flags: Record<string, string> = {
   sleep_score_missing: "Sleep quality score is missing.",
   sleep_trend_insufficient: "At least two of the latest three sleep nights are needed for the short trend.",
   workload_coverage_or_reference_incomplete: "Recent workout coverage, explicit loads, end times, or enough fully covered reference mornings are missing.",
-  morning_observation_not_finished: "The morning cutoff has not passed yet. Check again after sleep and the selected morning time.",
+  morning_observation_not_finished: "The morning cutoff has not passed yet. Check again after your recorded sleep ends.",
   band_sensitive_to_provisional_parameters: "Reasonable changes to the prototype parameters change this day's band. Treat the band cautiously.",
 };
 const titles: Record<string, string> = { autonomic: "HRV and resting heart rate", sleep: "Sleep", workload: "Recent workload" };
@@ -43,7 +44,7 @@ const labels: Record<string, string> = {
   baseline_days: "Baseline window (days)", baseline_min_nights: "Minimum baseline nights",
   load_reference_days: "Load reference window (days)", load_min_mornings: "Minimum reference mornings",
   hrv_scale_floor: "Minimum log-HRV scale", rhr_scale_floor: "Minimum RHR scale (bpm)",
-  deviation_tolerance: "Deviation tolerance", morning_hour: "Morning cutoff hour (local)",
+  deviation_tolerance: "Deviation tolerance", morning_hour: "Fallback morning hour (no wake time)",
 };
 function value(result: Result) {
   if (result.score !== null) return `${result.score} / 100`;
@@ -52,11 +53,15 @@ function value(result: Result) {
 }
 
 export function ReadinessCard({ timezone, refreshToken }: { timezone: string; refreshToken: string }) {
+  const [clock,setClock]=useState(()=>Date.now());
+  useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),60000);return()=>window.clearInterval(timer);},[]);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
   const [historicalDate, setHistoricalDate] = useState<string | null>(null);
   const selectedDate = historicalDate ?? today;
   const setSelectedDate = (value: string) => setHistoricalDate(value === today ? null : value);
   const [data, setData] = useState<Response | null>(null);
+  const [forecastError,setForecastError]=useState<string|null>(null);
+  const [forecast,setForecast]=useState<Forecast|null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [revision, setRevision] = useState(0);
@@ -64,17 +69,21 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
   const [saving, setSaving] = useState(false);
   useEffect(() => {
     const controller = new AbortController();
-    setLoading(true); setError(null); setData(null);
-    fetch(`/api/readiness?end_date=${selectedDate}&days=14&timezone=${encodeURIComponent(timezone)}`, { signal: controller.signal })
+    setLoading(true); setError(null);setForecastError(null);setForecast(null); setData(null);
+    const current=fetch(`/api/readiness?end_date=${selectedDate}&days=14&timezone=${encodeURIComponent(timezone)}`, { signal: controller.signal })
       .then(async response => {
         if (!response.ok) throw new Error("Readiness could not be loaded.");
         return response.json() as Promise<Response>;
       })
-      .then(result => { setData(result); setDraft(result.settings.parameters); })
+      ;
+    const projection=selectedDate===today ? fetch(`/api/readiness/forecast?timezone=${encodeURIComponent(timezone)}`,{signal:controller.signal}).then(async response=>{if(!response.ok) throw new Error('Tomorrow’s readiness forecast could not be loaded.');return response.json() as Promise<Forecast>;}).catch(error=>{if(error.name!=='AbortError')setForecastError(error.message);return null;}) : Promise.resolve(null);
+    Promise.all([current,projection])
+      .then(([result,projection]) => { setData(result); setDraft(result.settings.parameters);setForecast(projection); })
       .catch(error => { if (error.name !== "AbortError") setError(error.message); })
       .finally(() => { if (!controller.signal.aborted) setLoading(false); });
     return () => controller.abort();
   }, [selectedDate, timezone, refreshToken, revision]);
+  useEffect(()=>{if(data?.latest.status==='awaiting_morning'&&clock>=Date.parse(data.latest.cutoff))setRevision(r=>r+1);},[clock,data?.latest.cutoff,data?.latest.status]);
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(null);
     try {
@@ -86,6 +95,7 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
   };
   const result = data?.latest;
   return <>
+    <div className="readiness-overview"><section aria-label="Today’s measured readiness">
     <p>Training readiness <span className="readiness-prototype">Prototype</span></p>
     {result && !loading ? <StatusDial
       value={result.score !== null ? String(result.score) : result.score_range ? `${result.score_range.low}–${result.score_range.high}` : '—'}
@@ -97,9 +107,25 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
     {error && <p role="alert" className="form-error">{error}</p>}
     {result && <>
       <span>{result.data_quality} data quality</span>
-      <small>{result.date} · {timezone} · after {new Date(result.cutoff).toLocaleTimeString([], { timeZone: timezone, hour: "2-digit", minute: "2-digit" })}</small>
+      <small>{result.date} · {timezone} · observation {new Date(result.cutoff).toLocaleTimeString([], { timeZone: timezone, hour: "2-digit", minute: "2-digit" })}</small>
+      {result.status==='awaiting_morning'&&<p className="readiness-explanation">Waiting for completed sleep or missing morning measurements. Recorded wake time takes priority over the fallback morning hour.{result.inputs.sleep && result.inputs.hrv ? ' Sleep and HRV are already synced.' : ' Sync after your sleep measurements are available.'}</p>}
+      {result.status==='insufficient_data'&&<p className="readiness-explanation">{result.warnings.filter(f=>!['rhr_previous_day_context','historical_estimate_uses_current_corrected_records'].includes(f)).map(f=>flags[f]??f).join(' ')}</p>}
       <p className="readiness-caution">{result.caution}</p>
     </>}
+    </section>
+    {forecastError&&<p role="alert">{forecastError}</p>}
+    {forecast&&selectedDate===today&&!loading&&<section className="readiness-forecast" aria-label="Tomorrow’s projected training readiness">
+      <p>Tomorrow’s projected readiness · {forecast.date}</p>
+      {forecast.score!==null ? <StatusDial value={String(forecast.score)} unit="/ 100 · forecast" bands={readinessBands} position={forecast.score/100} interpretation={forecast.score<50?'Projected recovery focus':forecast.score<80?'Projected ready with care':'Projected favorable recovery signals'}/> : <p>{forecast.reason??'Not enough history to project tomorrow.'}</p>}
+      {forecast.range&&<p>Estimated range: <strong>{forecast.range.low}–{forecast.range.high} / 100</strong>. {forecast.range.high-forecast.range.low>=30?'Wide range · tomorrow remains uncertain.':'Actual morning measurements can differ.'}</p>}
+      {forecast.model&&<small>100-day model review · {forecast.model.usable_mornings} usable mornings · {forecast.model.selected==='regularized_regression'?'regression selected':'recent-trend model retained'}.</small>}
+      {forecast.validation&&<small>Historical checks: {forecast.validation.mornings} mornings{forecast.validation.mean_absolute_error!==null?` · average error ${forecast.validation.mean_absolute_error} points`:''}.</small>}
+      {forecast.status==='provisional'&&<p>{forecast.reason}</p>}
+      <small>Updated {new Date(forecast.as_of).toLocaleTimeString([],{timeZone:timezone,hour:'2-digit',minute:'2-digit'})} · assumes no further workouts before tomorrow morning.</small>
+      <details><summary>Forecast method and uncertainty</summary>{forecast.model&&<p>Chronological checks: trend-model error {forecast.model.baseline_mae??'unavailable'} points; regression error {forecast.model.regression_mae??'unavailable'} points across {forecast.model.evaluation_mornings} mornings. Regression is selected only with enough checks and at least 5% improvement.</p>}<ul>{forecast.assumptions.map(a=><li key={a}>{a}</li>)}</ul><ul>{forecast.limitations.map(a=><li key={a}>{a}</li>)}</ul>{forecast.validation?.range_method&&<p>{forecast.validation.range_method}</p>}</details>
+    </section>}
+    </div>
+    <button type="button" disabled={loading} onClick={()=>setRevision(r=>r+1)}>Refresh readiness</button>
     <details className="readiness-details">
       <summary>Why this result? View trend and assumptions</summary>
       <label>Morning date <input aria-label="Readiness morning date" type="date" max={today} value={selectedDate} onChange={event => { if (event.target.value) setSelectedDate(event.target.value); }} /></label>

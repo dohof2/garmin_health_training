@@ -262,7 +262,7 @@ def _normalise_activity(record: dict[str, object]) -> dict[str, object]:
         "duration_seconds": record.get("duration"),
         "distance_meters": record.get("distance"),
         "calories_kcal": record.get("calories"),
-        "elevation_gain_meters": record.get("elevationGain"),
+        "elevation_gain_meters": next((v for v in (record.get("elevationGain"), record.get("totalAscent")) if isinstance(v,(int,float)) and not isinstance(v,bool) and math.isfinite(v) and v>=0), None),
         "source_updated_at": _iso_timestamp(
             record.get("lastUpdated") or record.get("lastUpdateDate")
         ),
@@ -420,6 +420,34 @@ def _normalise_hrv(record: object, calendar_date: str) -> list[dict[str, object]
     return metrics
 
 
+def _normalise_vo2(record: object) -> list[dict[str, object]]:
+    if record is None: return []
+    rows = record if isinstance(record, list) else [record]
+    metrics = []
+    for row in rows:
+        if not isinstance(row, dict): raise SyncError('Garmin VO₂ max response is malformed')
+        # Garmin generic fitness can describe cycling too: use its sport, never label it running blindly.
+        for field in ('generic', 'cycling'):
+            item = row.get(field)
+            if item is None: continue
+            if not isinstance(item, dict): raise SyncError('Garmin VO₂ max measurement is malformed')
+            sport = 'CYCLING' if field == 'cycling' else str(item.get('sport', '')).upper()
+            if sport not in ('CYCLING', 'RUNNING'): continue
+            raw_day = item.get('calendarDate')
+            try: day = date.fromisoformat(raw_day).isoformat()
+            except (TypeError, ValueError): continue
+            value = item.get('vo2MaxPreciseValue')
+            if value is None: value = item.get('vo2MaxValue')
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0: continue
+            metric = 'vo2_' + sport.lower()
+            metrics.append({'source_record_id': f'vo2:{sport.lower()}:{day}', 'metric_type': metric,
+                            'recorded_at': day, 'value': value, 'unit': 'mL/kg/min',
+                            'period_start': day, 'period_end': day,
+                            'source_updated_at': _iso_timestamp(item.get('lastUpdated'))})
+    # The sport-specific measurement wins if generic repeats the same sport/date.
+    return list({(r['metric_type'], r['recorded_at']): r for r in metrics}.values())
+
+
 def _normalise_weight(record: object, calendar_date: str) -> list[dict[str, object]]:
     if not isinstance(record, dict):
         return []
@@ -504,7 +532,9 @@ class GarminConnectProvider:
             )
             if not isinstance(records, list):
                 raise SyncError('Garmin activities response is malformed')
+            from .supplementary_sync import ACTIVITY_METHODS
             enriched = []
+            detail_errors = []
             for record in records:
                 payload = dict(record)
                 summary_fetcher = getattr(self.client, 'get_activity', None)
@@ -515,8 +545,20 @@ class GarminConnectProvider:
                     if str(detail.get('activityId')) != str(record['activityId']):
                         raise SyncError('Garmin activity summary ID did not match')
                     payload.update(detail)
+                extra = {}
+                for name in ACTIVITY_METHODS:
+                    fetcher = getattr(self.client, name, None)
+                    if callable(fetcher):
+                        try:
+                            extra[name] = fetcher(str(record['activityId']))
+                        except Exception as error:
+                            extra[name] = {'fetch_error': str(error)}
+                            detail_errors.append(name + ': ' + str(error))
+                if extra: payload['additional_details'] = extra
                 enriched.append(payload)
             self.interval_payload = source_payload(enriched)
+            if detail_errors:
+                raise SyncError('Additional activity details failed: ' + '; '.join(detail_errors))
             return [_normalise_activity(record) for record in enriched]
         if data_type == "daily_metrics":
             metrics: list[dict[str, object]] = []
@@ -525,8 +567,9 @@ class GarminConnectProvider:
             while day <= end_date:
                 summary = self.client.get_user_summary(day.isoformat())
                 payloads.append(source_payload(summary))
-                if isinstance(summary, dict):
-                    metrics.extend(_normalise_summary(summary, day.isoformat()))
+                if not isinstance(summary, dict):
+                    raise SyncError('Garmin daily summary is malformed; coverage was not advanced')
+                metrics.extend(_normalise_summary(summary, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
             self.interval_payload = payloads[0] if len(payloads) == 1 else payloads
             return metrics
@@ -536,6 +579,8 @@ class GarminConnectProvider:
             day = start_date
             while day <= end_date:
                 payload = self.client.get_sleep_data(day.isoformat())
+                if not isinstance(payload, dict):
+                    raise SyncError('Garmin sleep response is malformed')
                 payloads.append(source_payload(payload))
                 metrics.extend(_normalise_sleep(payload, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
@@ -556,10 +601,23 @@ class GarminConnectProvider:
                 day = date.fromordinal(day.toordinal() + 1)
             self.interval_payload = payloads[0] if len(payloads) == 1 else payloads
             return metrics
+        if data_type == "vo2_metrics":
+            payload = self.client.get_max_metrics_range(start_date.isoformat(), end_date.isoformat())
+            self.interval_payload = source_payload(payload)
+            return [r for r in _normalise_vo2(payload) if start_date.isoformat() <= r['recorded_at'] <= end_date.isoformat()]
         if data_type == "weight_metrics":
             records = self.client.get_weigh_ins(start_date.isoformat(), end_date.isoformat())
+            if not isinstance(records, dict):
+                raise SyncError('Garmin weight response is malformed')
             self.interval_payload = source_payload(records)
             return _normalise_weight(records, start_date.isoformat())
+        if data_type == 'supplementary_metrics':
+            from .supplementary_sync import fetch_supplementary, normalized_metrics
+            payload = fetch_supplementary(self.client, start_date.isoformat(), end_date.isoformat())
+            self.interval_payload = source_payload(payload)
+            if payload['failures']:
+                raise SyncError('Additional Garmin endpoints failed: ' + '; '.join(f"{name}: {error}" for name,error in payload['failures'].items()))
+            return normalized_metrics(payload, start_date.isoformat())
         raise SyncError(f"Unsupported Garmin data type: {data_type}")
 
     def fetch_activity_detail(self, source_record_id: str) -> bytes:

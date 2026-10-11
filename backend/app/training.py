@@ -239,7 +239,7 @@ def draft_week(week_start,timezone_name,expected_preference_revision,path:Path|N
         if not sessions:raise ValueError('No supported session fits the saved availability, volume and restrictions')
         rationale=['All sessions are easy/foundation; no automatic intensity increase.','Volume stays within confirmed manageable weekly minutes.','At least one calendar day separates strength sessions, including adjacent plans.','At most six sessions are generated, leaving a day without a new workout.','Immediate priority breaks ties in the balanced sport rotation.','Goals are optional context, not inferred workout targets.']
         recent_start=(current_day-timedelta(days=28)).isoformat()
-        recorded=[dict(r) for r in c.execute("SELECT activity_type,COUNT(*) AS activity_count,SUM(duration_seconds)/60 AS recorded_minutes FROM activities WHERE deleted_at IS NULL AND substr(started_at,1,10)>=? AND substr(started_at,1,10)<? GROUP BY activity_type",(recent_start,current_day.isoformat()))]
+        recorded=[dict(r) for r in c.execute("SELECT activity_type,COUNT(*) AS activity_count,SUM(duration_seconds)/60 AS recorded_minutes FROM activities WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture' AND substr(started_at,1,10)>=? AND substr(started_at,1,10)<? GROUP BY activity_type",(recent_start,current_day.isoformat()))]
         c.execute("INSERT INTO training_plans(id,name,status,starts_on,ends_on,context_json) VALUES (?,?,'draft',?,?,?)",(plan_id,'Training week '+week_start.isoformat(),week_start.isoformat(),(week_start+timedelta(days=6)).isoformat(),encoded({'rule_version':RULE_VERSION,'preferences':context,'timezone':timezone_name,'rationale':rationale,
             'readiness_context':{'date':readiness['date'],'status':readiness['status'],'score':readiness['score'],'score_range':readiness['score_range'],'calculation_id':readiness['calculation_id'],'note':'Current advisory context; not a forecast or a reason for automatic intensity increases.'},
             'recorded_history':{'start':recent_start,'end':(current_day-timedelta(days=1)).isoformat(),'sports':recorded,'note':'Recorded history may be incomplete; confirmed manageable volume determines this draft.'}})))
@@ -314,6 +314,7 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
         if 'template_id' in changes or 'duration_minutes' in changes or restoring:
             context=_context(c,datetime.now(timezone.utc))
             if not context['ready']:raise ValueError('Preferences require review before changing training')
+            if definition['template_id'] in ('fixed_commitment','cycling_controlled_intervals'): raise ValueError('Revise the coaching brief and preview a replacement week to change a coached session; feedback can be saved here.')
             template=changes.get('template_id',definition['template_id']);minutes=changes.get('duration_minutes',definition['duration_minutes'])
             definition=workout_definition(template,minutes,context['answers'])
             local=datetime.fromisoformat(row['scheduled_for'])

@@ -23,6 +23,7 @@ RIDE_ACTIVITY_TYPES = [
     "virtual_ride",
 ]
 AI_METRIC_TYPES = [
+    "hydration", "acute_training_load",
     "active_calories", "active_duration", "average_spo2", "average_stress",
     "awake_sleep", "body_battery_at_wake", "body_battery_charged",
     "body_battery_drained", "body_battery_high", "body_battery_latest",
@@ -45,6 +46,7 @@ METRIC_TYPE_ALIASES = {
     "sleep": "sleep_duration",
 }
 ADDITIVE_METRICS = {
+    "hydration",
     "active_calories",
     "active_duration",
     "distance",
@@ -456,7 +458,7 @@ def _health_summary(
         SELECT metric_type, unit, substr(recorded_at, 1, 10) AS recorded_date,
                value, source_name, recorded_at
         FROM metric_readings
-        WHERE substr(recorded_at, 1, 10) BETWEEN ? AND ?
+        WHERE source_name != 'synthetic_fixture' AND substr(recorded_at, 1, 10) BETWEEN ? AND ?
     """
     parameters: list[object] = [start.isoformat(), end.isoformat()]
     if metric_types:
@@ -468,6 +470,12 @@ def _health_summary(
     with connect(path) as connection:
         rows = connection.execute(query, parameters).fetchall()
 
+    if metric_types:
+        from .charts import _observations
+        for metric in set(metric_types) & {'hydration','acute_training_load'}:
+            observations, unit, _ = _observations(metric, {'start':start.isoformat(),'end':end.isoformat()},path)
+            rows = [r for r in rows if r['metric_type'] != metric]
+            rows += [{'metric_type':metric,'unit':unit,'recorded_date':p['date'],'value':p['value'],'source_name':p['source'],'recorded_at':p['date']} for p in observations]
     grouped: dict[tuple[str, str], dict[str, object]] = {}
     source_names: set[str] = set()
     latest_recorded_at: str | None = None
@@ -1516,10 +1524,12 @@ def export_maintenance_tool(arguments, path=None):
 
 
 ToolHandler = Callable[[dict[str, object], Path | None], dict[str, object]]
+from .readiness_forecast import forecast_tool
 from .readiness import get_readiness_tool
 
 TOOL_HANDLERS: dict[str, ToolHandler] = {
     "get_training_readiness": get_readiness_tool,
+    "get_projected_training_readiness": forecast_tool,
     "get_health_summary": get_health_summary_tool,
     "list_activities": list_activities_tool,
     "compare_periods": compare_periods_tool,
@@ -1536,6 +1546,7 @@ TOOL_HANDLERS: dict[str, ToolHandler] = {
     "export_maintenance": export_maintenance_tool,
 }
 TOOL_DEFINITIONS.extend([
+    {"name":"get_projected_training_readiness","description":"Forecast tomorrow's app readiness from recent trends and recorded workouts. Report assumptions, uncertainty and historical error; never present it as measured Garmin readiness or change workouts.","input_schema":{"type":"object","properties":{"timezone":{"type":["string","null"]}},"additionalProperties":False}},
     {"name": "get_training_readiness", "description": "Return the application's advisory morning readiness estimate, exact deductions, data gaps, personal references and provisional formula. Missing evidence yields a range or insufficient data. Never change a workout from this result.",
      "input_schema": {"type": "object", "properties": {"date": {"type": ["string", "null"], "format": "date"},
          "timezone": {"type": ["string", "null"]}}, "additionalProperties": False}},
@@ -1581,20 +1592,26 @@ TOOL_DEFINITIONS.extend([
      "input_schema": {"type": "object", "properties": {}, "additionalProperties": False}},
 ])
 
+from .training_coach import assistant_preview
 from .charts import create_plot_tool, catalog as chart_catalog
 
+TOOL_HANDLERS['preview_training_plan'] = assistant_preview
 TOOL_HANDLERS['create_plots'] = create_plot_tool
 TOOL_HANDLERS['get_chart_catalog'] = lambda arguments, path: {'tool': 'get_chart_catalog', **chart_catalog(path)}
 TOOL_DEFINITIONS.extend([
+    {'name':'preview_training_plan','description':'Read-only coaching preview using a primary FTP/endurance/race/general goal, fixed trips and saved training constraints. Preserves commitments and explains recovery and a multi-week direction. No writes; open in Training for reviewed saving.',
+     'input_schema':{'type':'object','properties':{'message':{'type':'string'},'week_start':{'type':'string'},'timezone':{'type':'string'},'brief':{'type':'object'},'replace_plan_id':{'type':'string'}},'required':['message'],'additionalProperties':False}},
     {'name': 'get_chart_catalog', 'description': 'List supported stored health metrics and activity fields for plotting. Query before choosing an unfamiliar metric.',
      'input_schema': {'type': 'object', 'properties': {}, 'additionalProperties': False}},
-    {'name': 'create_plots', 'description': 'Create one to four large visible plots from recorded health or activity data. Supports any catalog metric. VO2 IDs: vo2_cycling, vo2_running. Activity IDs: activity_power, activity_speed, activity_distance, activity_duration, activity_heart_rate, activity_calories, activity_elevation. For power versus speed use x_metric activity_power, metric activity_speed, kind scatter, sport cycling. For HR versus VO2 use x_metric resting_heart_rate, metric vo2_cycling, kind scatter. Sparse health comparisons pair actual same-date readings; never fill gaps. Omit dates for full history.',
+    {'name': 'create_plots', 'description': 'Create one to four large visible plots from recorded health or activity data. Supports any catalog metric. VO2 IDs: vo2_cycling, vo2_running. Activity IDs: activity_power, activity_speed, activity_distance, activity_duration, activity_heart_rate, activity_calories, activity_elevation, activity_cadence. Numeric archive fields are available in get_chart_catalog with source units. Activity and health fields can pair on the same local date. Use aggregation weekly_median or rolling_days 7 for transformations. For time on the X axis use x_metric date with any Y metric, kind scatter; line/bar plots also use calendar dates. For power versus speed use x_metric activity_power, metric activity_speed, kind scatter, sport cycling. For HR versus VO2 use x_metric resting_heart_rate, metric vo2_cycling, kind scatter. Sparse health comparisons pair actual same-date readings; never fill gaps. Omit dates for full history.',
      'input_schema': {'type': 'object', 'properties': {'plots': {'type': 'array', 'minItems': 1, 'maxItems': 4,
          'items': {'type': 'object', 'properties': {'metric': {'type': 'string'}, 'x_metric': {'type': 'string'},
              'kind': {'type': 'string', 'enum': ['line','bar','scatter','dial']},
              'title': {'type': 'string'}, 'start': {'type': 'string'}, 'end': {'type': 'string'},
              'sport': {'type': 'string'}, 'timezone': {'type': 'string'}, 'gps_reference_id': {'type': 'string'},
              'reference_lines': {'type': 'array', 'maxItems': 4, 'items': {'anyOf': [{'type': 'number'}, {'type': 'string', 'enum': ['mean']}]}},
+             'aggregation': {'type':'string','enum':['daily_mean','daily_median','daily_sum','weekly_mean','weekly_median','weekly_sum','monthly_mean','monthly_median','monthly_sum']},
+             'rolling_days': {'type':'integer','minimum':1,'maximum':365},
              'trend_line': {'type': 'boolean'}, 'correlation': {'type': 'boolean'},
              'size': {'type': 'string', 'enum': ['half','full']}},
              'required': ['metric','kind'], 'additionalProperties': False}}}, 'required': ['plots'], 'additionalProperties': False}},

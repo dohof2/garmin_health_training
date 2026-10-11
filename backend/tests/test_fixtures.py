@@ -22,19 +22,14 @@ class SyntheticFixtureTests(unittest.TestCase):
             self.assertEqual(seed_synthetic_history(database), expected)
 
             summary = history_summary(database)
-            self.assertEqual(summary["data_mode"], "synthetic")
-            self.assertEqual(summary["activity_count"], 3)
-            self.assertEqual(summary["metric_count"], 14)
-            self.assertEqual(summary["latest_steps"]["value"], 10421)
-            self.assertEqual(
-                summary["latest_activity"]["name"], "Morning endurance ride"
-            )
-
-            self.assertEqual(len(list_activities(path=database)), 3)
-            self.assertEqual(
-                len(list_metrics(metric_type="active_calories", path=database)),
-                7,
-            )
+            # Fixtures remain available to isolated tests, never user-facing history.
+            self.assertEqual(summary["data_mode"], "empty")
+            self.assertEqual(summary["activity_count"], 0)
+            self.assertEqual(summary["metric_count"], 0)
+            self.assertIsNone(summary["latest_steps"])
+            self.assertIsNone(summary["latest_activity"])
+            self.assertEqual(list_activities(path=database), [])
+            self.assertEqual(list_metrics(metric_type="active_calories", path=database), [])
 
 
 if __name__ == "__main__":
