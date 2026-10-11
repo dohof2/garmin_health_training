@@ -70,6 +70,8 @@ def parse_request(message,brief,week_start):
     """Extract explicit user facts only; ask for missing trip details instead of inventing them."""
     if not isinstance(message,str) or not 1<=len(message.strip())<=4000: raise ValueError('Describe your goal or commitment (up to 4,000 characters)')
     b=validate_brief(brief);text=message.lower();recognized=[]
+    for typo,day in [('wedensday','wednesday'),('wensday','wednesday'),('firday','friday'),('tusday','tuesday')]:
+        text=re.sub(r'\b'+typo+r'\b',day,text)
     text=re.sub(r'\b(one|two|three|four|five|six)\s+(hours?|hrs?|minutes?|mins?)\b',lambda m:str({'one':1,'two':2,'three':3,'four':4,'five':5,'six':6}[m[1]])+' '+m[2],text)
     if re.search(r'\b(running|run|marathon)\b',text): b['goal_sport']='running'
     elif re.search(r'\b(cycling|bike|ride)\b',text): b['goal_sport']='cycling'
@@ -81,27 +83,31 @@ def parse_request(message,brief,week_start):
     ftp=re.search(r'\bftp\s*(?:is|of|=|at)?\s*(\d{2,3})\s*(?:w|watts)\b',text)
     if ftp: b['ftp_watts']=int(ftp[1])
     days=['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
-    day=next((i for i,name in enumerate(days) if re.search(r'\b'+name+r'\b',text)),None)
-    explicit=re.search(r'\b\d{4}-\d{2}-\d{2}\b',text)
-    if re.search(r'\b(trip|ride|race|run|workout|session)\b',text) and (day is not None or explicit):
-        when=explicit[0] if explicit else (week_start+timedelta(days=day)).isoformat()
-        duration=re.search(r'\b(\d+(?:\.\d+)?)[\s-]*(hours?|hrs?|minutes?|mins?)\b',text)
+    clauses=re.split(r'(?<!\d)\.(?!\d)|[;\n]|\band\s+(?=(?:an?\s+)?(?:hard|easy|moderate|long)\b)|(?=\blong\s+(?:ride|trip|run)\b)',text)
+    extracted=False
+    for clause in clauses:
+        mentioned=[i for i,name in enumerate(days) if re.search(r'\b'+name+r'\b',clause)]
+        dates=re.findall(r'\b\d{4}-\d{2}-\d{2}\b',clause)
+        if not re.search(r'\b(trips?|rides?|race|runs?|workouts?|sessions?)\b',clause) or not (mentioned or dates): continue
+        extracted=True
+        when_list=dates or [(week_start+timedelta(days=day)).isoformat() for day in mentioned]
+        duration=re.search(r'\b(\d+(?:\.\d+)?)[\s-]*(hours?|hrs?|minutes?|mins?)\b',clause)
         minutes=round(float(duration[1])*(60 if duration[2].startswith(('h','hr')) else 1)) if duration else None
-        clock=re.search(r'\b(?:at|starting)\s+(\d{1,2}:\d{2})\b',text)
-        effort=next((e for e in ('hard','moderate','easy') if re.search(r'\b'+e+r'\b',text)),'unknown')
-        event={'date':when,'title':'Race' if re.search(r'\brace\b',text) else 'Fixed trip' if 'trip' in text else 'Fixed session',
-               'sport':'running' if re.search(r'\brun(?:ning)?\b',text) else 'strength' if 'strength' in text else 'cycling',
-               'start_time':clock[1].zfill(5) if clock else None,'duration_minutes':minutes,'effort':effort}
-        # Preserve known details on a follow-up concerning the same date.
-        previous=next((e for e in b['fixed_events'] if e['date']==when),{})
-        for key in ('start_time','duration_minutes'):
-            if event[key] is None: event[key]=previous.get(key)
-        if effort=='unknown': event['effort']=previous.get('effort','unknown')
-        b['fixed_events']=[e for e in b['fixed_events'] if e['date']!=when]+[event]
-        if event['title']=='Race': b['target_date']=when
-        recognized.append('Fixed commitment on '+when)
+        clock=re.search(r'\b(?:at|starting)\s+(\d{1,2}:\d{2})\b',clause)
+        effort=next((e for e in ('hard','moderate','easy') if re.search(r'\b'+e+r'\b',clause)),'unknown')
+        for when in when_list:
+            event={'date':when,'title':'Race' if re.search(r'\brace\b',clause) else 'Fixed trip' if 'trip' in clause else 'Fixed session',
+                   'sport':'running' if re.search(r'\brun(?:ning)?\b',clause) else 'strength' if 'strength' in clause else 'cycling',
+                   'start_time':clock[1].zfill(5) if clock else None,'duration_minutes':minutes,'effort':effort}
+            previous=next((e for e in b['fixed_events'] if e['date']==when),{})
+            for key in ('start_time','duration_minutes'):
+                if event[key] is None: event[key]=previous.get(key)
+            if effort=='unknown': event['effort']=previous.get('effort','unknown')
+            b['fixed_events']=[e for e in b['fixed_events'] if e['date']!=when]+[event]
+            if event['title']=='Race': b['target_date']=when
+            recognized.append('Fixed commitment on '+when)
     # A plain follow-up can complete the most recent incomplete commitment.
-    elif b['fixed_events']:
+    if not extracted and b['fixed_events']:
         e=b['fixed_events'][-1]
         duration=re.search(r'\b(\d+(?:\.\d+)?)[\s-]*(hours?|hrs?|minutes?|mins?)\b',text)
         clock=re.search(r'\b(?:at|starting)\s+(\d{1,2}:\d{2})\b',text)
@@ -109,6 +115,7 @@ def parse_request(message,brief,week_start):
         if clock: e['start_time']=clock[1].zfill(5);recognized.append('Updated commitment time')
         for effort in ('hard','moderate','easy'):
             if re.search(r'\b'+effort+r'\b',text): e['effort']=effort;recognized.append('Updated commitment effort')
+    if re.search(r'\b(?:train|training)\s+today\b',text): recognized.append('Training today is separate from this weekly preview; confirm its session details before scheduling it.')
     return validate_brief(b),recognized
 
 
@@ -275,12 +282,12 @@ def assistant_preview(arguments,path=None):
 def assistant_answer(result):
     b=result['brief'];lines=[f"Coaching preview: {GOALS.get(b['goal'],'choose your primary goal')} · {b['horizon_weeks']} weeks. Nothing has been saved."]
     lines.extend(result['recognized'])
-    if result['questions']: lines.append('Details needed:\n'+'\n'.join(result['questions']))
-    lines.extend(f"{s['scheduled_for'][:10]} · {s['title']} · {s['definition']['duration_minutes']} min: {s['definition']['effort_target']['description']}" for s in result['sessions'])
-    lines.extend(f"{d['date']}: {d['reason']}" for d in result['protected_days'])
-    # Collapse repeated phases into an understandable longer-term outline.
-    phase=None
-    for w in result['roadmap']:
-        if w['phase']!=phase: lines.append(f"From week {w['week']}: {w['phase']} — {w['focus']}");phase=w['phase']
-    lines.append('Open this proposal in Training to review the brief, create a weekly draft, and accept it. Future weeks are reviewed using completed sessions and feedback.')
+    if result['questions']:
+        lines.append(result['questions'][0])
+        if len(result['questions'])>1: lines.append('The remaining details are listed in the review panel.')
+    else:
+        lines.append('Weekly volume: '+', '.join(f'{sport}: {minutes} min' for sport,minutes in result['weekly_minutes'].items())+'.')
+        if result['protected_days']: lines.append('Recovery is protected around your fixed commitments.')
+    lines.extend(result['warnings'])
+    lines.append('Open the proposal in Training to review the full week and longer-term direction before saving.')
     return '\n\n'.join(lines)

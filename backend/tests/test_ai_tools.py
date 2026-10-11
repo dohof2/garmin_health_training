@@ -120,6 +120,11 @@ class AIToolTests(unittest.TestCase):
                 "preview_training_plan",
                 "get_chart_catalog",
                 "create_plots",
+                "compare_latest_ride",
+                "find_fit_fields",
+                "get_fit_activity_data",
+                "analyze_sprint_intervals",
+                "get_activity_stream",
             ],
         )
         self.assertTrue(

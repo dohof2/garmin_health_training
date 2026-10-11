@@ -487,11 +487,13 @@ def _health_summary(
                 "metric_type": key[0],
                 "unit": key[1],
                 "values": [],
+                "observations": [],
                 "recorded_dates": set(),
                 "sources": set(),
             },
         )
         group["values"].append(float(row["value"]))
+        group['observations'].append({'date':str(row['recorded_date']),'value':float(row['value']), 'recorded_at':str(row['recorded_at'])})
         group["recorded_dates"].add(str(row["recorded_date"]))
         group["sources"].add(str(row["source_name"]))
         source_names.add(str(row["source_name"]))
@@ -500,11 +502,13 @@ def _health_summary(
     metrics: list[dict[str, object]] = []
     for group in grouped.values():
         values = group.pop("values")
+        observations = sorted(group.pop('observations'),key=lambda o:o['recorded_at'])
         recorded_dates = group.pop("recorded_dates")
         sources = sorted(group.pop("sources"))
         source_unit = str(group["unit"])
         if group["metric_type"] in DURATION_METRICS and source_unit == "s":
             values = [value / 3_600 for value in values]
+            observations = [{**o,'value':o['value']/3600} for o in observations]
             group["unit"] = "hours"
         metrics.append(
             {
@@ -515,6 +519,9 @@ def _health_summary(
                 "average": sum(values) / len(values),
                 "minimum": min(values),
                 "maximum": max(values),
+                'first': {k:v for k,v in observations[0].items() if k!='recorded_at'},
+                'latest': {k:v for k,v in observations[-1].items() if k!='recorded_at'},
+                'change_latest_minus_first': observations[-1]['value']-observations[0]['value'],
                 "recommended_aggregation": (
                     "sum" if group["metric_type"] in ADDITIVE_METRICS else "average"
                 ),
@@ -576,6 +583,7 @@ def list_activities_tool(
     if activity_type:
         activities = [
             item for item in activities if item["activity_type"] == activity_type
+            or (activity_type=='rides' and item['activity_type'] in RIDE_ACTIVITY_TYPES)
         ]
     total_matches = len(activities)
     selected = activities[:limit]
@@ -1455,8 +1463,13 @@ def assess_ride_tool(arguments: dict[str, object], path: Path | None = None) -> 
     ride = _ride_result(activity, _sample_summaries([str(activity["id"])], path).get(str(activity["id"]), _empty_sample_summary()),
                         evidence_url=f"/api/activities/{activity['id']}")
     duration = activity.get("duration_seconds")
+    from .ride_comparison import training_benefit
+    with connect(path) as connection:
+        benefit=training_benefit(connection,str(activity['id']))
     return {
         "tool": "assess_ride", "reference_ride": ride,
+        "recorded_metrics": activity.get('activity_metrics',[]),
+        "training_benefit": benefit,
         "period": {"start": activity["local_date"], "end": activity["local_date"]},
         "freshness": {"latest_started_at": activity["started_at"], "sources": [activity["source_name"]]},
         "session_intent": intent, "intent_source": "current user message" if intent else "unknown",
@@ -1616,6 +1629,54 @@ TOOL_DEFINITIONS.extend([
              'size': {'type': 'string', 'enum': ['half','full']}},
              'required': ['metric','kind'], 'additionalProperties': False}}}, 'required': ['plots'], 'additionalProperties': False}},
 ])
+
+def compare_latest_ride_tool(arguments, path=None):
+    from .ride_comparison import compare_latest_ride
+    from datetime import datetime
+    from .time_utils import timezone_info
+    start=date.fromisoformat(str(arguments['start_date']))
+    end=date.fromisoformat(str(arguments['end_date']))
+    if start>end:raise ValueError('start_date must not be after end_date')
+    today=datetime.now(timezone_info(arguments.get('timezone') or 'UTC')).date()
+    if end>today:raise ValueError('Historical comparisons cannot include future dates')
+    result=compare_latest_ride(today,path,arguments.get('timezone'),f'from {start.isoformat()} to {end.isoformat()}')
+    return {key:value for key,value in result.items() if key!='answer'}
+
+
+TOOL_HANDLERS['compare_latest_ride']=compare_latest_ride_tool
+TOOL_DEFINITIONS.append({
+    'name':'compare_latest_ride',
+    'description':'Compare the latest recorded cycling ride with ALL other rides in an inclusive period. Returns deterministic medians, changes, recorded Garmin training benefit and recent riding volume. Use for ordinary comparisons and coaching follow-ups; no GPS matching.',
+    'input_schema':{'type':'object','properties':{
+        'start_date':{'type':'string','format':'date'},'end_date':{'type':'string','format':'date'},
+        'timezone':{'type':'string'}},'required':['start_date','end_date'],'additionalProperties':False},
+})
+
+
+from .intervals import analyze_tool as analyze_sprint_intervals, stream as get_activity_stream
+from .fit_access import discover as find_fit_fields, inspect as get_fit_activity_data
+TOOL_HANDLERS.update(analyze_sprint_intervals=analyze_sprint_intervals,get_activity_stream=get_activity_stream)
+TOOL_HANDLERS.update(find_fit_fields=find_fit_fields,get_fit_activity_data=get_fit_activity_data)
+TOOL_DEFINITIONS.extend([
+    {'name':'find_fit_fields','description':'Discover ANY available recorded FIT message/field across all stored activities, including grit, flow, jumps, laps, workout steps and developer fields. Search a field or message substring; optional dates. Counts scan full history; latest 100 matching activity details are returned. Presence is not a non-null measurement; missing inventories are explicit.',
+     'input_schema':{'type':'object','properties':{'query':{'type':'string'},'start_date':{'type':'string','format':'date'},'end_date':{'type':'string','format':'date'},'timezone':{'type':'string'}},'additionalProperties':False}},
+    {'name':'get_fit_activity_data','description':'Inspect arbitrary fields in a recorded FIT message type from the preserved original (latest activity if id omitted). Returns full message/field inventory, FIT-profile units, statistics over ALL selected-message records, and paginated raw rows. message_type uses exact inventory names such as record_mesgs, jump_mesgs, lap_mesgs. No field whitelist. Unknown units remain unknown. For FIT plots use get_chart_catalog then create_plots with its fit:message:field metric and fit_stat.',
+     'input_schema':{'type':'object','properties':{'activity_id':{'type':'string'},'message_type':{'type':'string'},'fields':{'type':'array','maxItems':20,'items':{'type':'string'}},'offset':{'type':'integer','minimum':0},'limit':{'type':'integer','minimum':1,'maximum':200},'timezone':{'type':'string'}},'additionalProperties':False}},
+    {'name':'analyze_sprint_intervals','description':'Find rides with repeated short high-power efforts using stored continuous power and recorded FIT lap boundaries. Scans ALL recorded rides in the requested period, excludes synthetic/deleted records. Returns calculated per-ride effort power, coverage, detection method and visible separate plots for each duration bin. Default 10–15 seconds, at least two efforts, threshold 1.8 times each ride median positive power; optional explicit watts threshold. Does not prove sprint intent or fitness improvement. No new FIT upload needed for already stored data.',
+     'input_schema':{'type':'object','properties':{
+         'min_seconds':{'type':'number','minimum':1,'maximum':120},'max_seconds':{'type':'number','minimum':1,'maximum':120},
+         'min_repetitions':{'type':'integer','minimum':2,'maximum':50},'threshold_watts':{'type':['number','null'],'exclusiveMinimum':0},
+         'start_date':{'type':'string','format':'date'},'end_date':{'type':'string','format':'date'},'timezone':{'type':'string'}},'additionalProperties':False}},
+    {'name':'get_activity_stream','description':'Read recorded FIT laps and timestamped power, HR, cadence and speed for one activity, latest ride if no id. Narrow start_seconds/end_seconds to investigate intervals; display reduction is explicit and does not interpolate gaps. Uses existing local data, not another upload.',
+     'input_schema':{'type':'object','properties':{'activity_id':{'type':'string'},'timezone':{'type':'string'},
+         'start_seconds':{'type':'number','minimum':0},'end_seconds':{'type':'number','minimum':0},'limit':{'type':'integer','minimum':10,'maximum':1000}},'additionalProperties':False}},
+])
+for definition in TOOL_DEFINITIONS:
+    if definition['name']=='create_plots':
+        definition['input_schema']['properties']['plots']['items']['properties'].update({
+            key:{'type':'number'} for key in ('sprint_seconds','interval_min_seconds','interval_max_seconds','threshold_watts')})
+        definition['input_schema']['properties']['plots']['items']['properties']['min_repetitions']={'type':'integer','minimum':2,'maximum':50}
+        definition['input_schema']['properties']['plots']['items']['properties']['fit_stat']={'type':'string','enum':['mean','maximum','minimum','sum','count']}
 
 TOOL_DEFINITIONS_BY_NAME = {
     str(definition["name"]): definition for definition in TOOL_DEFINITIONS

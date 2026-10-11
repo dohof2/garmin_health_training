@@ -1,5 +1,13 @@
 # QC remediation and next-session handoff — 11 October 2026
 
+Current FIT follow-up: [FIT-INTERVAL-QC.md](FIT-INTERVAL-QC.md) supersedes the earlier unresolved lap/time-series finding. Four new scoped tools, numeric FIT-field plots and sprint detection are implemented; 1,044 activities/7,401 laps recovered without errors, 333 backend tests pass, and eight live FIT questions were checked with targeted retests. The original limitations below are historical checkpoints; 18 activities without a recovered inventory remain explicit gaps.
+
+## Latest assistant follow-up
+
+Latest user preference: general comparisons default to all recorded rides; matching requires an explicit request. Days/weeks/months/years and short period replies are supported. 298 backend tests pass and the exact “my ride … kast 3 months” request was verified in the app.
+
+See [ASSISTANT-QC.md](ASSISTANT-QC.md) and [the 133-question bank](ASSISTANT-QUESTIONS.md) for the latest completed assistant repairs and final verification. This supersedes the older browser-comparison pending notes below; both scope choices and answer scrolling have now been exercised in the app. Prior checkpoints below remain historical.
+
 ## Latest continuation instructions
 
 After the usage reset, prioritize assistant robustness: create at least 100 ordinary-language questions with paraphrases, ambiguous cases and multi-turn follow-ups, then QC through the live assistant. Cover general/GPS ride comparisons and period handling, health investigation, wider plotting and transformations, training constraints, missing data, provider failures and synthetic exclusion. For each case record expected interpretation/data, actual response, numerical accuracy and pass/fail. Keep answers concise: answer first, key numbers next, only material caveats, one focused clarification when needed, more detail on request. This bank has not yet been created or run.
@@ -70,3 +78,15 @@ node docs/qa/2026-10-11/vo2_fix_checks.mjs
 ```
 
 Run `npm run build` from `frontend`. Do not run mutation probes against production. Disposable large import directories may remain under `/private/tmp/garmin-qa-fresh-fixed` and `/private/tmp/garmin-qa`; they contain QA copies and are not production paths. Clean them only after identifying their ownership and whether they are still needed. Never delete the original Garmin archive or user-managed services.
+# ChatGPT account connection checkpoint
+
+Added a separate account-based provider, Settings sign-in/model selection, protected OAuth storage and strict streamed Responses handling. 311 backend tests and the frontend build pass; actual sign-in page reached. User consent and live ChatGPT answers remain pending. See [ASSISTANT-QC.md](ASSISTANT-QC.md) for verified scope, evidence and mobile limitations. No cloud/mobile deployment or paid fallback was enabled.
+# ChatGPT trainer checkpoint — 11 October 2026
+
+Current details: [CHATGPT-TRAINER-QC.md](CHATGPT-TRAINER-QC.md). ChatGPT now bypasses Qwen forced routing, canned answers and argument rewrites. Stream parsing and recorded benefit/power access were repaired; 320 backend tests pass. The full isolated live question-bank retest completed: 143 unique cases answered without runtime errors after targeted fixes; reviewed flags are documented.
+
+Outstanding newly confirmed defect: FIT laps are decoded but not retained in normalized activity data, and continuous samples are exposed to the assistant only as aggregates. A checked original FIT file contains 11 laps and 1,786 records. Full source-field preservation, lap recovery and bounded time-series/lap tools still need implementation and QC. Earlier decode-success counts do not certify data accessibility.
+
+## Nutrition layout and shared dashboard theme
+
+Implemented daily totals → meal/food/amount entry → text/photo assistant → per-meal summaries, preserving reviewed saves, recipes, targets and reversible meal history. Text/photo review now uses the selected provider and cannot invent nutrient totals or write meals. Shared dashboard controls/cards/text applied across all ten tabs; header/browser renamed to Dotan's training and health space. 336 tests, frontend typecheck/build, live synthetic food-description review and all-ten-tab navigation passed. See [NUTRITION-THEME-QC.md](NUTRITION-THEME-QC.md) for limits, including real-photo accuracy and finite offline food catalog.

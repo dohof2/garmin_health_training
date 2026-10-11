@@ -446,8 +446,30 @@ h1 {
 }
 
 .settings-fields--ai {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
 }
+
+.chatgpt-settings {
+  background: #fff;
+  border: 1px solid rgba(71, 123, 176, .15);
+  border-radius: 12px;
+  padding: 18px;
+  margin-top: 20px;
+  color: #475569;
+}
+
+.chatgpt-account-summary { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.chatgpt-account-summary > div { display: grid; gap: 5px; min-width: 0; }
+.chatgpt-account-summary strong { color: #1e293b; overflow-wrap: anywhere; }
+.chatgpt-account-summary > div > span { font-size: .76rem; }
+.chatgpt-connection-badge { background: #edf4fb; color: #365a80; border-radius: 999px; padding: 5px 10px; font-size: .75rem; }
+.chatgpt-settings p { font-size: .86rem; line-height: 1.5; }
+.chatgpt-settings-actions { display: flex; gap: 10px; flex-wrap: wrap; margin: 12px 0; }
+.chatgpt-settings-actions button { background: #edf3f9; color: #365272; border: 1px solid #d7e1ee; border-radius: 8px; font-size: .8rem; font-weight: 500; }
+.chatgpt-account-options { margin: 16px 0; }
+.chatgpt-account-options summary { cursor: pointer; font-size: .82rem; width: fit-content; }
+.chatgpt-settings small { display: block; margin-top: 16px; font-size: .75rem; line-height: 1.6; }
+.chatgpt-settings a { display: inline-block; font-size: .82rem; overflow-wrap: anywhere; }
 
 .ai-provider-status {
   display: grid;
@@ -1601,9 +1623,9 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .settings-layout { grid-template-columns: 1fr; }
 .settings-panel { background: #fff; border-color: #dce4ef; }
 .data-card { background: #fff; border: 1px solid #dce4ef; border-radius: 12px; }
-.graph-canvas button,.assistant-plots button,.weight-entry button { border: 1px solid #d7e1ee; background: #fff; color: #365272; padding: 8px 11px; border-radius: 7px; font-size: .78rem; }
-.graph-canvas button:hover,.assistant-plots button:hover,.weight-entry button:hover { background: #eef3f9; }
-.graph-canvas button.primary-button,.weight-entry button.primary-button { background: #477bb0; color: #fff; border-color: #477bb0; padding: 11px 18px; }
+.graph-canvas button,.assistant-plots button,.weight-entry button,.nutrition-panel button { border: 1px solid #d7e1ee; background: #fff; color: #365272; padding: 8px 11px; border-radius: 7px; font-size: .78rem; }
+.graph-canvas button:hover,.assistant-plots button:hover,.weight-entry button:hover,.nutrition-panel button:hover { background: #eef3f9; }
+.graph-canvas button.primary-button,.weight-entry button.primary-button,.nutrition-panel button.primary-button { background: #477bb0; color: #fff; border-color: #477bb0; padding: 11px 18px; }
 .graph-canvas .section-heading,.assistant-plots .section-heading { margin-bottom: 16px; }
 .canvas-status:empty { display:none; }
 .canvas-status { font-size: .8rem; color: #5d7189; }
@@ -1692,3 +1714,67 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .readiness-overview { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 2rem; }
 .readiness-overview .readiness-forecast { border-top: 0; border-left: 1px solid #dce2ed; margin-top: 0; padding: 0 0 0 2rem; }
 @media (max-width: 700px) { .readiness-overview { grid-template-columns: 1fr; } .readiness-overview .readiness-forecast { border-left: 0; border-top: 1px solid #dce2ed; padding: 1rem 0 0; } }
+
+/* Nutrition: daily totals, simple meal entry, then meal summaries. */
+.nutrition-panel .nutrition-card { padding: 1.2rem; margin: 1rem 0; border: 1px solid #dce4ef; border-radius: 12px; background: #fff; }
+.nutrition-panel .nutrition-card h3, .nutrition-panel .nutrition-card h4 { margin-top: 0; }
+.nutrition-panel label { display: flex; flex-direction: column; align-items: stretch; gap: .4rem; margin: 0; }
+.nutrition-panel textarea { width: 100%; min-height: 90px; box-sizing: border-box; }
+.nutrition-panel .nutrition-food-fields { display: grid; grid-template-columns: minmax(0, 3fr) minmax(90px, 1fr) minmax(120px, 1fr); gap: .8rem; }
+.nutrition-panel .nutrition-food-fields input, .nutrition-panel .nutrition-food-fields select { width: 100%; box-sizing: border-box; }
+.nutrition-meal-select { max-width: 300px; }
+.nutrition-meal-groups { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.nutrition-meal-groups .nutrition-card { margin: 0; }
+.nutrition-panel .nutrition-meal { margin: .7rem 0; padding: .8rem; }
+@media (max-width: 650px) { .nutrition-meal-groups { grid-template-columns: 1fr; } .nutrition-panel .nutrition-food-fields { grid-template-columns: 1fr 1fr; } .nutrition-panel .nutrition-food-fields label:first-child { grid-column: 1 / -1; } }
+
+.nutrition-panel { border-top: 0; margin-top: 0; padding-top: 0; }
+.nutrition-panel p { color: #64748b; font-size: .85rem; font-weight: 400; text-transform: none; letter-spacing: normal; line-height: 1.6; }
+.nutrition-panel h3, .nutrition-panel h4 { color: #253951; font-size: 1rem; font-weight: 600; line-height: 1.4; }
+.nutrition-panel label { color: #52647b; font-size: .8rem; }
+.nutrition-panel input, .nutrition-panel select, .nutrition-panel textarea { border-color: #d7e1ee; border-radius: 7px; padding: 11px; background: #f9fbfd; color: #253951; font-size: .85rem; }
+.nutrition-panel .nutrition-card { padding: 22px; border-radius: 13px; }
+.nutrition-panel fieldset { border-color: #dce4ef; background: #f9fbfd; border-radius: 10px; }
+.nutrition-panel legend, .nutrition-panel summary { color: #52647b; font-size: .85rem; }
+.nutrition-panel .nutrition-notice { background: #e6edf6; border: 1px solid #d7e1ee; color: #365272; border-radius: 10px; }
+.nutrition-panel .nutrition-table { margin: 20px 0; padding: 10px 16px; background: #fff; border: 1px solid #dce4ef; border-radius: 13px; }
+.nutrition-panel table { font-size: .85rem; color: #253951; }
+.nutrition-panel caption { text-align: left; padding: 12px 10px; font-weight: 600; font-size: 1rem; }
+.nutrition-panel th { color: #52647b; font-weight: 500; }
+.nutrition-panel td { font-variant-numeric: tabular-nums; }
+.nutrition-panel .nutrition-date-controls { display: flex; gap: 16px; align-items: end; flex-wrap: wrap; }
+.nutrition-panel .nutrition-date-controls small { color: #64748b; font-size: .75rem; padding-bottom: 10px; }
+#meal-editor, #nutrition-lookup { scroll-margin-top: 115px; }
+@media(max-width:700px) { .nutrition-panel .nutrition-card { padding:16px; } #meal-editor, #nutrition-lookup { scroll-margin-top: 16px; } }
+
+/* Shared dashboard theme across every workspace tab. */
+:root { --workspace-surface: #fff; --workspace-soft: #f9fbfd; --workspace-text: #253951; --workspace-muted: #64748b; }
+.app-shell button { border: 1px solid #d7e1ee; border-radius: 7px; padding: 8px 11px; background: var(--workspace-surface); color: #365272; font-size: .78rem; }
+.app-shell button:hover:not(:disabled) { background: #eef3f9; }
+.app-shell button:is([type=submit], .primary-button, .sync-button, .import-action, .primary-export-action) { background: #477bb0; color: #fff; border-color: #477bb0; padding: 11px 18px; }
+.app-shell button:is([type=submit], .primary-button, .sync-button, .import-action, .primary-export-action):hover:not(:disabled) { background: #356799; }
+.app-shell input:not([type=checkbox]):not([type=radio]):not([type=range]), .app-shell select, .app-shell textarea { background: var(--workspace-soft); color: var(--workspace-text); border: 1px solid #d7e1ee; border-radius: 7px; padding: 11px; font-size: .85rem; max-width: 100%; min-width: 0; }
+.app-shell input:is([type=checkbox], [type=radio], [type=range]) { accent-color: #477bb0; }
+.app-shell :is(.settings-fields label, .goal-notes, .maintenance-fields label, .maintenance-filters label, .training-fields label, .chat-composer > label) { color: #52647b; font-size: .8rem; text-transform: none; letter-spacing: normal; }
+.app-shell :is(.settings-panel, .maintenance-form, .maintenance-csv, .maintenance-revisions, .training-plan, .training-editor, .training-panel fieldset, .coach-panel, .export-panel, .sync-panel, .sync-settings, .coverage-row, .activity-row, .card-editor, .cards > article, .import-results > article, .goal-editor) { background: var(--workspace-surface); border: 1px solid #dce4ef; border-radius: 13px; }
+.app-shell :is(.settings-panel, .maintenance-form, .maintenance-csv, .maintenance-revisions, .training-plan, .training-editor, .coach-panel, .export-panel) { padding: 22px; }
+.app-shell :is(.training-workout, .training-availability > div, .readiness-contributors > div, .course-progress, .evidence-criteria) { background: #f2f5fa; border-color: #dce4ef; border-radius: 10px; }
+.app-shell :is(.settings-panel, .maintenance-form, .training-plan, .training-workout, .export-panel, .coverage-row, .import-results, .cards) h3 { color: var(--workspace-text); font-size: 1rem; line-height: 1.4; font-weight: 600; }
+.app-shell :is(.settings-panel, .maintenance, .training-panel, .exports, .import, .coverage, .foundation) p:not(.section-heading p) { text-transform: none; letter-spacing: normal; font-weight: 400; font-size: .85rem; line-height: 1.6; }
+.app-shell .activity-toggle { background: transparent; border: 0; border-radius: 13px; padding: 18px; font-size: inherit; }
+.app-shell .activity-toggle:hover { background: #eef3f9; }
+.app-shell :is(.maintenance-table, .settings-proposal) { background: var(--workspace-surface); border: 1px solid #dce4ef; border-radius: 13px; padding: 12px; }
+.app-shell table { color: var(--workspace-text); font-size: .85rem; }
+.app-shell th { color: #52647b; }
+.app-shell .chat-shell { background: var(--workspace-surface); border: 1px solid #dce4ef; border-radius: 13px; }
+.app-shell .chat-message--assistant { background: #f2f5fa; border-color: #dce4ef; }
+.app-shell .chat-message--user { background: #e6edf6; border-color: #d7e1ee; }
+.app-shell .training-notice { background: #e6edf6; border: 1px solid #d7e1ee; border-radius: 10px; color: #365272; }
+.app-shell .readiness-trend button { flex: 1 0 3rem; display: grid; gap: .3rem; padding: .3rem; }
+.app-shell .coverage-status--complete { background: #e8f4ed; color: #216345; }
+.app-shell .coverage-status--attention, .app-shell .coverage-failures, .app-shell .restore-result--error { background: #fff0e8; color: #9a3412; }
+.app-shell .remove-goal { color: #9a3412; }
+@media(max-width:700px) { .app-shell :is(.settings-panel, .maintenance-form, .maintenance-csv, .maintenance-revisions, .training-plan, .training-editor, .coach-panel, .export-panel) { padding: 16px; } }
+.app-shell :is(.sync-status-grid > div, .sync-checkpoints > div, .coverage-summary > div, .training-draft) { background: var(--workspace-surface); border: 1px solid #dce4ef; border-radius: 13px; padding: 16px; }
+.app-shell .training-message { background: #e6edf6; color: #365272; border: 1px solid #d7e1ee; border-radius: 10px; }
+.app-shell :is(.sync, .activities, .assistant, .coverage, .settings, .maintenance, .training-panel) > .section-heading { margin-bottom: 20px; }

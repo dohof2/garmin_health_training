@@ -15,6 +15,8 @@ def source_payload(value):
                 if str(k).lower().replace('_', '') not in PRIVATE_KEYS}
     if isinstance(value, list):
         return [source_payload(v) for v in value]
+    if isinstance(value, (bytes,bytearray)):
+        return {'encoding':'hex','value':bytes(value).hex()}
     if isinstance(value, (datetime, date)):
         return value.isoformat()
     if isinstance(value, float) and not math.isfinite(value):
@@ -83,13 +85,20 @@ def preserve_fit_summary(connection, activity_id: str, messages: dict):
     current = connection.execute('SELECT raw_json FROM activities WHERE id=?', (activity_id,)).fetchone()
     payload = json.loads(current['raw_json'] or '{}')
     payload['fit_sessions'] = source_payload(sessions)
+    payload['fit_laps'] = source_payload(messages.get('lap_mesgs') or [])
+    payload['fit_events'] = source_payload(messages.get('event_mesgs') or [])
+    payload['fit_message_inventory'] = {key: len(value) for key, value in messages.items() if isinstance(value, list)}
+    payload['fit_field_inventory'] = {key: sorted({str(field) for row in value if isinstance(row,dict) for field in source_payload(row)})
+                                    for key,value in messages.items() if isinstance(value,list)}
+    # Keep all non-continuous message fields; complete record data remains in the preserved original.
+    payload['fit_messages'] = source_payload({key:value for key,value in messages.items() if key!='record_mesgs'})
     # Do not silently assign the first session's load to an entire multisport activity.
     if len(sessions) == 1:
         normalize_activity_metrics(connection, activity_id, sessions[0], 'fit_session')
         ascent=sessions[0].get('total_ascent')
         if isinstance(ascent,(int,float)) and not isinstance(ascent,bool) and math.isfinite(ascent) and ascent>=0:
             connection.execute('UPDATE activities SET elevation_gain_meters=? WHERE id=? AND elevation_gain_meters IS NULL',(ascent,activity_id))
-    connection.execute('UPDATE activities SET raw_json=?, fit_detail_version=1 WHERE id=?', (encoded(payload), activity_id))
+    connection.execute('UPDATE activities SET raw_json=?, fit_detail_version=2 WHERE id=?', (encoded(payload), activity_id))
 
 
 def backfill_fit_ascent(path=None):

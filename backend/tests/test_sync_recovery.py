@@ -102,7 +102,7 @@ class RecoveryTests(unittest.TestCase):
             self.assertEqual(c.execute('SELECT COUNT(*) FROM activity_samples').fetchone()[0],1)
             load=c.execute("SELECT value,source_method FROM activity_metrics WHERE metric_type='exercise_load'").fetchone()
             self.assertEqual(tuple(load),(140,'garmin_summary'))
-            self.assertEqual(c.execute('SELECT fit_detail_version FROM activities').fetchone()[0],1)
+            self.assertEqual(c.execute('SELECT fit_detail_version FROM activities').fetchone()[0],2)
 
     def test_fit_only_fields_are_normalized_without_inventing_missing_load(self):
         with connect(self.path) as c:

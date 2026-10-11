@@ -1,0 +1,11 @@
+{"recovered": 100, "failed": 0, "laps": 666}
+{"recovered": 200, "failed": 0, "laps": 1275}
+{"recovered": 300, "failed": 0, "laps": 1900}
+{"recovered": 400, "failed": 0, "laps": 2568}
+{"recovered": 500, "failed": 0, "laps": 3360}
+{"recovered": 600, "failed": 0, "laps": 3959}
+{"recovered": 700, "failed": 0, "laps": 4523}
+{"recovered": 800, "failed": 0, "laps": 5147}
+{"recovered": 900, "failed": 0, "laps": 5914}
+{"recovered": 1000, "failed": 0, "laps": 6999}
+{"recovered": 1044, "failed": 0, "laps": 7401}

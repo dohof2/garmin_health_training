@@ -21,7 +21,7 @@ class QCRemediationTests(unittest.TestCase):
         with patch('app.ai_chat._today',return_value=date(2026,10,11)),patch('app.ai_chat._ollama_request') as model:
             events=[json.loads(e) for e in chat_stream(question,path=self.path)]
             clarification=''.join(e.get('text','') for e in events if e['type']=='delta')
-            self.assertIn('All rides, or rides on the same GPS route?',clarification)
+            self.assertIn('compared with',clarification)
             history=[{'role':'user','content':question},{'role':'assistant','content':clarification}]
             followup=[json.loads(e) for e in chat_stream('general records',history=history,path=self.path)]
         model.assert_not_called()
@@ -43,8 +43,8 @@ class QCRemediationTests(unittest.TestCase):
             question='How was my last ride compared to other rides this year?'
             first=[json.loads(e) for e in chat_stream(question,path=self.path)]
             clarification=''.join(e.get('text','') for e in first if e['type']=='delta')
-            self.assertIn('All rides, or rides on the same GPS route?',clarification)
-            self.assertFalse([e for e in first if e['type']=='tool'])
+            self.assertIn('compared with',clarification)
+            self.assertEqual(next(e['evidence']['tool'] for e in first if e['type']=='tool'),'compare_latest_ride')
             history=[{'role':'user','content':question},{'role':'assistant','content':clarification}]
             events=[json.loads(e) for e in chat_stream('All rides',history=history,path=self.path)]
         model.assert_not_called()

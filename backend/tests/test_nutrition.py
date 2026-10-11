@@ -14,7 +14,7 @@ from app.database import connect,migrate
 from app.main import app
 from app.exports import export_csv,export_json,create_backup,restore_backup
 from app.nutrition import NUTRIENTS,catalog,food_search,preview_meal,save_meal,remove_meal,daily_status,save_library,list_library,scale_library,target_preview,save_target,target_history
-from app.food_vision import analyze_photo,validate_image
+from app.food_vision import analyze_photo,analyze_text,validate_image
 
 ITEM={'name':'Known label portion','quantity':1,'unit':'serving','nutrients':{'calories_kcal':200,'protein_grams':10,'fat_grams':4,'carbohydrate_grams':31},'source':'Synthetic label fixture','portion_basis':'label_serving','uncertainty':''}
 MEAL={'eaten_at':'2026-10-10T23:30:00+03:00','timezone':'Asia/Jerusalem','meal_type':'dinner','notes':'Synthetic','items':[ITEM]}
@@ -162,6 +162,35 @@ class NutritionTests(unittest.TestCase):
    with self.assertRaisesRegex(ValueError,'manual logging'):analyze_photo(PNG,self.path)
   with patch('app.food_vision.urlopen',return_value=io.BytesIO(b'{"message":{"content":"not json"}}')):
    with self.assertRaises(ValueError):analyze_photo(PNG,self.path)
+  self.assertEqual(self.day()['meals'],[])
+
+ def test_text_food_review_selected_provider_preserves_explicit_amount_and_never_saves(self):
+  result={'ingredients':[{'name':'Cooked rice','grams_low':200,'grams_high':200,'question':''}],'uncertainties':[]}
+  with patch('app.food_vision.get_ai_settings',return_value={'active_provider':'chatgpt','chatgpt_model':'test-sol'}), patch('app.food_vision.active_provider') as provider:
+   provider.return_value.generate.return_value=json.dumps(result)
+   out=analyze_text('200 g cooked rice',self.path)
+   self.assertEqual(out['ingredients'][0]['grams_low'],200)
+   self.assertEqual(provider.return_value.generate.call_args.args[0],'200 g cooked rice')
+   self.assertIn('Preserve explicit gram amounts exactly',provider.return_value.generate.call_args.args[1])
+   self.assertEqual(self.day()['meals'],[])
+
+ def test_photo_review_selected_provider_receives_image_content_without_profile(self):
+  with patch('app.food_vision.get_ai_settings',return_value={'active_provider':'chatgpt','chatgpt_model':'test-sol'}), patch('app.food_vision.active_provider') as provider:
+   provider.return_value.generate.return_value=json.dumps({'ingredients':[],'uncertainties':[]})
+   analyze_photo(PNG,self.path)
+   content=provider.return_value.generate.call_args.args[0]
+   self.assertEqual(content[1]['type'],'input_image')
+   self.assertTrue(content[1]['image_url'].startswith('data:image/png;base64,'))
+   self.assertNotIn('profile',str(content))
+   self.assertEqual(self.day()['meals'],[])
+
+ def test_assistant_invalid_nutrients_and_provider_errors_do_not_save(self):
+  with patch('app.food_vision.get_ai_settings',return_value={'active_provider':'chatgpt','chatgpt_model':'test-sol'}), patch('app.food_vision.active_provider') as provider:
+   for response in ['not json',json.dumps({'ingredients':[],'uncertainties':[],'calories_kcal':500})]:
+    provider.return_value.generate.return_value=response
+    with self.assertRaises(ValueError):analyze_text('rice',self.path)
+   provider.return_value.generate.side_effect=RuntimeError('secret provider error')
+   with self.assertRaisesRegex(ValueError,'selected assistant'):analyze_text('rice',self.path)
   self.assertEqual(self.day()['meals'],[])
 
 if __name__=='__main__':unittest.main()

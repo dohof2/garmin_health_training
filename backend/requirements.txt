@@ -4,3 +4,4 @@ garminconnect==0.3.17
 curl_cffi==0.16.3
 openai==3.26.1
 uvicorn[standard]==0.53.0
+PyJWT[crypto]==2.15.1

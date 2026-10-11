@@ -27,6 +27,8 @@ def catalog(path: Path | None = None):
         rows = c.execute("SELECT metric_type, unit, COUNT(*) AS count FROM metric_readings WHERE source_name != 'synthetic_fixture' GROUP BY metric_type, unit ORDER BY metric_type").fetchall()
     from .archive_charts import archive_metrics
     extras = list(archive_metrics(path))
+    from .fit_access import catalog as fit_catalog
+    extras += fit_catalog(path)
     extras += [{'id': 'hydration', 'label': 'Hydration', 'unit': 'mL', 'count': None},
                {'id': 'acute_training_load', 'label': 'Acute training load', 'unit': 'garmin_load', 'count': None}]
     if not any(r['metric_type'] == 'weight' for r in rows):
@@ -36,16 +38,16 @@ def catalog(path: Path | None = None):
             + [m for m in extras if m['id'] not in {r['metric_type'] for r in rows}] + [{'id': 'vo2_cycling', 'label': 'VO₂ max · cycling', 'unit': 'mL/kg/min', 'count': None},
                {'id': 'vo2_running', 'label': 'VO₂ max · running', 'unit': 'mL/kg/min', 'count': None}],
             'activity_fields': [{'id': 'activity_' + key, 'label': 'Total climb' if key == 'elevation' else 'Activity ' + key.replace('_', ' '), 'unit': unit}
-                                for key, (_, unit, _) in ACTIVITY_FIELDS.items()]}
+                                for key, (_, unit, _) in ACTIVITY_FIELDS.items()] + [{'id':'activity_sprint_power','label':'Repeated short-effort power','unit':'W'}]}
 
 
 def validate_spec(spec, path=None):
     if not isinstance(spec, dict):
         raise ValueError('Chart must be an object')
-    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days'}
+    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days', 'sprint_seconds', 'interval_min_seconds', 'interval_max_seconds', 'min_repetitions', 'threshold_watts', 'fit_stat'}
     if set(spec) - allowed:
         raise ValueError('Unsupported chart fields')
-    known = {m['id'] for m in catalog(path)['metrics']} | {'activity_' + f for f in ACTIVITY_FIELDS}
+    known = {m['id'] for m in catalog(path)['metrics']} | {'activity_' + f for f in ACTIVITY_FIELDS} | {'activity_sprint_power'}
     if spec.get('metric') not in known or (spec.get('x_metric') and spec['x_metric'] not in known | {'date'}):
         raise ValueError('Choose a supported metric')
     if spec.get('kind') not in KINDS or spec.get('size', 'half') not in {'half', 'full'}:
@@ -60,7 +62,7 @@ def validate_spec(spec, path=None):
             date.fromisoformat(spec[key])
     if spec.get('start') and spec.get('end') and spec['start'] > spec['end']:
         raise ValueError('Start date must be before end date')
-    if spec.get('gps_reference_id') and not spec['metric'].startswith('activity_'):
+    if spec.get('gps_reference_id') and not spec['metric'].startswith(('activity_','fit:')):
         raise ValueError('GPS-matched charts require an activity metric')
     for key in ('trend_line', 'correlation'):
         if key in spec and not isinstance(spec[key], bool):
@@ -77,6 +79,16 @@ def validate_spec(spec, path=None):
     if (spec.get('aggregation') or spec.get('rolling_days')) and (spec['kind']=='dial' or (spec['kind']=='scatter' and spec.get('x_metric')!='date')):
         raise ValueError('Aggregation and rolling averages require a date axis')
     timezone_info(spec.get('timezone'))
+    if 'fit_stat' in spec and (not str(spec['metric']).startswith('fit:') or spec['fit_stat'] not in {'mean','maximum','minimum','sum','count'}):
+        raise ValueError('FIT field charts support mean, maximum, minimum, sum or count')
+    sprint_fields = {'sprint_seconds','interval_min_seconds','interval_max_seconds','min_repetitions','threshold_watts'}
+    if spec['metric'] == 'activity_sprint_power':
+        if spec['kind'] not in {'scatter','line','bar'} or spec.get('x_metric','date') != 'date' or spec.get('gps_reference_id') or spec.get('aggregation') or spec.get('rolling_days'):
+            raise ValueError('Sprint charts require a date axis without additional aggregation or route matching')
+        if not _valid(spec.get('sprint_seconds')) or not 1 <= spec['sprint_seconds'] <= 120:
+            raise ValueError('Choose the sprint duration bin in seconds')
+    elif sprint_fields & set(spec) or spec.get('x_metric') == 'activity_sprint_power':
+        raise ValueError('Sprint settings require a sprint-power chart with a date axis')
     normalized=dict(spec)
     if normalized.get('title','').lower() in ('activity elevation','activity_elevation','elevation') and normalized['metric']=='activity_elevation': normalized['title']='Total climb'
     return normalized
@@ -87,6 +99,9 @@ def _valid(value):
 
 
 def _observations(metric, spec, path=None, activity_ids=None):
+    if metric.startswith('fit:'):
+        from .fit_access import observations
+        return observations(metric,spec,path)
     observations = []
     excluded = 0
     unit = ''
@@ -266,6 +281,12 @@ def analyze_points(points, spec):
 
 def chart_data(spec, path=None):
     spec = validate_spec(spec, path)
+    if spec['metric'] == 'activity_sprint_power':
+        from .intervals import analyze, plot_result
+        result = analyze({'min_seconds':spec.get('interval_min_seconds',10), 'max_seconds':spec.get('interval_max_seconds',15),
+            'min_repetitions':spec.get('min_repetitions',2), 'threshold_watts':spec.get('threshold_watts'),
+            'start_date':spec.get('start'), 'end_date':spec.get('end'), 'timezone':spec.get('timezone'),'sport':spec.get('sport')},path)
+        return plot_result(spec,result)
     if not spec.get('title'):
         def metric_label(metric):
             return 'Total climb' if metric == 'activity_elevation' else ('VO₂ max · ' + metric[4:]) if metric.startswith('vo2_') else metric.replace('_', ' ').capitalize()
@@ -287,7 +308,7 @@ def chart_data(spec, path=None):
     unpaired = 0
     if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date':
         xs, x_unit, _ = _observations(spec['x_metric'], spec, path, activity_ids)
-        if spec['x_metric'].startswith('activity_') and not spec['metric'].startswith('activity_'):
+        if spec['x_metric'].startswith(('activity_','fit:')) and not spec['metric'].startswith(('activity_','fit:')):
             health_by_date = {p['date']: p for p in sorted(ys, key=lambda p: (p['date'], p['source'] == 'manual'))}
             paired = [(p, health_by_date.get(p['date'])) for p in xs]
             points = [{**p, 'x': p['value'], 'y': h['value']} for p,h in paired if h]
@@ -296,10 +317,10 @@ def chart_data(spec, path=None):
             ys = []
         # Last stored reading per date, manual takes precedence, without inventing missing dates.
         xs = sorted(xs, key=lambda p: (p['date'], p['source'] == 'manual'))
-        mixed = spec['metric'].startswith('activity_') != spec['x_metric'].startswith('activity_')
+        mixed = spec['metric'].startswith(('activity_','fit:')) != spec['x_metric'].startswith(('activity_','fit:'))
         by_key = {p['date'] if mixed else p['key']: p for p in xs}
         ys = sorted(ys, key=lambda p: (p['date'], p['source'] == 'manual'))
-        if not spec['metric'].startswith('activity_'):
+        if not spec['metric'].startswith(('activity_','fit:')):
             ys = list({p['key']: p for p in ys}.values())
         for p in ys:
             x = by_key.get(p['date'] if mixed else p['key'])
@@ -332,6 +353,8 @@ def chart_data(spec, path=None):
     if count > 2000:
         points = [points[round(i * (count - 1) / 1999)] for i in range(2000)]
     notes = ['Actual recorded observations only; missing days are not filled.', *transform_notes]
+    if spec['metric'].startswith('fit:') or str(spec.get('x_metric','')).startswith('fit:'):
+        notes.append(f"FIT field per-activity {spec.get('fit_stat','mean')}; only finite recorded numeric values contribute. Message count counts stored events, including zero where that message collection is explicitly present. Unknown units and field meanings are not inferred. Continuous means are sample means, not time-weighted effort averages; use sprint analysis for effort power.")
     if spec['metric'].startswith('archive:') or str(spec.get('x_metric','')).startswith('archive:'):
         notes.append('Numeric archive field in source units; no unit conversion or missing-value imputation. Check the field definition before interpreting it.')
     if scope:
@@ -340,7 +363,7 @@ def chart_data(spec, path=None):
     if spec['metric'] == 'weight' or spec.get('x_metric') == 'weight':
         notes.append('Includes dated weights from Garmin biometric history, live sync and manual entries. Duplicate Garmin values on the same date are shown once; no profile weight is carried forward into missing dates.')
     if spec['kind'] == 'scatter' and spec.get('x_metric') != 'date':
-        notes.append('Paired by activity ID.' if spec['metric'].startswith('activity_') and spec['x_metric'].startswith('activity_') else 'Paired on the same local date; latest health reading per date, manual takes precedence. Each activity is retained when pairing activity and health data.')
+        notes.append('Paired by activity ID.' if spec['metric'].startswith(('activity_','fit:')) and spec['x_metric'].startswith(('activity_','fit:')) else 'Paired on the same local date; latest health reading per date, manual takes precedence. Each activity is retained when pairing activity and health data.')
     if spec['metric'] == 'activity_speed' or spec.get('x_metric') == 'activity_speed':
         notes.append('Speed uses the recorded Garmin/FIT mean, not distance divided by elapsed time. Conditions are not adjusted.')
     if spec.get('correlation') or spec.get('trend_line'):

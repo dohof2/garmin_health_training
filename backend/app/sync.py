@@ -411,7 +411,7 @@ def _activity_needs_detail(
             existing = _activity_fingerprint_match(connection, values)
         if existing is None:
             return True
-        return existing['fit_detail_version'] < 1 or bool(
+        return existing['fit_detail_version'] < 2 or bool(
             values['source_updated_at'] and values['source_updated_at'] != existing['source_updated_at']
         )
 

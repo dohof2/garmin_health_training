@@ -83,7 +83,8 @@ class AssistantQC(unittest.TestCase):
                 plot=self.ask(question)[0];self.assertEqual(plot['spec']['start'],start)
         plot=self.ask('Plot weight from 2020-01-01 to 2020-01-03 with correlation')[0]
         self.assertEqual(plot['count'],0);self.assertIsNone(plot['analysis']['pearson_r'])
-        self.assertEqual(period('last year',date(2024,2,29)),('2023-02-28','2024-02-29'))
+        self.assertEqual(period('last year',date(2024,2,29)),('2023-01-01','2023-12-31'))
+        self.assertEqual(period('the past year',date(2024,2,29)),('2023-02-28','2024-02-29'))
 
     def test_analysis_empty_sparse_constant_negative_and_full_set(self):
         spec={'metric':'weight','kind':'scatter','x_metric':'resting_heart_rate','trend_line':True,'correlation':True,'reference_lines':['mean']}

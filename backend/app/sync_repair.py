@@ -31,7 +31,7 @@ def recover_fit_summaries(path: Path | None = None, archive_path: Path | None = 
     with connect(path) as connection:
         rows = connection.execute('''SELECT f.nested_archive, f.member_name, f.activity_id
             FROM fit_import_files f JOIN activities a ON a.id=f.activity_id
-            WHERE f.status='completed' AND a.fit_detail_version<1''').fetchall()
+            WHERE f.status='completed' AND a.fit_detail_version<2''').fetchall()
     if not rows:
         return {'recovered': 0, 'failed': 0}
     archive = archive_path or default_archive_path()

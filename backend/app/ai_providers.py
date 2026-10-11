@@ -12,7 +12,7 @@ from openai import OpenAI
 from .database import connect, migrate
 
 
-AI_PROVIDERS = {"ollama", "openai"}
+AI_PROVIDERS = {"ollama", "openai", "chatgpt"}
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 
@@ -36,7 +36,7 @@ def get_ai_settings(path: Path | None = None) -> dict[str, object]:
     with connect(path) as connection:
         row = connection.execute(
             """
-            SELECT active_provider, ollama_model, openai_model, updated_at
+            SELECT active_provider, ollama_model, openai_model, chatgpt_model, updated_at
             FROM ai_settings WHERE id = 1
             """
         ).fetchone()
@@ -50,20 +50,22 @@ def save_ai_settings(
 ) -> dict[str, object]:
     provider = str(settings.get("active_provider") or "").strip().lower()
     if provider not in AI_PROVIDERS:
-        raise ValueError("active_provider must be ollama or openai")
+        raise ValueError("active_provider must be ollama, openai or chatgpt")
     ollama_model = _model_name(settings.get("ollama_model"), "ollama_model")
     openai_model = _model_name(settings.get("openai_model"), "openai_model")
 
+    chatgpt_model = str(settings.get("chatgpt_model") or "").strip()
+    if chatgpt_model: chatgpt_model = _model_name(chatgpt_model,"chatgpt_model")
     migrate(path)
     with connect(path) as connection:
         connection.execute(
             """
             UPDATE ai_settings
-            SET active_provider = ?, ollama_model = ?, openai_model = ?,
+            SET active_provider = ?, ollama_model = ?, openai_model = ?, chatgpt_model = ?,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = 1
             """,
-            (provider, ollama_model, openai_model),
+            (provider, ollama_model, openai_model, chatgpt_model),
         )
     return get_ai_settings(path)
 
@@ -94,10 +96,14 @@ def provider_status(path: Path | None = None) -> dict[str, object]:
         ollama_ready = False
         ollama_detail = "Ollama is not reachable on this computer."
 
+    from .chatgpt_auth import status
+    chatgpt = status(path)
     openai_configured = bool(os.getenv("OPENAI_API_KEY", "").strip())
     return {
         "active_provider": settings["active_provider"],
+        "chatgpt": chatgpt,
         "providers": {
+            "chatgpt": {"configured":chatgpt["connected"],"available":chatgpt["connected"] and bool(settings["chatgpt_model"]),"model":settings["chatgpt_model"],"detail":chatgpt["detail"]},
             "ollama": {
                 "configured": True,
                 "available": ollama_ready,
@@ -162,6 +168,24 @@ class OpenAIProvider:
 
 def active_provider(path: Path | None = None) -> AIProvider:
     settings = get_ai_settings(path)
+    if settings["active_provider"] == "chatgpt":
+        return ChatGPTProvider(str(settings["chatgpt_model"]),path)
     if settings["active_provider"] == "openai":
         return OpenAIProvider(str(settings["openai_model"]))
     return OllamaProvider(str(settings["ollama_model"]))
+
+
+class ChatGPTProvider:
+    def __init__(self,model,path=None):self.model=model;self.path=path
+    def generate(self,prompt,instructions):
+        from .chatgpt_auth import access_token
+        if not self.model:raise RuntimeError('Select a ChatGPT model in Settings.')
+        client=OpenAI(api_key=access_token(self.path),base_url='https://api.openai.com/v1',max_retries=0)
+        text=[];completed=False
+        reasoning = {'reasoning': {'effort': 'low'}} if '-sol' in self.model else {}
+        for event in client.responses.create(model=self.model,instructions=instructions,input=[{'role':'user','content':prompt}],store=False,stream=True,**reasoning):
+            if event.type=='response.output_text.delta':text.append(event.delta)
+            elif event.type=='response.completed':completed=True
+            elif event.type in {'response.failed','response.incomplete','error'}:raise RuntimeError('ChatGPT request failed or was incomplete. Check account access and usage in Settings.')
+        if not completed:raise RuntimeError('ChatGPT stream ended before completion.')
+        return ''.join(text)

@@ -57,6 +57,7 @@ class AcceptanceProbes(unittest.TestCase):
     def test_rolling_average_request_is_not_silently_raw_history(self):
         events=self.ask('Plot weekly median weight with a 7-day rolling average')
         if any(e['type']=='error' for e in events): return
+        if any(e['type']=='delta' and 'separate plots' in e.get('text','') for e in events): return
         plots=self.plots(events)
         self.assertTrue(plots)
         self.assertNotEqual(plots[0]['count'],28,'A requested weekly aggregation must not silently return all raw observations')
@@ -64,6 +65,7 @@ class AcceptanceProbes(unittest.TestCase):
     def test_unqualified_body_battery_comparison_is_not_dropped(self):
         events=self.ask('Plot body battery versus sleep score for the last year')
         if any(e['type']=='error' for e in events): return
+        if any(e['type']=='delta' and 'Which Body Battery' in e.get('text','') for e in events): return
         plots=self.plots(events)
         self.assertTrue(plots)
         self.assertEqual(plots[0]['spec']['kind'],'scatter','Clarify ambiguous Body Battery or return a comparison; do not silently drop it')

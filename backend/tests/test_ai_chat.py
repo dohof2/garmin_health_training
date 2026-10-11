@@ -225,7 +225,7 @@ class AIChatTests(unittest.TestCase):
 
         with patch.dict(environ, {"OPENAI_API_KEY": "secret-test-key"}):
             events = [json.loads(line) for line in chat_stream(
-                "How were my steps?",
+                "Tell me about my health history.",
                 timezone_name="Asia/Jerusalem",
                 path=self.database,
             )]
@@ -286,7 +286,7 @@ class AIChatTests(unittest.TestCase):
         ollama_request.side_effect = [planner, stream]
 
         events = [json.loads(line) for line in chat_stream(
-            "How were my steps?",
+            "Tell me about my health history.",
             timezone_name="Asia/Jerusalem",
             path=self.database,
         )]

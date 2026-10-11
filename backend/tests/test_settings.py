@@ -105,7 +105,11 @@ class SettingsTests(unittest.TestCase):
             self.assertEqual(saved["active_provider"], "openai")
             self.assertEqual(saved["ollama_model"], "qwen3.5:4b")
 
-            with self.assertRaisesRegex(ValueError, "ollama or openai"):
+            saved = save_ai_settings({**saved, "active_provider": "chatgpt", "chatgpt_model": "account-model"}, database)
+            self.assertEqual(saved["active_provider"], "chatgpt")
+            self.assertEqual(saved["chatgpt_model"], "account-model")
+
+            with self.assertRaisesRegex(ValueError, "ollama, openai or chatgpt"):
                 save_ai_settings(
                     {
                         "active_provider": "unknown",

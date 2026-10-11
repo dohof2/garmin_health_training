@@ -19,7 +19,7 @@ from .readiness import readiness_history, get_readiness_settings, save_readiness
 from .training import training_context, save_preferences, draft_week, list_training, accept_plan, update_workout, progression_proposal
 from .training_coach import read_brief, save_brief, preview as coach_preview, create_draft as coach_draft, parse_request
 from .nutrition import food_search, preview_meal, save_meal, remove_meal, daily_status, save_library, list_library, scale_library, target_preview, save_target, target_history
-from .food_vision import analyze_photo
+from .food_vision import analyze_photo, analyze_text
 from .database import migrate, schema_status
 from .extended_archive_import import (
     ExtendedArchiveImportError,
@@ -170,6 +170,11 @@ class NutritionRemoval(BaseModel):
     removed: bool = Field(strict=True)
 
 
+class FoodDescription(BaseModel):
+    model_config = {"extra": "forbid"}
+    message: str = Field(min_length=1, max_length=4000)
+
+
 class FoodPhoto(BaseModel):
     model_config = {"extra": "forbid"}
     image_base64: str = Field(min_length=1, max_length=8*1024*1024)
@@ -243,6 +248,11 @@ def nutrition_target_preview(body: NutritionDraft):
 @app.post('/api/nutrition/targets')
 def nutrition_target_save(body: NutritionTargetSave):
     return nutrition_call(save_target,body.payload,body.expected_revision)
+
+
+@app.post('/api/nutrition/assistant')
+def nutrition_assistant(body: FoodDescription):
+    return nutrition_call(analyze_text,body.message)
 
 
 @app.post('/api/nutrition/photo')
@@ -343,6 +353,7 @@ class AISettingsUpdate(BaseModel):
     active_provider: str
     ollama_model: str
     openai_model: str
+    chatgpt_model: str = ""
 
 
 class AIToolExecutionRequest(BaseModel):
@@ -1024,3 +1035,43 @@ def garmin_import(
         raise HTTPException(status_code=404, detail=str(error)) from error
     except GarminImportError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+def _chatgpt_local_request(request):
+    origin=request.headers.get('origin')
+    if origin and origin not in {'http://127.0.0.1:5173','http://127.0.0.1:5174','http://127.0.0.1:8000'}:
+        raise HTTPException(status_code=403,detail='Use ChatGPT settings from the local app.')
+
+
+@app.post('/api/ai/chatgpt/connect')
+def chatgpt_connect(request: Request,account: str | None = None):
+    _chatgpt_local_request(request)
+    from .chatgpt_auth import start
+    try:return start(account=account)
+    except ValueError as error:raise HTTPException(status_code=400,detail=str(error)) from error
+
+
+@app.get('/auth/callback')
+def chatgpt_callback(request: Request):
+    from .chatgpt_auth import finish, failure_message
+    from html import escape
+    from starlette.responses import HTMLResponse
+    try:
+        finish(dict(request.query_params))
+        return HTMLResponse('<h1>ChatGPT connected</h1><p>Return to Garmin Settings, refresh the account status and choose a model.</p>',headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+    except Exception as error:
+        return HTMLResponse('<h1>ChatGPT connection was not completed</h1><p>'+escape(failure_message(error))+'</p><p><a href="http://127.0.0.1:5173/#settings">Return to Garmin Settings</a></p>',status_code=400,headers={'Cache-Control':'no-store','Referrer-Policy':'no-referrer'})
+
+
+@app.get('/api/ai/chatgpt/models')
+def chatgpt_models():
+    from .chatgpt_auth import models
+    try:return models()
+    except Exception as error:raise HTTPException(status_code=400,detail='ChatGPT models could not be loaded. Reconnect or check your plan access.') from error
+
+
+@app.post('/api/ai/chatgpt/disconnect')
+def chatgpt_disconnect(request: Request):
+    _chatgpt_local_request(request)
+    from .chatgpt_auth import sign_out
+    return sign_out()

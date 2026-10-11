@@ -238,16 +238,18 @@ type UserGoal = {
   notes: string | null;
 };
 
-type AiProviderName = "ollama" | "openai";
+type AiProviderName = "ollama" | "openai" | "chatgpt";
 
 type AiSettings = {
   active_provider: AiProviderName;
   ollama_model: string;
   openai_model: string;
+  chatgpt_model: string;
   updated_at: string;
 };
 
 type AiProviderStatus = {
+  chatgpt?: {connected: boolean; active: string | null; accounts: Array<{id:string;label:string;signed_in:boolean}>;detail:string};
   active_provider: AiProviderName;
   providers: Record<AiProviderName, {
     configured: boolean;
@@ -1008,6 +1010,53 @@ export default function App() {
     }
   };
 
+  const [chatgptModels,setChatgptModels] = useState<Array<{id:string;name:string}>>([]);
+  const [chatgptBusy,setChatgptBusy] = useState(false);
+  const [chatgptSignInUrl,setChatgptSignInUrl] = useState<string | null>(null);
+  const refreshChatGPT = async () => {
+    setChatgptBusy(true);
+    try {
+      const statusResponse=await fetch('/api/ai/providers/status');
+      if (!statusResponse.ok) throw new Error(await readError(statusResponse));
+      const status=await statusResponse.json() as AiProviderStatus;
+      setConnection(current=>current.kind==='ready'?{...current,aiProviderStatus:status}:current);
+      if (status.chatgpt?.connected) {
+        const response=await fetch('/api/ai/chatgpt/models');
+        if (!response.ok) throw new Error(await readError(response));
+        const models=await response.json() as Array<{id:string;name:string}>;
+        setChatgptModels(models);
+        const preferredModel=models.find(m=>m.id==='gpt-6.1-sol')??models.find(m=>m.id==='gpt-6-sol')??models.find(m=>m.id.includes('-sol'));
+        setSettingsDraft(current=>current?{...current,ai:{...current.ai,chatgpt_model:models.some(m=>m.id===current.ai.chatgpt_model)?current.ai.chatgpt_model:preferredModel?.id??''}}:current);
+        setSettingsMessage('ChatGPT connected. Choose a model and save AI settings.');
+      } else setSettingsMessage(status.chatgpt?.detail??'Continue with ChatGPT.');
+    } catch(error) {setSettingsMessage(error instanceof Error?error.message:'ChatGPT status could not be refreshed.');}
+    finally {setChatgptBusy(false);}
+  };
+  const connectChatGPT = async (account?: string, copyForChrome = false) => {
+    setChatgptBusy(true);
+    try {
+      const response=await fetch('/api/ai/chatgpt/connect'+(account?'?account='+encodeURIComponent(account):''),{method:'POST'});
+      if (!response.ok) throw new Error(await readError(response));
+      const result=await response.json() as {authorization_url:string};
+      setChatgptSignInUrl(result.authorization_url);
+      if (copyForChrome) {
+        await navigator.clipboard.writeText(result.authorization_url);
+        setSettingsMessage('Fresh sign-in link copied. Paste into Chrome on this computer and finish within 10 minutes, then refresh ChatGPT status here.');
+      } else {
+        window.open(result.authorization_url,'_blank','noopener,noreferrer');
+        setSettingsMessage('Complete sign-in in the new tab within 10 minutes, then refresh ChatGPT status here.');
+      }
+    } catch(error) {setSettingsMessage(error instanceof Error?error.message:'ChatGPT sign-in could not start.');}
+    finally {setChatgptBusy(false);}
+  };
+  const disconnectChatGPT = async () => {
+    const response=await fetch('/api/ai/chatgpt/disconnect',{method:'POST'});
+    if (!response.ok) {setSettingsMessage(await readError(response));return;}
+    const result=await response.json() as {remote_revocation_confirmed:boolean};
+    setChatgptModels([]);await refreshChatGPT();
+    setSettingsMessage(result.remote_revocation_confirmed?'ChatGPT signed out.':'Signed out locally. Remote revocation was not confirmed; disconnect Garmin Health & Training in ChatGPT Settings.');
+  };
+
   const saveAISettings = async () => {
     if (!settingsDraft) return;
     setIsSavingSettings(true);
@@ -1031,7 +1080,7 @@ export default function App() {
             aiProviderStatus,
           }
         : current);
-      setSettingsMessage(`AI provider saved: ${ai.active_provider === "openai" ? "OpenAI" : "Qwen through Ollama"}.`);
+      setSettingsMessage(`AI provider saved: ${ai.active_provider === "chatgpt" ? "ChatGPT account" : ai.active_provider === "openai" ? "OpenAI API" : "Qwen through Ollama"}.`);
     } catch (error: unknown) {
       setSettingsMessage(error instanceof Error ? error.message : "AI settings could not be saved.");
     } finally {
@@ -1705,7 +1754,7 @@ export default function App() {
   return (
     <main className="app-shell">
       <header className="app-topbar">
-        <a className="app-brand" href="#dashboard"><span className="brand-mark" aria-hidden="true">G</span><span>Garmin<span className="brand-subtitle">Personal workspace</span></span></a>
+        <a className="app-brand" href="#dashboard" aria-label="Dotan's training and health space"><span className="brand-mark" aria-hidden="true">D</span><span>Dotan's<span className="brand-subtitle">Training and health space</span></span></a>
         <div className={`connection connection--${connection.kind}`}><span aria-hidden="true" />{statusText}</div>
       </header>
       <nav className="app-navigation" aria-label="Main navigation">
@@ -2074,11 +2123,11 @@ export default function App() {
       <section hidden={page !== "assistant"} className="assistant" id="assistant" aria-labelledby="assistant-title">
         <div className="section-heading assistant-heading">
           <div>
-            <p>Grounded history assistant</p>
+            <p>Personal trainer &amp; data assistant</p>
             <h2 id="assistant-title">Ask your Garmin data</h2>
           </div>
           <div className={`assistant-provider ${activeAiStatus?.available ? "assistant-provider--ready" : "assistant-provider--attention"}`}>
-            <strong>{activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
+            <strong>{activeAiProvider === "chatgpt" ? "ChatGPT account" : activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
             <span>{activeAiStatus?.available ? "Ready" : "Setup needed"}</span>
           </div>
         </div>
@@ -2088,7 +2137,9 @@ export default function App() {
           or goals; review the proposed changes and save them here. Goals are optional.
         </p>
         <p className="assistant-privacy">
-          {activeAiProvider === "openai"
+          {activeAiProvider === "chatgpt"
+            ? "ChatGPT account mode sends your question, recent chat context and relevant tool results to OpenAI using your authorized ChatGPT plan. Plan limits are shared; it never falls back to paid API billing."
+            : activeAiProvider === "openai"
             ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
             : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
           {" "}Chat messages are kept in this app session. Graph and ride selections are retained in this browser tab, including after a refresh.
@@ -2247,8 +2298,17 @@ export default function App() {
               placeholder="For example: How has my running volume changed over the last eight weeks?"
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                event.preventDefault();
+                if (!event.repeat && chatInput.trim() && connection.kind === "ready" && chatStatus.kind !== "streaming") {
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              aria-describedby="chat-keyboard-hint"
               disabled={chatStatus.kind === "streaming"}
             />
+            <small id="chat-keyboard-hint">Enter to ask · Shift+Enter for a new line</small>
             <div className="chat-actions">
               <span>
                 {chatStatus.kind === "streaming"
@@ -2659,14 +2719,13 @@ export default function App() {
             >
               <div className="settings-panel-heading">
                 <div>
-                  <span>AI providers</span>
-                  <h3>OpenAI and local Qwen</h3>
+                  <span>Assistant</span>
+                  <h3>Connection and model</h3>
                 </div>
                 <button type="submit" disabled={isSavingSettings}>Save AI settings</button>
               </div>
               <p>
-                Choose which provider the assistant uses. Switching is manual, so the app
-                never falls back to a paid API without your choice.
+                Choose how your assistant connects. Your selected provider is used for every AI request.
               </p>
               <div className="settings-fields settings-fields--ai">
                 <label>
@@ -2682,10 +2741,11 @@ export default function App() {
                     })}
                   >
                     <option value="ollama">Qwen through Ollama</option>
-                    <option value="openai">OpenAI API</option>
+                    <option value="openai">OpenAI API (separate billing)</option>
+                    <option value="chatgpt">ChatGPT account (your plan)</option>
                   </select>
                 </label>
-                <label>
+                {settingsDraft.ai.active_provider === "ollama" && <label>
                   Ollama model
                   <input
                     type="text"
@@ -2696,9 +2756,9 @@ export default function App() {
                       ai: { ...settingsDraft.ai, ollama_model: event.target.value },
                     })}
                   />
-                </label>
-                <label>
-                  OpenAI model
+                </label>}
+                {settingsDraft.ai.active_provider === "openai" && <label>
+                  API model
                   <input
                     type="text"
                     maxLength={100}
@@ -2708,15 +2768,66 @@ export default function App() {
                       ai: { ...settingsDraft.ai, openai_model: event.target.value },
                     })}
                   />
-                </label>
+                </label>}
+                {settingsDraft.ai.active_provider === "chatgpt" && <label>
+                  ChatGPT model
+                  <select value={settingsDraft.ai.chatgpt_model ?? ""} onChange={event => setSettingsDraft({
+                    ...settingsDraft, ai: { ...settingsDraft.ai, chatgpt_model: event.target.value },
+                  })}>
+                    <option value="">Connect and refresh models</option>
+                    {settingsDraft.ai.chatgpt_model && !chatgptModels.some(model => model.id === settingsDraft.ai.chatgpt_model) && (
+                      <option value={settingsDraft.ai.chatgpt_model}>{settingsDraft.ai.chatgpt_model}</option>
+                    )}
+                    {chatgptModels.map(model => <option value={model.id} key={model.id}>{model.name}</option>)}
+                  </select>
+                </label>}
               </div>
-              {connection.kind === "ready" && (
+              {settingsDraft.ai.active_provider === "chatgpt" && (
+                <div className="chatgpt-settings">
+                  <div className="chatgpt-account-summary">
+                    <div>
+                      <span>ChatGPT account</span>
+                      <strong>{connection.kind === "ready" && connection.aiProviderStatus.chatgpt?.connected
+                        ? connection.aiProviderStatus.chatgpt.accounts.find(account => account.id === connection.aiProviderStatus.chatgpt?.active)?.label.split(" · ")[0] ?? "Connected account"
+                        : "Connect your account"}</strong>
+                    </div>
+                    <span className="chatgpt-connection-badge">{connection.kind === "ready" && connection.aiProviderStatus.chatgpt?.connected ? "Connected" : "Sign-in needed"}</span>
+                  </div>
+                  <p>Uses your ChatGPT plan. Sol runs with Light reasoning.</p>
+                  <div className="chatgpt-settings-actions">
+                    {!(connection.kind === "ready" && connection.aiProviderStatus.chatgpt?.connected) && <>
+                      <button type="button" disabled={chatgptBusy} onClick={() => void connectChatGPT()}>Continue with ChatGPT</button>
+                      <button type="button" disabled={chatgptBusy} onClick={() => void connectChatGPT(undefined, true)}>Copy fresh sign-in link for Chrome</button>
+                    </>}
+                    <button type="button" disabled={chatgptBusy} onClick={() => void refreshChatGPT()}>Refresh models</button>
+                  </div>
+                  {chatgptSignInUrl && !(connection.kind === "ready" && connection.aiProviderStatus.chatgpt?.connected) && (
+                    <a href={chatgptSignInUrl} target="_blank" rel="noopener noreferrer">Open ChatGPT sign-in</a>
+                  )}
+                  {connection.kind === "ready" && connection.aiProviderStatus.chatgpt?.connected && (
+                    <details className="chatgpt-account-options">
+                      <summary>Manage account</summary>
+                      <div className="chatgpt-settings-actions">
+                        <button type="button" disabled={chatgptBusy} onClick={() => void connectChatGPT()}>Use another ChatGPT account</button>
+                        {connection.aiProviderStatus.chatgpt.accounts.filter(account => account.id !== connection.aiProviderStatus.chatgpt?.active).map(account => (
+                          <button type="button" key={account.id} disabled={chatgptBusy} onClick={() => void connectChatGPT(account.id)}>{account.label}</button>
+                        ))}
+                        <button type="button" disabled={chatgptBusy} onClick={() => void disconnectChatGPT()}>Sign out of ChatGPT</button>
+                      </div>
+                      {chatgptSignInUrl && <a href={chatgptSignInUrl} target="_blank" rel="noopener noreferrer">Open account sign-in</a>}
+                    </details>
+                  )}
+                  <small>Personal context comes from Garmin and your entries in this app. ChatGPT account data, conversations and memories are not imported. Questions and relevant Garmin data are sent to OpenAI for answers. Shared plan limits apply.</small>
+                </div>
+              )}
+              {connection.kind === "ready" && settingsDraft.ai.active_provider !== "chatgpt" && (
                 <div className="ai-provider-status" aria-label="AI provider readiness">
-                  {(["ollama", "openai"] as const).map((provider) => {
+                  {[settingsDraft.ai.active_provider].map((provider) => {
                     const status = connection.aiProviderStatus.providers[provider];
+                    if (!status) return null;
                     return (
                       <div key={provider} className={status.available ? "ai-provider-ready" : "ai-provider-attention"}>
-                        <strong>{provider === "ollama" ? "Qwen / Ollama" : "OpenAI"}</strong>
+                        <strong>{provider === "ollama" ? "Qwen / Ollama" : "OpenAI API"}</strong>
                         <span>{status.available ? "Ready" : "Setup needed"}</span>
                         <small>{status.detail}</small>
                       </div>
@@ -2724,10 +2835,10 @@ export default function App() {
                   })}
                 </div>
               )}
-              <p className="ai-key-note">
+              {settingsDraft.ai.active_provider === "openai" && <p className="ai-key-note">
                 OpenAI keys are read from <code>OPENAI_API_KEY</code> in the backend environment
                 and are never saved in this database or displayed here.
-              </p>
+              </p>}
             </form>
 
             <form
