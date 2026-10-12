@@ -722,6 +722,27 @@ def activities(
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+class ActivityRemovalRequest(BaseModel):
+    removed: bool = Field(strict=True)
+
+
+@app.get('/api/activities/removed')
+def removed_activity_list():
+    from .activity_removal import removed_activities
+    return {'activities': removed_activities()}
+
+
+@app.patch('/api/activities/{activity_id}/removed')
+def remove_activity(activity_id: str, request: ActivityRemovalRequest):
+    from .activity_removal import set_removed
+    try:
+        return set_removed(activity_id, request.removed)
+    except LookupError as error:
+        raise HTTPException(404,str(error)) from error
+    except ValueError as error:
+        raise HTTPException(400,str(error)) from error
+
+
 @app.get("/api/activities/{activity_id}")
 def activity_detail(activity_id: str, timezone: str | None = None) -> dict[str, object]:
     try:

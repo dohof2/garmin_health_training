@@ -1805,3 +1805,10 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .readiness-overview .readiness-day-title { font-size: 1rem; line-height: 1.4; margin: 0 0 .5rem; }
 .readiness-range-key { font-size: .85rem !important; line-height: 1.5; color: #52647b; text-transform: none !important; letter-spacing: normal !important; }
 .readiness-overview > section { min-width: 0; }
+.activity-removal { padding: 0 1rem .75rem; }
+.activity-removal > button { color: #923940; font-size: .85rem; }
+.activity-removal-confirm { margin-top: .75rem; padding: 1rem; background: #fff8f7; border: 1px solid #ead2cf; border-radius: 10px; }
+.activity-removal-confirm p { font-size: .9rem; line-height: 1.5; }
+.danger-button { background: #923940; color: white; border-color: #923940; }
+.removed-activities { margin-top: 1.25rem; padding: 1rem; background: #f6f8fc; border: 1px solid #dce2ed; border-radius: 10px; }
+.removed-activity { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 0; }

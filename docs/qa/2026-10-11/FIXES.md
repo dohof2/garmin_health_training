@@ -102,3 +102,11 @@ Added shared overlay hover values, zoom/reset/pan controls, and a rolling dashbo
 ## Readiness dial ambiguity — fixed 12 October
 
 The two pointers were today's lower/upper uncertainty bounds, not today's score plus tomorrow's forecast. Replaced range pointers with a continuous outer arc and an explicit same-day range explanation. Added dated Today/Recorded readiness and Tomorrow forecast headings. Browser verified today's 22–47 range has one range arc and no score arrows; tomorrow has no estimate and no dial. Typecheck and production build pass. Calculations and forecasts unchanged; both scored dials were already separate components.
+
+## Recoverable activity removal — added 12 October
+
+Each activity has Remove activity, followed by an explicit “Are you sure?” prompt with Cancel/Yes actions. Removal applies locally, excludes the record from active history, plots and readiness calculations, retains all FIT/sample/lap data, and can be reversed through Removed activities → Restore activity. Migration 021 and a database trigger preserve local removal during Garmin sync. Dashboard graphs/readiness and activity summary refresh after changes; stale assistant plot evidence is cleared. No Garmin account deletion endpoint is called.
+
+Validation: 360 backend tests + frontend typecheck and production build pass. Five new tests cover exclusion, data preservation, restoration, idempotency, sync persistence, invalid requests and upstream deletion. Existing date-sensitive assistant tests now freeze their calendar dependency so they remain deterministic after midnight.
+
+Browser confirmation check passed: the named activity and app-only removal explanation appear with Cancel and Yes actions; Cancel dismisses the prompt without removal. Frontend proxy activity-list check returns HTTP 200 and excludes the activity removed by the user. Private confirmation screenshot kept outside Git at /private/tmp/activity-removal-confirmation.jpg.

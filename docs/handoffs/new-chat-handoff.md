@@ -197,3 +197,7 @@ Implemented the assistant answer's missing capability: overlay recorded power/HR
 ### Latest chart follow-up (11–12 October 2026)
 
 Activity trace overlays are now supported by `activity_stream_charts.py`, including assistant tools. `InteractivePlot.tsx` supplies zoom/reset/pan and shared multi-series recorded-value guides. `training_load_charts.py` supplies a rolling 28-day acute-load chart, Garmin-recorded green boundaries, full daily history preservation and refresh API; chronic overlay saves in the dashboard layout. 355 backend tests + typecheck/build pass. See `docs/qa/2026-10-11/ACTIVITY-OVERLAY-QC.md` and `INTERACTIVE-LOAD-QC.md`. Button/keyboard zoom and both-line readouts verified; pointer-drag/mobile touch still need independent browser/device validation. All 28 requested Garmin daily history responses fetched successfully; after midnight the new calendar day remains a gap until a recorded value is available.
+
+### Activity removal (12 October)
+
+Implemented app-only recoverable activity removal with confirmation and persistent Restore list. API: GET /api/activities/removed; PATCH /api/activities/{id}/removed with strict boolean `removed`. Migration 021 adds locally_removed_at and protects deleted_at from sync resurrection. All detail/sample/FIT data is retained. 360 backend tests plus frontend build/typecheck pass. Backend restarted on port 8000 to enable the endpoints.

@@ -1,3 +1,4 @@
+import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
 import GraphCanvas, { AssistantPlots, WeightEntry, type ChartResult, type ChartSpec } from "./GraphCanvas";
 import TrainingPanel from "./TrainingPanel";
 import NutritionPanel from "./NutritionPanel";
@@ -727,6 +728,8 @@ export default function App() {
   const [importState, setImportState] = useState<ImportState>({ kind: "idle" });
   const [activityRange, setActivityRange] = useState({ start: "", end: "" });
   const [activityOffset, setActivityOffset] = useState(0);
+  const [activityRevision,setActivityRevision]=useState(0);
+  const [activityNotice,setActivityNotice]=useState('');
   const [activityHasMore, setActivityHasMore] = useState(false);
   const [activityState, setActivityState] = useState<ActivityState>({
     kind: "idle",
@@ -892,7 +895,7 @@ export default function App() {
       });
 
     return () => controller.abort();
-  }, [activityRange.start, activityRange.end, activityOffset]);
+  }, [activityRange.start, activityRange.end, activityOffset, activityRevision]);
 
   const statusText =
     connection.kind === "ready"
@@ -926,6 +929,15 @@ export default function App() {
         : summary?.data_mode === "real"
           ? "Garmin data"
           : null;
+
+  const activityRemovalChanged=()=>{
+    setActivityOffset(0);setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);
+    setActivityNotice('Activity history updated. Removed activities can be restored below.');
+    setChatMessages(messages=>messages.map(message=>({...message,evidence:message.evidence.map(e=>({...e,plots:undefined}))})));
+    delete chatContext.current.plots;delete chatContext.current.ride;
+    sessionStorage.setItem('garmin-assistant-query-context',JSON.stringify(chatContext.current));
+    fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`).then(r=>r.json()).then((summary:HistorySummary)=>setConnection(current=>current.kind==='ready'?{...current,summary}:current)).catch(()=>{});
+  };
 
   const toggleActivityDetail = async (activityId: string) => {
     if (
@@ -2020,7 +2032,7 @@ export default function App() {
         <div className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
             <article className={`data-card ${card.id === "training_readiness" ? "readiness-dashboard-card" : ""}`} key={card.id}>
-              {card.id === "training_readiness" ? <ReadinessCard timezone={browserTimeZone} refreshToken={`${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /> : <>
+              {card.id === "training_readiness" ? <ReadinessCard timezone={browserTimeZone} refreshToken={`${activityRevision}:${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /> : <>
               <p>
                 {card.label}{" "}
                 <abbr className="info-tip" title={card.tooltip} aria-label={card.tooltip}>i</abbr>
@@ -2050,6 +2062,7 @@ export default function App() {
           />
         </div>
 
+        <p role="status">{activityNotice}</p>
         {activityState.kind === "loading" && activityState.items.length === 0 && (
           <p className="activity-message">Loading activities…</p>
         )}
@@ -2100,6 +2113,7 @@ export default function App() {
                     <span className="activity-summary">{summaryParts.join(" · ") || "Summary not recorded"}</span>
                     <span className="activity-chevron" aria-hidden="true">{isOpen ? "−" : "+"}</span>
                   </button>
+                  <RemoveActivity activity={activity} onChanged={activityRemovalChanged}/>
                   {activityDetail.kind === "loading" && activityDetail.activityId === activity.id && (
                     <p className="activity-detail-message">Loading recorded details…</p>
                   )}
@@ -2118,7 +2132,8 @@ export default function App() {
             {activityHasMore && <button type="button" disabled={activityState.kind === "loading"} onClick={() => setActivityOffset(current => current + 50)}>{activityState.kind === "loading" ? "Loading…" : "Load more activities"}</button>}
           </div>
         )}
-      </section>
+      <RemovedActivities revision={activityRevision} onChanged={activityRemovalChanged}/>
+        </section>
 
       <section hidden={page !== "assistant"} className="assistant" id="assistant" aria-labelledby="assistant-title">
         <div className="section-heading assistant-heading">

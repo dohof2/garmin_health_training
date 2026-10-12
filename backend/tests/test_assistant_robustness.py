@@ -14,6 +14,9 @@ from app.ai_tools import execute_tool
 
 class AssistantRobustness(unittest.TestCase):
     def setUp(self):
+        calendar_patch=patch('app.ride_comparison.date',wraps=date)
+        calendar=calendar_patch.start();calendar.today.return_value=date(2026,10,11)
+        self.addCleanup(calendar_patch.stop)
         self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
         self.path=Path(self.temp.name)/'qa.sqlite3';migrate(self.path)
         with connect(self.path) as c:
