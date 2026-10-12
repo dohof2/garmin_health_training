@@ -98,3 +98,7 @@ Resolved the reported refusal to overlay today's two power recordings. Recorded 
 ## Interactive plots and four-week load — completed 11–12 October
 
 Added shared overlay hover values, zoom/reset/pan controls, and a rolling dashboard acute-load graph with persisted chronic-load toggle and recorded green optimal range. Daily load refresh preserves full Garmin payloads locally. Existing dashboard layout retained. 355 backend tests, frontend typecheck and production build pass. Browser checks and remaining mobile/gesture validation limits: `INTERACTIVE-LOAD-QC.md`.
+
+## Readiness dial ambiguity — fixed 12 October
+
+The two pointers were today's lower/upper uncertainty bounds, not today's score plus tomorrow's forecast. Replaced range pointers with a continuous outer arc and an explicit same-day range explanation. Added dated Today/Recorded readiness and Tomorrow forecast headings. Browser verified today's 22–47 range has one range arc and no score arrows; tomorrow has no estimate and no dial. Typecheck and production build pass. Calculations and forecasts unchanged; both scored dials were already separate components.

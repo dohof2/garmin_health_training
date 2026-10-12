@@ -19,14 +19,17 @@ export default function StatusDial({ value, unit, bands, position, range, interp
   value: string; unit: string; bands: DialBand[]; position?: number | null;
   range?: { low: number; high: number } | null; interpretation: string;
 }) {
-  const markers = position != null ? [position] : range ? [range.low, range.high] : [];
+  const markers = position != null ? [position] : [];
+  const rangeStart = range ? point(range.low, 120) : null;
+  const rangeEnd = range ? point(range.high, 120) : null;
   return <div className="status-dial">
-    <svg viewBox="0 0 280 165" role="img" aria-label={`${value} ${unit}. ${interpretation}${range ? '. Arrows mark the possible range.' : ''}`}>
+    <svg viewBox="0 0 280 165" role="img" aria-label={`${value} ${unit}. ${interpretation}${range ? '. The outer arc marks the uncertainty range for this measurement.' : ''}`}>
       {bands.map((band, index) => {
         const start = index ? bands[index - 1].end : 0;
         const a = point(start + .006, 100), b = point(band.end - .006, 100);
         return <path key={band.label} d={`M ${a.join(' ')} A 100 100 0 0 1 ${b.join(' ')}`} fill="none" stroke={band.color} strokeWidth="13" />;
       })}
+      {position == null && rangeStart && rangeEnd && <g aria-hidden="true"><path className="dial-range" d={`M ${rangeStart.join(' ')} A 120 120 0 0 1 ${rangeEnd.join(' ')}`} fill="none" strokeWidth="5" strokeLinecap="round"/>{[rangeStart,rangeEnd].map((p,i)=><circle key={i} cx={p[0]} cy={p[1]} r="4" className="dial-range-end"/>)}</g>}
       {markers.map((fraction, index) => {
         const tip = point(fraction, 111), a = point(fraction - .025, 126), b = point(fraction + .025, 126);
         return <path key={index} className="dial-pointer" d={`M ${tip.join(' ')} L ${a.join(' ')} L ${b.join(' ')} Z`} />;

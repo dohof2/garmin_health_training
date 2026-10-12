@@ -1800,3 +1800,8 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .plot-hover-series { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
 .plot-hover-series i { width: 12px; height: 3px; flex-shrink: 0; }
 .plot-hover-series small { width: 100%; }
+.dial-range { stroke: #526d8b; }
+.dial-range-end { fill: #526d8b; stroke: white; stroke-width: 1.5; }
+.readiness-overview .readiness-day-title { font-size: 1rem; line-height: 1.4; margin: 0 0 .5rem; }
+.readiness-range-key { font-size: .85rem !important; line-height: 1.5; color: #52647b; text-transform: none !important; letter-spacing: normal !important; }
+.readiness-overview > section { min-width: 0; }

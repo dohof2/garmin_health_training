@@ -95,15 +95,16 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
   };
   const result = data?.latest;
   return <>
-    <div className="readiness-overview"><section aria-label="Today’s measured readiness">
-    <p>Training readiness <span className="readiness-prototype">Prototype</span></p>
+    <div className="readiness-overview"><section className="readiness-today" aria-label={selectedDate===today?"Today’s measured readiness":"Selected day’s measured readiness"}>
+    <h3 className="readiness-day-title">{selectedDate===today?"Today’s readiness":"Recorded readiness"} · {selectedDate}</h3><p>Based on morning measurements <span className="readiness-prototype">Prototype</span></p>
     {result && !loading ? <StatusDial
       value={result.score !== null ? String(result.score) : result.score_range ? `${result.score_range.low}–${result.score_range.high}` : '—'}
       unit="/ 100" bands={readinessBands}
       position={result.score !== null ? result.score / 100 : null}
       range={result.score === null && result.score_range ? { low: result.score_range.low / 100, high: result.score_range.high / 100 } : null}
-      interpretation={result.score !== null ? result.score < 50 ? 'Recovery focus · prioritize rest or an easy session.' : result.score < 80 ? 'Ready with care · keep the session manageable.' : 'Well prepared · measured recovery signals are favorable.' : result.score_range ? 'Readiness uncertain · arrows mark the possible range; some inputs are missing.' : result.status === 'awaiting_morning' ? 'Awaiting morning measurements' : 'Not enough data to assess readiness'}
+      interpretation={result.score !== null ? result.score < 50 ? 'Recovery focus · prioritize rest or an easy session.' : result.score < 80 ? 'Ready with care · keep the session manageable.' : 'Well prepared · measured recovery signals are favorable.' : result.score_range ? 'Possible range for this day · incomplete measurements prevent a single score.' : result.status === 'awaiting_morning' ? 'Awaiting morning measurements' : 'Not enough data to assess readiness'}
     /> : <h3>{loading ? 'Loading…' : '—'}</h3>}
+    {result && !loading && result.score===null && result.score_range && <p className="readiness-range-key">Outer arc: possible readiness <strong>{result.score_range.low}–{result.score_range.high} / 100</strong> for {result.date}. These are the lower and upper bounds for the same day.</p>}
     {error && <p role="alert" className="form-error">{error}</p>}
     {result && <>
       <span>{result.data_quality} data quality</span>
@@ -115,7 +116,7 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
     </section>
     {forecastError&&<p role="alert">{forecastError}</p>}
     {forecast&&selectedDate===today&&!loading&&<section className="readiness-forecast" aria-label="Tomorrow’s projected training readiness">
-      <p>Tomorrow’s projected readiness · {forecast.date}</p>
+      <h3 className="readiness-day-title">Tomorrow’s forecast · {forecast.date}</h3><p>Projection · awaiting tomorrow’s measurements</p>
       {forecast.score!==null ? <StatusDial value={String(forecast.score)} unit="/ 100 · forecast" bands={readinessBands} position={forecast.score/100} interpretation={forecast.score<50?'Projected recovery focus':forecast.score<80?'Projected ready with care':'Projected favorable recovery signals'}/> : <p>{forecast.reason??'Not enough history to project tomorrow.'}</p>}
       {forecast.range&&<p>Estimated range: <strong>{forecast.range.low}–{forecast.range.high} / 100</strong>. {forecast.range.high-forecast.range.low>=30?'Wide range · tomorrow remains uncertain.':'Actual morning measurements can differ.'}</p>}
       {forecast.model&&<small>100-day model review · {forecast.model.usable_mornings} usable mornings · {forecast.model.selected==='regularized_regression'?'regression selected':'recent-trend model retained'}.</small>}
