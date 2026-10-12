@@ -90,3 +90,11 @@ Outstanding newly confirmed defect: FIT laps are decoded but not retained in nor
 ## Nutrition layout and shared dashboard theme
 
 Implemented daily totals → meal/food/amount entry → text/photo assistant → per-meal summaries, preserving reviewed saves, recipes, targets and reversible meal history. Text/photo review now uses the selected provider and cannot invent nutrient totals or write meals. Shared dashboard controls/cards/text applied across all ten tabs; header/browser renamed to Dotan's training and health space. 336 tests, frontend typecheck/build, live synthetic food-description review and all-ten-tab navigation passed. See [NUTRITION-THEME-QC.md](NUTRITION-THEME-QC.md) for limits, including real-photo accuracy and finite offline food catalog.
+
+## Continuous activity overlays
+
+Resolved the reported refusal to overlay today's two power recordings. Recorded power/HR/cadence/speed now plot by elapsed time with separate colours, legends and preserved gaps, up to eight activities. Synthetic/deleted sources are excluded. 348 backend tests/typecheck/build passed; exact request and follow-up passed live on invented activities; the user's actual two-power overlay was rendered and visually verified in the assistant. See [ACTIVITY-OVERLAY-QC.md](ACTIVITY-OVERLAY-QC.md).
+
+## Interactive plots and four-week load — completed 11–12 October
+
+Added shared overlay hover values, zoom/reset/pan controls, and a rolling dashboard acute-load graph with persisted chronic-load toggle and recorded green optimal range. Daily load refresh preserves full Garmin payloads locally. Existing dashboard layout retained. 355 backend tests, frontend typecheck and production build pass. Browser checks and remaining mobile/gesture validation limits: `INTERACTIVE-LOAD-QC.md`.

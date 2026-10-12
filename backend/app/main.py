@@ -1075,3 +1075,18 @@ def chatgpt_disconnect(request: Request):
     _chatgpt_local_request(request)
     from .chatgpt_auth import sign_out
     return sign_out()
+
+
+class LoadHistoryRequest(BaseModel):
+    timezone: str = 'UTC'
+
+
+@app.post('/api/charts/training-load/refresh')
+def refresh_training_load(request: LoadHistoryRequest):
+    from .training_load_charts import refresh_history
+    from .time_utils import timezone_info
+    try:
+        timezone_info(request.timezone)
+        return refresh_history(timezone=request.timezone)
+    except Exception as error:
+        raise HTTPException(400, 'Could not refresh load history. Check your Garmin connection and try again.') from error

@@ -19,6 +19,8 @@ ACTIVITY_FIELDS = {'distance': ('distance_meters', 'km', .001),
                    'speed': ('speed', 'km/h', 3.6),
                    'heart_rate': ('average_heart_rate', 'bpm', 1),
                    'cadence': ('average_cadence', 'rpm', 1)}
+from .activity_stream_charts import STREAM_FIELDS
+
 KINDS = {'line', 'bar', 'scatter', 'dial'}
 
 
@@ -26,14 +28,14 @@ def catalog(path: Path | None = None):
     with connect(path) as c:
         rows = c.execute("SELECT metric_type, unit, COUNT(*) AS count FROM metric_readings WHERE source_name != 'synthetic_fixture' GROUP BY metric_type, unit ORDER BY metric_type").fetchall()
     from .archive_charts import archive_metrics
-    extras = list(archive_metrics(path))
+    extras = list(archive_metrics(path)) + [{'id': key, 'label': label + ' · recorded activity trace', 'unit': unit, 'count': None} for key, (_, label, unit, _) in STREAM_FIELDS.items()]
     from .fit_access import catalog as fit_catalog
     extras += fit_catalog(path)
     extras += [{'id': 'hydration', 'label': 'Hydration', 'unit': 'mL', 'count': None},
                {'id': 'acute_training_load', 'label': 'Acute training load', 'unit': 'garmin_load', 'count': None}]
     if not any(r['metric_type'] == 'weight' for r in rows):
         rows = [*rows, {'metric_type': 'weight', 'unit': 'kg', 'count': None}]
-    return {'x_axes': [{'id':'date','label':'Date / time','unit':'Date'}], 'metrics': [{'id': r['metric_type'], 'label': r['metric_type'].replace('_', ' ').capitalize(),
+    return {'x_axes': [{'id':'date','label':'Date / time','unit':'Date'}, {'id':'elapsed_time','label':'Elapsed activity time','unit':'s'}], 'metrics': [{'id': r['metric_type'], 'label': r['metric_type'].replace('_', ' ').capitalize(),
                          'unit': r['unit'], 'count': r['count']} for r in rows if r['metric_type'] not in ('vo2_cycling','vo2_running')]
             + [m for m in extras if m['id'] not in {r['metric_type'] for r in rows}] + [{'id': 'vo2_cycling', 'label': 'VO₂ max · cycling', 'unit': 'mL/kg/min', 'count': None},
                {'id': 'vo2_running', 'label': 'VO₂ max · running', 'unit': 'mL/kg/min', 'count': None}],
@@ -44,11 +46,18 @@ def catalog(path: Path | None = None):
 def validate_spec(spec, path=None):
     if not isinstance(spec, dict):
         raise ValueError('Chart must be an object')
-    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days', 'sprint_seconds', 'interval_min_seconds', 'interval_max_seconds', 'min_repetitions', 'threshold_watts', 'fit_stat'}
+    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days', 'sprint_seconds', 'interval_min_seconds', 'interval_max_seconds', 'min_repetitions', 'threshold_watts', 'fit_stat', 'activity_ids', 'window_days', 'show_chronic', 'show_optimal_range'}
     if set(spec) - allowed:
         raise ValueError('Unsupported chart fields')
+    if any(k in spec for k in ('window_days', 'show_chronic', 'show_optimal_range')):
+        if spec.get('metric') != 'acute_training_load' or spec.get('kind') != 'line' or spec.get('x_metric', 'date') != 'date' or any(spec.get(k) for k in ('gps_reference_id','sport','aggregation','rolling_days','trend_line','correlation','reference_lines')):
+            raise ValueError('Load overlays require a daily load line chart without additional analysis.')
+        if type(spec.get('window_days',28)) is not int or not 1 <= spec.get('window_days',28) <= 366:
+            raise ValueError('Invalid load window')
+        if any(k in spec and type(spec[k]) is not bool for k in ('show_chronic','show_optimal_range')):
+            raise ValueError('Load overlay toggles must be boolean')
     known = {m['id'] for m in catalog(path)['metrics']} | {'activity_' + f for f in ACTIVITY_FIELDS} | {'activity_sprint_power'}
-    if spec.get('metric') not in known or (spec.get('x_metric') and spec['x_metric'] not in known | {'date'}):
+    if spec.get('metric') not in known or (spec.get('x_metric') and spec['x_metric'] not in known | {'date', 'elapsed_time'}):
         raise ValueError('Choose a supported metric')
     if spec.get('kind') not in KINDS or spec.get('size', 'half') not in {'half', 'full'}:
         raise ValueError('Unsupported chart type or size')
@@ -89,6 +98,11 @@ def validate_spec(spec, path=None):
             raise ValueError('Choose the sprint duration bin in seconds')
     elif sprint_fields & set(spec) or spec.get('x_metric') == 'activity_sprint_power':
         raise ValueError('Sprint settings require a sprint-power chart with a date axis')
+    if spec['metric'] in STREAM_FIELDS:
+        from .activity_stream_charts import validate
+        return validate(spec)
+    if 'activity_ids' in spec or spec.get('x_metric') == 'elapsed_time' or spec.get('x_metric') in STREAM_FIELDS:
+        raise ValueError('Activity IDs and elapsed time require a recorded stream metric.')
     normalized=dict(spec)
     if normalized.get('title','').lower() in ('activity elevation','activity_elevation','elevation') and normalized['metric']=='activity_elevation': normalized['title']='Total climb'
     return normalized
@@ -281,6 +295,12 @@ def analyze_points(points, spec):
 
 def chart_data(spec, path=None):
     spec = validate_spec(spec, path)
+    if spec['metric'] == 'acute_training_load' and any(k in spec for k in ('window_days','show_chronic','show_optimal_range')):
+        from .training_load_charts import chart
+        return chart(spec,path)
+    if spec['metric'] in STREAM_FIELDS:
+        from .activity_stream_charts import chart
+        return chart(spec,path)
     if spec['metric'] == 'activity_sprint_power':
         from .intervals import analyze, plot_result
         result = analyze({'min_seconds':spec.get('interval_min_seconds',10), 'max_seconds':spec.get('interval_max_seconds',15),

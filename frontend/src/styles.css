@@ -1778,3 +1778,25 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .app-shell :is(.sync-status-grid > div, .sync-checkpoints > div, .coverage-summary > div, .training-draft) { background: var(--workspace-surface); border: 1px solid #dce4ef; border-radius: 13px; padding: 16px; }
 .app-shell .training-message { background: #e6edf6; color: #365272; border: 1px solid #d7e1ee; border-radius: 10px; }
 .app-shell :is(.sync, .activities, .assistant, .coverage, .settings, .maintenance, .training-panel) > .section-heading { margin-bottom: 20px; }
+
+.chart-series-legend { display: flex; gap: 12px 24px; flex-wrap: wrap; list-style: none; margin: 0 0 10px; padding: 0; }
+.chart-series-legend li { display: flex; align-items: start; gap: 8px; color: #253951; font-size: .85rem; }
+.chart-series-legend small { display: block; margin-top: 3px; color: #64748b; font-size: .75rem; }
+.chart-series-swatch { display: inline-block; width: 26px; border-top: 3px solid; margin-top: 8px; flex-shrink: 0; }
+
+.plot-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 10px 0; }
+.plot-controls small { color: #64748b; font-size: .75rem; margin-left: 6px; }
+.plot-interactive { position: relative; }
+.plot-interactive svg { cursor: crosshair; touch-action: pan-y; user-select: none; }
+.plot-crosshair { stroke: #94a3b8; stroke-width: 1; stroke-dasharray: 4 4; }
+.plot-selection { fill: #477bb022; stroke: #477bb0; stroke-width: 1.5; stroke-dasharray: 4 3; }
+.plot-value-tooltip { display: grid; gap: 4px; pointer-events: none; position: absolute; width: min(235px, 90%); z-index: 2; padding: 10px 12px; background: #fff; color: #253951; border: 1px solid #d7e1ee; border-radius: 9px; box-shadow: 0 4px 14px #25395120; font-size: .8rem; }
+.plot-value-tooltip small { color: #64748b; font-size: .7rem; }
+@media(max-width:700px) { .plot-controls button { min-height: 40px; } .plot-controls small { flex-basis: 100%; margin-left: 0; } }
+.chart-optimal-band { fill: #72b993; opacity: .28; }
+.optimal-band-legend { display: flex; align-items: center; gap: 8px; color: #355d46; font-size: .82rem; margin: 8px 0; }
+.optimal-band-legend i { width: 22px; height: 12px; background: #72b99370; border: 1px solid #72b993; }
+.load-overlay-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: .88rem; }
+.plot-hover-series { display: flex; align-items: center; gap: 5px; flex-wrap: wrap; }
+.plot-hover-series i { width: 12px; height: 3px; flex-shrink: 0; }
+.plot-hover-series small { width: 100%; }
