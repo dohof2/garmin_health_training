@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ChartResult } from './GraphCanvas';
 
 const label = (id: string) => id.replace('activity_', 'Activity ').replace('vo2_', 'VO₂ max · ').replaceAll('_', ' ');
@@ -7,7 +7,22 @@ const elapsedLabel = (seconds: number) => { const total = Math.max(0, Math.round
 type View = { minX: number; maxX: number; minY: number; maxY: number };
 type Pixel = { x: number; y: number };
 
-export default function InteractivePlot({ result, width, height }: { result: ChartResult; width: number; height: number }) {
+export default function InteractivePlot({ result: originalResult, width, height }: { result: ChartResult; width: number; height: number }) {
+  const result = useMemo(() => {
+    const styles: Record<string,{label:string;colors:string[]}> = {
+      'stream:power': {label:'Power',colors:['#356799','#234b76','#6092bf','#173553']},
+      'stream:speed': {label:'Speed',colors:['#27836b','#185c4c','#50a58e','#123e34']},
+      'stream:heart_rate': {label:'Heart rate',colors:['#c44550','#94303d','#dc7580','#6c2330']},
+      'stream:cadence': {label:'Cadence',colors:['#8258b6','#61418c','#a284cb','#432b66']},
+    };
+    const style=styles[originalResult.spec.metric];
+    if(!style||!originalResult.series)return originalResult;
+    const multiple=originalResult.series.length>1;
+    return {...originalResult,series:originalResult.series.map((series,index)=>({...series,
+      label:multiple?`${style.label} · ${series.label}`:style.label,
+      color:style.colors[index%style.colors.length],
+    }))};
+  }, [originalResult]);
   const [view, setView] = useState<View | null>(null);
   const [hoverIndex, setHoverIndex] = useState<number | null>(null);
   const [drag, setDrag] = useState<{ start: Pixel; end: Pixel } | null>(null);
@@ -15,18 +30,21 @@ export default function InteractivePlot({ result, width, height }: { result: Cha
   const clipId = 'plot-clip-' + useId().replace(/[^a-zA-Z0-9_-]/g, '');
   useEffect(() => { setView(null); setHoverIndex(null); setDrag(null); }, [result]);
   const scatter = result.spec.kind === 'scatter';
+  const timestampAxis=result.spec.x_metric==='recorded_time';
   const elapsedAxis = result.spec.x_metric === 'elapsed_time';
   const timeAxis = !elapsedAxis && (!scatter || result.spec.x_metric === 'date');
   const seriesIndex = (id?: string) => Math.max(0, result.series?.findIndex(s => s.id === id) ?? 0);
   const seriesColour = (id?: string) => result.series?.find(s => s.id === id)?.color ?? seriesColours[seriesIndex(id) % seriesColours.length];
-  const points = result.points.map(p => ({ ...p, nx: !timeAxis ? Number(p.x) : Date.parse(p.date + 'T00:00:00Z') }));
+  const points = result.points.map(p => ({ ...p, nx: !timeAxis ? Number(p.x) : timestampAxis ? Date.parse(String(p.x)) : Date.parse(p.date + 'T00:00:00Z') }));
   const analysis = result.analysis;
   const trend = analysis?.trend;
   const multiSeries=Boolean(result.series);
   const xs = points.map(p => p.nx), ys = [...points.map(p => p.y), ...(result.range_band?.points.flatMap(p=>[p.low,p.high]) ?? []), ...(analysis?.reference_lines.map(p => p.value) ?? []), ...(trend ? [trend.y_start, trend.y_end] : [])];
   const rawMinX = result.x_domain ? Date.parse(result.x_domain[0]+'T00:00:00Z') : elapsedAxis ? 0 : Math.min(...xs), rawMaxX = result.x_domain ? Date.parse(result.x_domain[1]+'T00:00:00Z') : Math.max(...xs);
   const rawMinY = result.spec.kind === 'bar' ? Math.min(0,...ys) : Math.min(...ys), rawMaxY = Math.max(...ys);
-  const padding = rawMinY === rawMaxY ? Math.max(1, Math.abs(rawMaxY) * .05) : 0;
+  const meanY = points.reduce((sum, point) => sum + point.y, 0) / points.length;
+  const standardDeviation = Math.sqrt(points.reduce((sum, point) => sum + (point.y - meanY) ** 2, 0) / points.length);
+  const padding = standardDeviation > 0 ? standardDeviation * .5 : Math.max(1, Math.abs(rawMaxY) * .05);
   const full: View = { minX: rawMinX === rawMaxX ? rawMinX - (timeAxis ? 43200000 : .5) : rawMinX, maxX: rawMinX === rawMaxX ? rawMaxX + (timeAxis ? 43200000 : .5) : rawMaxX, minY: rawMinY - padding, maxY: rawMaxY + padding };
   const { minX, maxX, minY, maxY } = view ?? full;
   const xSpan = maxX-minX || (!timeAxis ? 1 : 86400000), ySpan = maxY-minY || Math.max(1, Math.abs(maxY)*.1);
@@ -34,9 +52,9 @@ export default function InteractivePlot({ result, width, height }: { result: Cha
   const x = (v:number) => minX === maxX ? (left+right)/2 : left + 8 + (v-minX)/xSpan*(right-left-16);
   const y = (v:number) => bottom-8-(v-minY+ySpan*.08)/(ySpan*1.16)*(bottom-top-16);
   const number = (n:number) => n.toLocaleString(undefined, {maximumFractionDigits:1});
-  const tickX = (n:number) => elapsedAxis ? elapsedLabel(n) : !timeAxis ? number(n) : new Date(n).toLocaleDateString(undefined,{month:'short',...(xSpan<=93*86400000 ? {day:'numeric' as const} : {year:'2-digit' as const}),timeZone:'UTC'});
+  const tickX = (n:number) => timestampAxis ? new Date(n).toLocaleTimeString([], {timeZone:result.spec.timezone,hour:'2-digit',minute:'2-digit'}) : elapsedAxis ? elapsedLabel(n) : !timeAxis ? number(n) : new Date(n).toLocaleDateString(undefined,{month:'short',...(xSpan<=93*86400000 ? {day:'numeric' as const} : {year:'2-digit' as const}),timeZone:'UTC'});
   const segments: typeof points[] = [];
-  points.forEach((p,i) => { if (!i || (multiSeries ? p.series_id !== points[i-1].series_id || p.segment !== points[i-1].segment : p.nx-points[i-1].nx > 7*86400000)) segments.push([]); segments[segments.length-1].push(p); });
+  points.forEach((p,i) => { if (!i || (multiSeries || timestampAxis ? p.series_id !== points[i-1].series_id || p.segment !== points[i-1].segment : p.nx-points[i-1].nx > 7*86400000)) segments.push([]); segments[segments.length-1].push(p); });
   const clampRange = (low: number, high: number, fullLow: number, fullHigh: number): [number, number] => {
     const span = Math.min(high - low, fullHigh - fullLow);
     const minimum = Math.max(fullLow, Math.min(low, fullHigh - span));
@@ -91,7 +109,7 @@ export default function InteractivePlot({ result, width, height }: { result: Cha
   }) : [];
   const hoverBand=hovered ? result.range_band?.points.find(p=>p.date===hovered.date) : null;
   const exactNumber = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 6 });
-  const readoutX = hovered ? elapsedAxis ? `${elapsedLabel(hovered.nx)} (${exactNumber(hovered.nx)} s)` : timeAxis ? hovered.date : `${exactNumber(Number(hovered.x))} ${result.x_unit}` : '';
+  const readoutX = hovered ? elapsedAxis ? `${elapsedLabel(hovered.nx)} (${exactNumber(hovered.nx)} s)` : timestampAxis ? new Date(hovered.nx).toLocaleString([], {timeZone:result.spec.timezone}) : timeAxis ? hovered.date : `${exactNumber(Number(hovered.x))} ${result.x_unit}` : '';
   const tooltipX = hovered ? Math.min(width - 245, Math.max(8, x(hovered.nx) + 12)) / width * 100 : 0;
   const tooltipY = hovered ? Math.max(8, Math.min(height - 160, y(hovered.y) - 90)) : 0;
   const zoomed = minX !== full.minX || maxX !== full.maxX || minY !== full.minY || maxY !== full.maxY;
@@ -100,7 +118,7 @@ export default function InteractivePlot({ result, width, height }: { result: Cha
     <text x={left} y="16" className="axis-label">{result.unit}</text>
     {[0,1,2,3,4].map(i => {const v=minY+(maxY-minY)*i/4; return <g key={i}><line x1={left} x2={right} y1={y(v)} y2={y(v)} className="chart-grid"/><text x={left-10} y={y(v)+4} textAnchor="end">{number(v)}</text></g>;})}
     {(minX === maxX ? [0] : [0,1,2]).map(i => <text key={i} x={minX===maxX ? x(minX) : left+(right-left)*i/2} y={bottom+22} textAnchor={minX===maxX?'middle':i===0?'start':i===2?'end':'middle'}>{tickX(minX+xSpan*i/2)}</text>)}
-    <text x={(left+right)/2} y={height-11} textAnchor="middle" className="axis-label">{elapsedAxis ? `Elapsed time (${maxX >= 3600 ? 'h:mm:ss' : 'm:ss'})` : !timeAxis ? `${label(result.spec.x_metric!)} (${result.x_unit})` : 'Date / time'}</text>
+    <text x={(left+right)/2} y={height-11} textAnchor="middle" className="axis-label">{elapsedAxis ? `Elapsed time (${maxX >= 3600 ? 'h:mm:ss' : 'm:ss'})` : !timeAxis ? `${label(result.spec.x_metric!)} (${result.x_unit})` : timestampAxis ? `Time (${result.spec.timezone??'local'})` : 'Date / time'}</text>
     <g clipPath={`url(#${clipId})`}>{result.range_band?.points.map((band,i)=>{const nx=Date.parse(band.date+'T00:00:00Z'),next=result.range_band!.points[i+1],nextX=next?Date.parse(next.date+'T00:00:00Z'):null,previous=result.range_band!.points[i-1];if(nextX!==nx+86400000 && previous && Date.parse(previous.date+'T00:00:00Z')===nx-86400000)return null;return next && nextX===nx+86400000 ? <polygon key={`band-${i}`} points={`${x(nx)},${y(band.low)} ${x(nx)},${y(band.high)} ${x(nextX)},${y(next.high)} ${x(nextX)},${y(next.low)}`} className="chart-optimal-band"/> : <rect key={`band-${i}`} x={x(nx-43200000)} y={y(band.high)} width={x(nx+43200000)-x(nx-43200000)} height={Math.max(1,y(band.low)-y(band.high))} className="chart-optimal-band"/>;})}{result.spec.kind==='line' && segments.map((segment,i) => <polyline key={i} points={segment.map(p => `${x(p.nx)},${y(p.y)}`).join(' ')} className="chart-line" style={multiSeries ? { stroke: seriesColour(segment[0]?.series_id), strokeDasharray: seriesIndex(segment[0]?.series_id) % 2 ? '7 3' : undefined } : undefined}/>)}
     {analysis?.reference_lines.map((line,i) => <g key={`ref-${i}`}><line x1={left} x2={right} y1={y(line.value)} y2={y(line.value)} className="chart-reference"/><text x={right-4} y={y(line.value)-5} textAnchor="end">{line.label}: {number(line.value)} {result.unit}</text></g>)}
     {trend && <line x1={x(!timeAxis?Number(trend.x_start):Date.parse(trend.x_start+'T00:00:00Z'))} x2={x(!timeAxis?Number(trend.x_end):Date.parse(trend.x_end+'T00:00:00Z'))} y1={y(trend.y_start)} y2={y(trend.y_end)} className="chart-trend"><title>Least-squares trend</title></line>}

@@ -1,3 +1,5 @@
+import TrainingAdjustmentProposal, {type Adjustment} from './TrainingAdjustmentProposal';
+import FullActivityStats from './FullActivityStats';
 import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
 import GraphCanvas, { AssistantPlots, WeightEntry, type ChartResult, type ChartSpec } from "./GraphCanvas";
 import TrainingPanel from "./TrainingPanel";
@@ -60,6 +62,7 @@ type Activity = {
 };
 
 type ActivityDetail = Activity & {
+  activity_metrics: {metric_type: string; value: number; unit: string; source_method: string; source_field: string}[];
   sample_summary: {
     sample_count: number;
     first_sample_at: string | null;
@@ -282,6 +285,7 @@ function proposalRows(proposal: SettingsProposal) {
 }
 
 type ChatEvidence = {
+  training_adjustment?: Adjustment;
   coaching?: {brief: import("./TrainingCoachPanel").CoachingBrief;week_start:string;timezone:string;status:string};
   plots?: ChartResult[];
   maintenance?: MaintenanceResult;
@@ -628,10 +632,12 @@ function DateRangeFilter({
 
 function ActivityDetailPanel({
   activity,
-  distanceUnit,
+  distanceUnit, timezone, onRemoved,
 }: {
   activity: ActivityDetail;
   distanceUnit: "km" | "mi";
+  timezone: string;
+  onRemoved: () => void;
 }) {
   const summary = activity.sample_summary;
   const details = [
@@ -692,12 +698,7 @@ function ActivityDetailPanel({
           </div>
         ))}
       </div>
-      <p>
-        {summary.sample_count.toLocaleString()} detailed samples · {sourceLabel(activity.source_name)}
-        {activity.timezone_used
-          ? ` · dates shown in ${activity.timezone_used}`
-          : " · timezone not recorded"}
-      </p>
+      <FullActivityStats activity={activity} timezone={timezone} footer={<RemoveActivity activity={activity} onChanged={onRemoved}/>}/>
     </div>
   );
 }
@@ -2113,7 +2114,6 @@ export default function App() {
                     <span className="activity-summary">{summaryParts.join(" · ") || "Summary not recorded"}</span>
                     <span className="activity-chevron" aria-hidden="true">{isOpen ? "−" : "+"}</span>
                   </button>
-                  <RemoveActivity activity={activity} onChanged={activityRemovalChanged}/>
                   {activityDetail.kind === "loading" && activityDetail.activityId === activity.id && (
                     <p className="activity-detail-message">Loading recorded details…</p>
                   )}
@@ -2124,6 +2124,8 @@ export default function App() {
                     <ActivityDetailPanel
                       activity={activityDetail.activity}
                       distanceUnit={preferredDistanceUnit}
+                      timezone={browserTimeZone}
+                      onRemoved={activityRemovalChanged}
                     />
                   )}
                 </article>
@@ -2212,6 +2214,7 @@ export default function App() {
                             {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
                             {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
                           </div>}
+                          {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
                           {evidence.proposal && (
                             <div className="settings-proposal">
                               <strong>{evidence.proposal.status === "saved" ? "Saved locally" : "Review proposed change"}</strong>
@@ -2242,25 +2245,25 @@ export default function App() {
                           {evidence.records && evidence.records.length > 0 && (
                             <div className="evidence-links">
                               {evidence.reference_record && (
-                                <a href={`${evidence.reference_record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} target="_blank" rel="noreferrer">
+                                <span>
                                   Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
-                                </a>
+                                </span>
                               )}
                               {evidence.records.slice(0, 6).map((record) => (
-                                <a href={`${record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} key={record.id} target="_blank" rel="noreferrer">
+                                <span key={record.id}>
                                   {record.name ?? record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
                                   {typeof record.similarity_score === "number" ? ` · ${record.similarity_score.toFixed(0)}% similarity` : ""}
                                   {typeof record.route_overlap_percent === "number" ? ` · ${record.route_overlap_percent.toFixed(0)}% route overlap` : ""}
                                   {record.direction ? ` · ${record.direction}` : ""}
-                                </a>
+                                </span>
                               ))}
                             </div>
                           )}
                           {evidence.reference_record && (!evidence.records || evidence.records.length === 0) && (
                             <div className="evidence-links">
-                              <a href={`${evidence.reference_record.url}?timezone=${encodeURIComponent(browserTimeZone)}`} target="_blank" rel="noreferrer">
+                              <span>
                                 Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
-                              </a>
+                              </span>
                             </div>
                           )}
                           {evidence.criteria && evidence.criteria.length > 0 && (

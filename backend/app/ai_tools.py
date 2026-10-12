@@ -1704,3 +1704,19 @@ def execute_tool(
     if unexpected:
         raise ValueError(f"Unexpected tool arguments: {', '.join(unexpected)}")
     return handler(arguments, path)
+
+from .active_training import read_active
+TOOL_HANDLERS['get_active_training_plan'] = read_active
+TOOL_DEFINITIONS.append({'name':'get_active_training_plan','description':'Read the saved active multi-week training goal, building blocks, planned workouts and latest recovery review. Use before giving ongoing planning, rescheduling or feedback advice. It does not change the plan.', 'input_schema':{'type':'object','properties':{},'additionalProperties':False}})
+
+from .active_training import propose_adjustment
+TOOL_HANDLERS['propose_training_adjustment'] = propose_adjustment
+TOOL_DEFINITIONS.append({'name':'propose_training_adjustment','description':'Preview a requested active-plan schedule change or record feedback such as too hard. Supply the user request verbatim. No writes; the visible Save button applies the change with stale-revision protection.', 'input_schema':{'type':'object','properties':{'message':{'type':'string','maxLength':1500},'timezone':{'type':'string'}},'required':['message'],'additionalProperties':False}})
+
+from .active_training import suggest_today
+TOOL_HANDLERS['suggest_today_workout'] = suggest_today
+TOOL_DEFINITIONS.append({'name':'suggest_today_workout','description':'Recommend what to do today for the user’s available minutes, with or without an active plan. Uses today’s saved session, readiness, workload and feedback; keeps rest days and does not write. Ask for the time if missing.', 'input_schema':{'type':'object','properties':{'minutes':{'type':'integer','minimum':10,'maximum':360},'timezone':{'type':'string'},'sport':{'type':'string','enum':['cycling','running','strength']}},'required':['minutes'],'additionalProperties':False}})
+
+from .active_training import recent_mix
+TOOL_HANDLERS['get_recent_training_mix'] = recent_mix
+TOOL_DEFINITIONS.append({'name':'get_recent_training_mix','description':'Assess recent endurance/base, tempo/threshold and short-hard-effort exposure from Garmin primary-benefit labels, with counts, evidence, coverage and possible gaps. Use for questions about which training type is missing; absence of labels is not proof of no training.', 'input_schema':{'type':'object','properties':{'days':{'type':'integer','minimum':7,'maximum':42},'timezone':{'type':'string'}},'additionalProperties':False}})

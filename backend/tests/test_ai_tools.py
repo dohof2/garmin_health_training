@@ -125,6 +125,10 @@ class AIToolTests(unittest.TestCase):
                 "get_fit_activity_data",
                 "analyze_sprint_intervals",
                 "get_activity_stream",
+                "get_active_training_plan",
+                "propose_training_adjustment",
+                "suggest_today_workout",
+                "get_recent_training_mix",
             ],
         )
         self.assertTrue(

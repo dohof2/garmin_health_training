@@ -304,7 +304,7 @@ h1 {
   margin-top: 5px;
 }
 
-.evidence-links a {
+.evidence-links span {
   background: rgba(71, 123, 176, 0.08);
   border-radius: 999px;
   color: #1e293b;
@@ -1812,3 +1812,34 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .danger-button { background: #923940; color: white; border-color: #923940; }
 .removed-activities { margin-top: 1.25rem; padding: 1rem; background: #f6f8fc; border: 1px solid #dce2ed; border-radius: 10px; }
 .removed-activity { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: .75rem 0; }
+.health-score-summary { display: flex; flex-wrap: wrap; align-items: baseline; gap: 1rem; margin: .75rem 0; color: #52647b; }
+.health-score-summary strong { font-size: 2rem; color: #23364d; }
+.health-score-summary strong span { font-size: 1rem; font-weight: 400; }
+.sleep-date-controls { display: flex; align-items: end; gap: .4rem; flex-wrap: wrap; margin: .6rem 0; }
+.sleep-date-controls label { font-size: .72rem; color: #52647b; display: grid; gap: .2rem; }
+.sleep-date-controls input { max-width: 145px; padding: .4rem; }
+.sleep-score-latest { display: flex; align-items: center; gap: 1rem; margin: .7rem 0 .3rem; }
+.sleep-score-latest > strong { font-size: 2rem; color: #23364d; }
+.sleep-score-latest > strong span { font-size: .9rem; font-weight: 400; }
+.sleep-score-latest small { display: block; color: #52647b; margin-top: .2rem; }
+.sleep-card .plot-controls { gap: .25rem; }
+.sleep-card .plot-controls button { font-size: .72rem; padding: .35rem; }
+.sleep-card .plot-controls small { font-size: .7rem; }
+.sleep-score-details { margin-top: .6rem; font-size: .85rem; }
+.sleep-metric-list > div { display: flex; justify-content: space-between; gap: 1rem; padding: .35rem 0; border-bottom: 1px solid #e7ecf3; }
+.sleep-metric-list strong { text-align: right; font-weight: 500; }
+.full-activity-stats { padding: .5rem 1rem; }
+.full-activity-stats > section { margin-top: 1rem; padding: 1rem; background: var(--surface, #f7f9fc); border-radius: 12px; }
+.full-activity-stats h4 { margin-top: 1.5rem; }
+.full-activity-stats .activity-detail-grid strong { overflow-wrap: anywhere; }
+
+.active-training-plan { padding: 1.5rem; margin-bottom: 2rem; border: 1px solid #cfdeed; border-radius: 18px; background: #f7faff; }
+.active-training-plan textarea { width: 100%; min-height: 5rem; }
+.active-training-plan > form { margin: 1.5rem 0; }
+.active-training-plan > details { margin-top: 1rem; }
+
+.upcoming-events-table { overflow-x: auto; margin: 1rem 0; }
+.upcoming-events-table table { width: 100%; border-collapse: collapse; text-align: left; }
+.upcoming-events-table th, .upcoming-events-table td { padding: .8rem; border-bottom: 1px solid #dbe5ee; }
+.event-race-label { display: inline-block; margin-left: .6rem; padding: .1rem .4rem; border-radius: 6px; background: #e3edf7; }
+.upcoming-event-editor { margin-top: 1rem; padding: 1rem; border: 1px solid #cbdbea; border-radius: 12px; }

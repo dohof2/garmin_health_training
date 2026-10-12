@@ -29,6 +29,23 @@ class CoachTests(unittest.TestCase):
  def preview(self,b=None,**kwargs):return preview(b or self.brief(),WEEK,'Asia/Jerusalem',self.path,NOW,**kwargs)
  def draft(self,b=None,**kwargs):
   b=b or self.brief();p=self.preview(b,**kwargs);return create_draft(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW,**kwargs)
+ def test_distance_ascent_race_parsing_and_roadmap(self):
+  b,_=parse_request('Endurance. Wednesday race 80 km with 1500 m ascent, 3 hours at 08:00',DEFAULT,WEEK)
+  event=b['fixed_events'][0];self.assertEqual(event['distance_km'],80);self.assertEqual(event['elevation_gain_meters'],1500);self.assertTrue(event['is_race'])
+  b['goal']='endurance'
+  p=self.preview(b);self.assertEqual(p['status'],'ready');fixed=next(s for s in p['sessions'] if s['definition'].get('fixed_commitment'))
+  self.assertEqual(fixed['definition']['distance_km'],80);self.assertTrue(fixed['definition']['is_race']);self.assertEqual(p['roadmap'][0]['phase'],'Race week')
+ def test_named_event_populates_upcoming_fields(self):
+  b,_=parse_request('Wednesday ride named "Hill Loop" 80 km 1500 m ascent not a race',DEFAULT,WEEK)
+  e=b['fixed_events'][0];self.assertEqual(e['title'],'Hill Loop');self.assertEqual(e['date'],'2026-10-14');self.assertEqual(e['distance_km'],80);self.assertEqual(e['elevation_gain_meters'],1500);self.assertFalse(e['is_race']);self.assertIsNone(b['goal'])
+ def test_nonrace_distance_trip_preserves_demands(self):
+  b,_=parse_request('Endurance. Wednesday ride not a race 60 km 1000 m climb hard 3 hours at 08:00',DEFAULT,WEEK)
+  self.assertFalse(b['fixed_events'][0]['is_race']);self.assertEqual(b['fixed_events'][0]['elevation_gain_meters'],1000)
+ def test_distance_only_duration_estimation_from_comparable_rides(self):
+  with connect(self.path) as c:
+   for i in range(3):c.execute("INSERT INTO activities(id,source_name,activity_type,started_at,duration_seconds,distance_meters,elevation_gain_meters) VALUES(?,'garmin_export','cycling',?,7200,40000,500)",('estimate-'+str(i),(NOW-timedelta(days=i+1)).isoformat()))
+  b=self.brief(goal='endurance',fixed_events=[{'date':'2026-10-14','title':'Hilly trip','distance_km':40,'elevation_gain_meters':500,'effort':'hard'}])
+  p=self.preview(b);event=p['brief']['fixed_events'][0];self.assertEqual(event['duration_minutes'],120);self.assertTrue(event['duration_estimated']);self.assertTrue(any('estimated' in warning for warning in p['warnings']))
  def test_api_coach_preview_draft_and_saved_brief_contract(self):
   with patch.dict(os.environ,{'HT_APP_DATA_DIR':self.tmp.name}),patch('app.training_coach.datetime',Clock),patch('app.training.datetime',Clock),TestClient(app) as client:
    self.assertEqual(client.get('/api/training/coach').json()['revision'],0)

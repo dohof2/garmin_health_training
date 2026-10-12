@@ -246,6 +246,11 @@ def get_activity(
                    MAX(heart_rate_bpm) AS maximum_heart_rate_bpm,
                    AVG(power_watts) AS average_power_watts,
                    MAX(power_watts) AS maximum_power_watts,
+                   AVG(speed_mps) AS average_speed_mps,
+                   AVG(cadence_rpm) AS average_cadence_rpm,
+                   MAX(cadence_rpm) AS maximum_cadence_rpm,
+                   MIN(elevation_meters) AS minimum_elevation_meters,
+                   MAX(elevation_meters) AS maximum_elevation_meters,
                    MAX(speed_mps) AS maximum_speed_mps
             FROM activity_samples
             WHERE activity_id = ?

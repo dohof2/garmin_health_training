@@ -136,6 +136,25 @@ def put_widgets(request: WidgetLayoutRequest):
         raise HTTPException(400, str(error)) from error
 
 
+@app.get('/api/health/sleep')
+def sleep_night(day: date | None = None):
+    from .sleep_card import night
+    return night(day.isoformat() if day else None)
+
+
+@app.get('/api/health/widgets')
+def health_widgets():
+    return {'widgets': read_layout(scope='health')}
+
+
+@app.put('/api/health/widgets')
+def save_health_widgets(request: WidgetLayoutRequest):
+    try:
+        return {'widgets': save_layout(request.widgets, scope='health')}
+    except (ValueError, TypeError) as error:
+        raise HTTPException(400, str(error)) from error
+
+
 @app.post('/api/weight')
 def log_weight(request: WeightRequest):
     try:
@@ -607,6 +626,61 @@ def readiness_settings():
     return get_readiness_settings()
 
 
+class ActiveTrainingRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    timezone: str = "UTC"
+    message: str | None = Field(default=None, max_length=1500)
+    status: str | None = None
+
+
+class TodayTrainingRequest(BaseModel):
+    model_config = {"extra": "forbid"}
+    minutes: int = Field(ge=10, le=360, strict=True)
+    timezone: str = "UTC"
+    sport: str | None = None
+
+
+@app.post('/api/training/today')
+def today_training(payload: TodayTrainingRequest):
+    from .active_training import suggest_today
+    try:
+        return suggest_today(payload.model_dump())
+    except ValueError as error:
+        raise HTTPException(status_code=400,detail=str(error)) from error
+
+
+@app.post('/api/training/active/review')
+def review_active_training(payload: ActiveTrainingRequest):
+    from .active_training import review
+    try:
+        return review(timezone_name=payload.timezone)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.post('/api/training/active/change')
+def change_active_training(payload: ActiveTrainingRequest):
+    from .active_training import request_change, set_status
+    try:
+        if payload.status:
+            set_status(payload.status)
+            return {'message':'Plan '+payload.status+'.'}
+        return request_change(payload.message, payload.timezone)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.patch('/api/training/workouts/{workout_id}/schedule')
+def move_active_workout(workout_id: str, payload: TrainingWorkoutUpdate):
+    from .active_training import reschedule
+    if set(payload.changes)!={'scheduled_for'}:
+        raise HTTPException(status_code=400,detail='Choose a new scheduled time')
+    try:
+        return reschedule(workout_id,payload.changes['scheduled_for'],payload.expected_revision)
+    except (ValueError,TypeError) as error:
+        raise HTTPException(status_code=400,detail=str(error)) from error
+
+
 @app.get("/api/training/context")
 def get_training_preferences():
     return training_context()
@@ -741,6 +815,17 @@ def remove_activity(activity_id: str, request: ActivityRemovalRequest):
         raise HTTPException(404,str(error)) from error
     except ValueError as error:
         raise HTTPException(400,str(error)) from error
+
+
+@app.get("/api/activities/{activity_id}/full-stats")
+def activity_full_stats(activity_id: str, timezone: str | None = None) -> dict[str, object]:
+    from .fit_access import inspect
+    try:
+        if get_activity(activity_id, timezone_name=timezone) is None:
+            raise HTTPException(status_code=404, detail="Activity not found")
+        return inspect({'activity_id': activity_id, 'timezone': timezone, 'message_type': 'session_mesgs', 'limit': 200})
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/activities/{activity_id}")

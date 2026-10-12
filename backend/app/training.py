@@ -12,7 +12,7 @@ from .database import connect
 from .time_utils import timezone_info
 
 SPORTS = ('cycling', 'running', 'strength')
-EQUIPMENT = ('bike', 'trainer', 'bodyweight', 'dumbbells', 'bands', 'gym', 'barbell', 'mat')
+EQUIPMENT = ('bike', 'trainer', 'bodyweight', 'dumbbells', 'bands', 'gym', 'barbell', 'mat', 'pull_up_bar', 'dip_bars')
 MOVEMENTS = ('squat', 'hinge', 'push', 'pull', 'core')
 FIELDS = ('sports','priority','availability','experience','equipment','weekly_minutes','blocked_sports','blocked_movements','restrictions_notes','pain_or_illness')
 QUESTIONS = {
@@ -296,6 +296,8 @@ def accept_plan(identifier,path:Path|None=None):
         context=json.loads(row['context_json']);current=_context(c,datetime.now(timezone.utc))
         if not current['ready'] or current['revision']!=context['preferences']['revision']:raise ValueError('Preferences changed or need review; create a fresh draft')
         c.execute("UPDATE training_plans SET status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?",(identifier,))
+        from .active_training import activate
+        activate(c,row)
     return list_training(path)
 
 

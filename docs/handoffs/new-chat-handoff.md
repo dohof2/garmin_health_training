@@ -201,3 +201,15 @@ Activity trace overlays are now supported by `activity_stream_charts.py`, includ
 ### Activity removal (12 October)
 
 Implemented app-only recoverable activity removal with confirmation and persistent Restore list. API: GET /api/activities/removed; PATCH /api/activities/{id}/removed with strict boolean `removed`. Migration 021 adds locally_removed_at and protects deleted_at from sync resurrection. All detail/sample/FIT data is retained. 360 backend tests plus frontend build/typecheck pass. Backend restarted on port 8000 to enable the endpoints.
+
+### Health dashboard (12 October)
+
+Health cards use GET/PUT /api/health/widgets, with their own `health_widget_layout` table (migration 022). GraphCanvas shares the Add/Remove/Edit controls across both scopes. Health defaults are a compact sleep/overnight-HRV card plus weight history; main Dashboard defaults/layout are unaffected. SleepCard reads /api/health/sleep, supports date navigation and foldable metrics, and displays only recorded timestamped HRV samples. Historical nights without a retained raw trace show an unavailable message. 366 tests + typecheck/build pass.
+
+## Training continuation and UI cleanup — 12 October 2026
+
+The Training page now has a persistent active program with saved goal/blocks, a rolling next-seven-days panel, local opening/focus recovery reviews, rescheduling and notes. Coach tools read the active plan, propose reviewed changes, recommend time-bounded sessions with/without a plan, and assess recent Garmin-labelled endurance/tempo/short-effort mix. Rest and gentle recovery rides are explicit options. Upcoming events replace fixed-event entry forms: coach descriptions fill name/type/distance/ascent/date; manual Edit saves corrections. Race flags and recorded-ride duration estimates inform near-term recovery and building blocks. Pull-up bar and dip bars are equipment options. Revisions remain internal; the preferences label is simplified.
+
+The user prefers primarily agent-driven training and considers the separate goal form unnecessary. That broader page redesign remains a direction to address; the goal form still exists. The current local review engine uses provisional deterministic rules rather than a fresh model consultation. Live connected-model use of the new tools remains normal-use QC. No actual user training plan was invented or activated during verification.
+
+Activity More details replaces the sample-count sentence in the expanded summary; Remove is inside its bottom. The detailed view is curated for training. Assistant activity references are non-clickable. Activity stream plots label metrics with distinct colors, and axis padding uses half a plotted standard deviation. Power-vs-speed dashboard cards were removed from the saved layout and defaults.

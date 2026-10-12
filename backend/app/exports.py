@@ -95,6 +95,8 @@ PORTABLE_TABLES = (
     "goals",
     "dashboard_cards",
     "training_plans",
+    "active_training_program",
+    "training_program_reviews",
     "planned_workouts",
     "nutrition_targets",
     "meals",

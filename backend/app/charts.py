@@ -405,13 +405,17 @@ def chart_data(spec, path=None):
             'sources': sorted({p['source'] for p in points}), 'analysis': analysis}
 
 
-def read_layout(path=None):
+def read_layout(path=None, *, scope='dashboard'):
+    if scope not in {'dashboard','health'}: raise ValueError('Unsupported dashboard scope')
+    table = 'health_widget_layout' if scope == 'health' else 'dashboard_widget_layout'
     with connect(path) as c:
-        row = c.execute('SELECT widgets_json FROM dashboard_widget_layout WHERE id=1').fetchone()
+        row = c.execute(f'SELECT widgets_json FROM {table} WHERE id=1').fetchone()
     return json.loads(row[0]) if row else None
 
 
-def save_layout(widgets, path=None):
+def save_layout(widgets, path=None, *, scope='dashboard'):
+    if scope not in {'dashboard','health'}: raise ValueError('Unsupported dashboard scope')
+    table = 'health_widget_layout' if scope == 'health' else 'dashboard_widget_layout'
     if not isinstance(widgets, list) or len(widgets) > 40:
         raise ValueError('Use at most 40 dashboard graphs')
     validated = [validate_spec(w, path) for w in widgets]
@@ -419,7 +423,7 @@ def save_layout(widgets, path=None):
     if any(not i for i in ids) or len(set(ids)) != len(ids):
         raise ValueError('Each widget needs a unique ID')
     with connect(path) as c:
-        c.execute('''INSERT INTO dashboard_widget_layout(id,widgets_json) VALUES(1,?)
+        c.execute(f'''INSERT INTO {table}(id,widgets_json) VALUES(1,?)
             ON CONFLICT(id) DO UPDATE SET widgets_json=excluded.widgets_json,updated_at=CURRENT_TIMESTAMP''', (json.dumps(validated),))
     return validated
 
