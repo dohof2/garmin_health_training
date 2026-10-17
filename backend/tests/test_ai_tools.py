@@ -129,6 +129,7 @@ class AIToolTests(unittest.TestCase):
                 "propose_training_adjustment",
                 "suggest_today_workout",
                 "get_recent_training_mix",
+                "propose_training_setup",
             ],
         )
         self.assertTrue(

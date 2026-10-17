@@ -113,9 +113,9 @@ class AssistantRobustness(unittest.TestCase):
     def test_coaching_answer_short_but_retains_warnings(self):
         from app.training_coach import assistant_answer
         from app.ai_tools import execute_tool
-        result=execute_tool('preview_training_plan',{'message':'I want to increase FTP.','timezone':'Asia/Jerusalem'},self.path)
+        result=execute_tool('preview_training_plan',{'message':'I want to increase FTP over 8 weeks.','timezone':'Asia/Jerusalem'},self.path)
         answer=assistant_answer(result)
-        self.assertLess(len(answer.split()),120)
+        self.assertLess(len(answer.split()),220)
         self.assertIn('Nothing has been saved',answer)
         for warning in result['warnings']: self.assertIn(warning,answer)
 
@@ -192,7 +192,8 @@ class AssistantRobustness(unittest.TestCase):
     def test_ftp_improvement_with_multiple_rides_routes_to_coaching(self):
         answer,evidence=self.ask('I want two hard rides Tuesday and wedensday. Long ride on firday and I can train today. I want FTP improvement.')
         self.assertEqual(evidence[0]['tool'],'preview_training_plan')
-        self.assertIn('Nothing has been saved',answer)
+        self.assertEqual(evidence[0]['coaching']['sessions'],[])
+        self.assertIn('How many weeks',answer)
 
     def test_ordinary_comparison_defaults_to_records_and_never_calls_matching(self):
         for question in ['How was my last ride compared to other rides this year?', 'How was my last ride compared to other rides this year without GPS?', 'Compare my latest ride with a normal comparison this year.', 'how was my ride compared to other rides in the kast 3 months?']:

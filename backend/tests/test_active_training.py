@@ -18,7 +18,7 @@ class ActiveTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.path=Path(self.tmp.name)/'db.sqlite';migrate(self.path)
   save_preferences(copy.deepcopy(ANSWERS),0,self.path,NOW)
-  self.brief={**copy.deepcopy(DEFAULT),'goal':'endurance','horizon_weeks':4}
+  self.brief={**copy.deepcopy(DEFAULT),'goal':'endurance','horizon_weeks':4,'duration_confirmed':True}
   p=preview(self.brief,WEEK,'Asia/Jerusalem',self.path,NOW)
   h=create_draft(self.brief,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
   self.identifier=h['plans'][0]['id']
@@ -88,7 +88,7 @@ class ActiveTests(unittest.TestCase):
   self.assertEqual(mix['gaps'],['tempo']);self.assertEqual(mix['coverage'],'usable')
   set_status('completed',self.path)
   with patch('app.readiness.readiness_history',return_value=READY):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','sport':'cycling'},self.path,NOW)
-  self.assertIn('tempo',r['session']['title']);self.assertEqual(sum(s['duration_seconds'] for s in r['session']['steps']),3600)
+  self.assertIn('tempo',r['session']['title'].lower());self.assertEqual(sum(s['duration_seconds'] for s in r['session']['steps']),3600)
  def test_unclassified_history_is_not_a_training_gap(self):
   self.assertEqual(capability(self.path,WEEK,'Asia/Jerusalem')['training_mix']['gaps'],[])
  def test_very_low_readiness_recommends_rest(self):

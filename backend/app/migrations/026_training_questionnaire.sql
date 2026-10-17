@@ -1,0 +1,6 @@
+CREATE TABLE training_questionnaire (
+ id INTEGER PRIMARY KEY CHECK(id=1),
+ revision INTEGER NOT NULL DEFAULT 1,
+ state_json TEXT NOT NULL,
+ updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);

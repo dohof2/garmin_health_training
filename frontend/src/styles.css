@@ -1843,3 +1843,20 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .upcoming-events-table th, .upcoming-events-table td { padding: .8rem; border-bottom: 1px solid #dbe5ee; }
 .event-race-label { display: inline-block; margin-left: .6rem; padding: .1rem .4rem; border-radius: 6px; background: #e3edf7; }
 .upcoming-event-editor { margin-top: 1rem; padding: 1rem; border: 1px solid #cbdbea; border-radius: 12px; }
+
+.workout-prescription { overflow-x: auto; margin: 1rem 0; }
+.workout-prescription table { width: 100%; border-collapse: collapse; text-align: left; }
+.workout-prescription td, .workout-prescription th { padding: .5rem; border-bottom: 1px solid #dbe5ee; }
+.training-history { margin: 2rem 0; }
+
+.training-week {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin:16px 0}.training-week>div{padding:10px;border:1px solid var(--border,#ddd);border-radius:10px;min-width:0}.workout-day{display:block;width:100%;text-align:left;margin-top:8px;border-left:5px solid #477fb5}.workout-day small{display:block;white-space:normal}.workout-day[aria-expanded=true]{outline:3px solid #477fb5}.workout-day.recovery{border-left-color:#55a8a1}.workout-day.endurance{border-left-color:#559552}.workout-day.tempo{border-left-color:#d19333}.workout-day.threshold,.workout-day.vo2,.workout-day.sprint{border-left-color:#cc5555}.workout-day.strength{border-left-color:#9866ad}.workout-day.run{border-left-color:#bd6c35}.today-workout{padding:24px;border:1px solid var(--border,#ddd);border-radius:16px;margin:24px 0}@media(max-width:900px){.training-week{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.training-week{grid-template-columns:1fr}}
+.sleep-card .sleep-score-latest { align-items:baseline;flex-wrap:wrap;margin:.3rem 0 1rem;gap:1rem; }
+.sleep-card .sleep-score-latest > strong {font-size:3.2rem;color:inherit;line-height:1.1;}
+.sleep-card .sleep-score-latest > b {font-size:1.5rem;}
+.sleep-rating--excellent {color:#157147}.sleep-rating--good {color:#286e5d}.sleep-rating--fair {color:#986000}.sleep-rating--poor {color:#b33f3a}.sleep-rating--unrated {color:#52647b}
+.sleep-night-readings {display:flex;gap:1.5rem;flex-wrap:wrap;padding:.5rem .8rem;background:#f3f6fa;border-radius:.6rem;}.sleep-night-readings strong{display:block;font-size:1.2rem;}
+
+.sleep-plot-canvas { position: relative; }
+.sleep-hrv-annotation { position: absolute; top: 3.4rem; right: 1rem; background: rgba(255,255,255,.92); border-radius: .4rem; padding: .3rem .5rem; font-size: .8rem; color: #52647b; pointer-events: none; }
+.sleep-hrv-annotation strong { color: #23364d; margin-left: .3rem; }
+.sleep-plot-canvas > .graph-empty { min-height: 220px; }

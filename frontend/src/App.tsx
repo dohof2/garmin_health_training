@@ -1,3 +1,4 @@
+import TrainingSetupProposal, {type Setup} from './TrainingSetupProposal';
 import TrainingAdjustmentProposal, {type Adjustment} from './TrainingAdjustmentProposal';
 import FullActivityStats from './FullActivityStats';
 import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
@@ -285,6 +286,7 @@ function proposalRows(proposal: SettingsProposal) {
 }
 
 type ChatEvidence = {
+  training_setup?: Setup;
   training_adjustment?: Adjustment;
   coaching?: {brief: import("./TrainingCoachPanel").CoachingBrief;week_start:string;timezone:string;status:string};
   plots?: ChartResult[];
@@ -760,6 +762,17 @@ export default function App() {
     try { return JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
   });
   const chatContext = useRef(initialChatContext);
+  useEffect(()=>{
+    const ask=(event:Event)=>{
+      const {question,coaching}=(event as CustomEvent<{question:string;coaching:ChatEvidence['coaching']}>).detail;
+      if(!question)return;
+      chatContext.current.coaching=coaching;
+      setChatMessages(current=>current.at(-1)?.role==='assistant'&&current.at(-1)?.content===question?current:[...current,{id:crypto.randomUUID(),role:'assistant',content:question,evidence:coaching?[{tool:'preview_training_plan',coaching}]:[]}]);
+      window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});
+    };
+    window.addEventListener('training-next-question',ask);return()=>window.removeEventListener('training-next-question',ask);
+  },[]);
+  useEffect(()=>{const saved=()=>{delete chatContext.current.coaching;try{sessionStorage.setItem('garmin-assistant-query-context',JSON.stringify(chatContext.current));}catch{/* Keep current in-memory state. */}};window.addEventListener('training-plan-changed',saved);return()=>window.removeEventListener('training-plan-changed',saved);},[]);
   const [plotMessageId, setPlotMessageId] = useState<string | null>(null);
   const [chatStatus, setChatStatus] = useState<{
     kind: "idle" | "streaming" | "error";
@@ -839,8 +852,8 @@ export default function App() {
             current.end
               ? current
               : {
-                  start: shiftDate(summary.activity_date_end!, -29),
-                  end: summary.activity_date_end!,
+                  start: shiftDate(todayInBrowserTimeZone(), -29),
+                  end: todayInBrowserTimeZone(),
                 },
           );
         }
@@ -2058,7 +2071,7 @@ export default function App() {
             start={activityRange.start}
             end={activityRange.end}
             minimum={summary?.activity_date_start ?? null}
-            maximum={summary?.activity_date_end ?? null}
+            maximum={todayInBrowserTimeZone()}
             onChange={(start, end) => { setActivityOffset(0); setActivityHasMore(false); setActivityRange({ start, end }); }}
           />
         </div>
@@ -2137,22 +2150,18 @@ export default function App() {
       <RemovedActivities revision={activityRevision} onChanged={activityRemovalChanged}/>
         </section>
 
-      <section hidden={page !== "assistant"} className="assistant" id="assistant" aria-labelledby="assistant-title">
+      <section hidden={page !== "assistant" && page !== "training"} className="assistant" id="assistant" aria-labelledby="assistant-title">
         <div className="section-heading assistant-heading">
           <div>
             <p>Personal trainer &amp; data assistant</p>
-            <h2 id="assistant-title">Ask your Garmin data</h2>
+            <h2 id="assistant-title">{page === "training" ? "Talk to your trainer" : "Ask your Garmin data"}</h2>
           </div>
           <div className={`assistant-provider ${activeAiStatus?.available ? "assistant-provider--ready" : "assistant-provider--attention"}`}>
             <strong>{activeAiProvider === "chatgpt" ? "ChatGPT account" : activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
             <span>{activeAiStatus?.available ? "Ready" : "Setup needed"}</span>
           </div>
         </div>
-        <p className="assistant-intro">
-          Explore history, compare rides, and assess a ride against its session intent.
-          Calculations use recorded data. You can also ask to update your profile
-          or goals; review the proposed changes and save them here. Goals are optional.
-        </p>
+        <p className="assistant-intro">{page === 'training' ? 'Describe what you want to improve, your available time, upcoming events or how a session felt. Your trainer uses the saved plan and asks only for missing details. Review and save proposed changes here.' : 'Explore history, compare rides and assess recorded training. Calculations use stored data; review proposed changes before saving.'}</p>
         <p className="assistant-privacy">
           {activeAiProvider === "chatgpt"
             ? "ChatGPT account mode sends your question, recent chat context and relevant tool results to OpenAI using your authorized ChatGPT plan. Plan limits are shared; it never falls back to paid API billing."
@@ -2168,8 +2177,8 @@ export default function App() {
         <div className="chat-shell">
           {chatMessages.length === 0 ? (
             <div className="chat-empty">
-              <strong>Try a grounded question</strong>
-              <div className="chat-suggestions">
+              <strong>{page === 'training' ? 'Your personalized training plan starts here' : 'Start a conversation'}</strong>
+              {page==='training'?<div className="chat-suggestions"><button type="button" onClick={()=>void sendChatMessage('I have 60 minutes today. What should I do according to my plan and recovery?')}>I have 60 minutes today</button><button type="button" onClick={()=>void sendChatMessage('Help me build a cycling and strength plan. Ask only for essential missing preferences, calibration and upcoming events.')}>Build my training plan</button><button type="button" onClick={()=>void sendChatMessage('What are the next seven days in my active plan, and why?')}>Review my week</button><button type="button" onClick={()=>void sendChatMessage('Help me add an upcoming event. Ask its name, activity, distance, ascent, date and race status.')}>Add an upcoming event</button></div>:              <div className="chat-suggestions">
                 <button type="button" onClick={() => void sendChatMessage("Plot my weight over the last year.")}>Weight over the last year</button>
                 <button type="button" onClick={() => void sendChatMessage("Plot power versus speed across all my cycling rides.")}>Power vs speed</button>
                 <button type="button" onClick={() => void sendChatMessage("Plot resting heart rate versus cycling VO2 max on matching dates.")}>Resting HR vs VO₂ max</button>
@@ -2182,7 +2191,7 @@ export default function App() {
                 <button type="button" onClick={() => void sendChatMessage("Set my goal to improve cycling endurance.")}>Set a goal</button>
                 <button type="button" onClick={() => void sendChatMessage("What is my training readiness today?")}>Training readiness</button>
                 <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
-              </div>
+              </div>}
             </div>
           ) : (
             <div className="chat-messages" aria-live="polite">
@@ -2190,7 +2199,7 @@ export default function App() {
                 <article id={`chat-message-${message.id}`} className={`chat-message chat-message--${message.role}`} key={message.id}>
                   <span>{message.role === "user" ? "You" : "Assistant"}</span>
                   <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
-                  {message.evidence.find(e=>e.coaching)?.coaching && <button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)!.coaching}));window.location.hash='training';}}>Review coaching proposal in Training</button>}
+                  {message.evidence.find(e=>e.coaching)?.coaching?.status === 'ready' && <button type="button" onClick={()=>{window.location.hash='training';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)?.coaching})));}}>Review coaching proposal in Training</button>}
                   {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
                   {message.evidence.length > 0 && (
                     <div className="chat-evidence">
@@ -2214,6 +2223,7 @@ export default function App() {
                             {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
                             {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
                           </div>}
+                          {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}
                           {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
                           {evidence.proposal && (
                             <div className="settings-proposal">
@@ -2309,11 +2319,11 @@ export default function App() {
               void sendChatMessage();
             }}
           >
-            <label htmlFor="chat-question">Question about your stored data</label>
+            <label htmlFor="chat-question">{page==='training'?'Tell your trainer what you want to work on':'Question about your stored data'}</label>
             <textarea
               id="chat-question"
               maxLength={4000}
-              placeholder="For example: How has my running volume changed over the last eight weeks?"
+              placeholder={page==='training'?'For example: Help me build an endurance and strength plan':'For example: How has my running volume changed over the last eight weeks?'}
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
               onKeyDown={(event) => {
@@ -2326,7 +2336,7 @@ export default function App() {
               aria-describedby="chat-keyboard-hint"
               disabled={chatStatus.kind === "streaming"}
             />
-            <small id="chat-keyboard-hint">Enter to ask · Shift+Enter for a new line</small>
+            <small id="chat-keyboard-hint">{page==='training'?'Enter to send':'Enter to ask'} · Shift+Enter for a new line</small>
             <div className="chat-actions">
               <span>
                 {chatStatus.kind === "streaming"
@@ -2340,7 +2350,7 @@ export default function App() {
               {chatStatus.kind === "streaming" ? (
                 <button className="secondary-action" type="button" onClick={stopChatResponse}>Stop</button>
               ) : (
-                <button type="submit" disabled={!chatInput.trim() || connection.kind !== "ready"}>Ask</button>
+                <button type="submit" disabled={!chatInput.trim() || connection.kind !== "ready"}>{page==='training'?'Send':'Ask'}</button>
               )}
             </div>
           </form>
@@ -2435,7 +2445,7 @@ export default function App() {
         <DateRangeFilter
           start={activityRange.start} end={activityRange.end}
           minimum={summary?.activity_date_start ?? null}
-          maximum={summary?.activity_date_end ?? null}
+          maximum={todayInBrowserTimeZone()}
           onChange={(start, end) => { setActivityOffset(0); setActivityHasMore(false); setActivityRange({ start, end }); }}
         />
         <p className="export-copy">

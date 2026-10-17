@@ -62,7 +62,7 @@ class ReadinessCalculationTests(unittest.TestCase):
 
     def test_severe_hrv_and_rhr_share_one_bounded_penalty(self):
         self.change('hrv_last_night_average',35)
-        self.change('resting_heart_rate',60,1)
+        self.change('resting_heart_rate',60,0)
         result=self.run_model()
         self.assertEqual(result['groups'][0]['penalty_min'],40)
         self.assertEqual(result['score'],60)
@@ -82,10 +82,25 @@ class ReadinessCalculationTests(unittest.TestCase):
 
     def test_all_three_groups_can_reach_low_band(self):
         self.change('sleep_duration',18000)
-        self.change('hrv_last_night_average',30)
+        for offset in range(7):self.change('hrv_last_night_average',30,offset)
         result=self.run_model(activities=[activity(load=1000)])
         self.assertEqual(result['score'],0)
         self.assertEqual(result['band'],'lower')
+
+    def test_seven_day_hrv_smooths_single_night_and_excludes_window_from_baseline(self):
+        self.change('hrv_last_night_average',30)
+        result=self.run_model()
+        self.assertAlmostEqual(result['inputs']['hrv_7day']['average'],330/7)
+        self.assertGreater(result['score'],80)
+        self.assertEqual(result['groups'][0]['baseline_end'],'2026-10-03')
+        for offset in range(7):self.change('hrv_last_night_average',30,offset)
+        self.assertEqual(self.run_model()['score'],60)
+
+    def test_sparse_seven_day_hrv_does_not_claim_complete(self):
+        self.rows=[r for r in self.rows if not (r['metric_type']=='hrv_last_night_average' and (DAY-timedelta(days=6)).isoformat()<=r['recorded_at']<(DAY-timedelta(days=2)).isoformat())]
+        result=self.run_model()
+        self.assertEqual(result['inputs']['hrv_7day']['nights'],3)
+        self.assertNotEqual(result['status'],'complete')
 
     def test_load_decays_and_in_progress_or_future_sessions_are_excluded(self):
         recent=self.run_model(activities=[activity()])
@@ -118,19 +133,41 @@ class ReadinessCalculationTests(unittest.TestCase):
         self.assertEqual(self.run_model(rows=rows)['status'],'insufficient_data')
         self.assertEqual(self.run_model(now=datetime(2026,10,10,5,tzinfo=timezone.utc))['status'],'awaiting_morning')
 
-    def test_future_metrics_and_current_day_rhr_cannot_change_morning(self):
-        expected=self.run_model()
-        self.change('resting_heart_rate',150)
+    def test_today_rhr_is_preferred_provisional_and_future_observations_excluded(self):
+        for row in self.rows:
+            if row['metric_type']=='resting_heart_rate':row['value']=60
+        self.change('resting_heart_rate',64);self.change('resting_heart_rate',74,1)
+        today=self.run_model()
+        self.assertEqual(today['inputs']['rhr']['value'],64)
+        self.assertEqual(today['inputs']['rhr_previous_day']['value'],74)
+        self.assertEqual(today['inputs']['rhr_selection']['kind'],'same_day')
+        self.assertTrue(today['inputs']['rhr_selection']['provisional'])
+        absent=[row for row in self.rows if not (row['metric_type']=='resting_heart_rate' and row['recorded_at']==DAY.isoformat())]
+        fallback=self.run_model(rows=absent)
+        self.assertEqual(fallback['inputs']['rhr']['value'],74)
+        self.assertEqual(fallback['inputs']['rhr_selection']['date'],'2026-10-09')
+        self.assertEqual(fallback['inputs']['rhr_selection']['kind'],'previous_day_fallback')
+        self.assertGreater(today['score'],fallback['score'])
+        self.assertLess(today['groups'][0]['rhr_z'],fallback['groups'][0]['rhr_z'])
+        self.assertEqual(today['groups'][0]['rhr_baseline'],fallback['groups'][0]['rhr_baseline'])
         future=copy.deepcopy(self.rows[0]);future.update(id='future',recorded_at='2026-10-11',value=500)
-        actual=self.run_model(rows=self.rows+[future])
-        self.assertEqual(actual['score'],expected['score'])
-        self.assertEqual(actual['groups'],expected['groups'])
+        self.assertEqual(self.run_model(rows=self.rows+[future]),today)
+
+    def test_historical_same_day_rhr_is_labeled_reconstruction(self):
+        historical=self.run_model(now=NOW+timedelta(days=1))
+        self.assertFalse(historical['inputs']['rhr_selection']['provisional'])
+        self.assertIn('rhr_same_day_historical_reconstruction',historical['warnings'])
+
+    def test_rhr_timestamp_after_asof_is_ineligible(self):
+        row=next(row for row in self.rows if row['metric_type']=='resting_heart_rate' and row['recorded_at']==DAY.isoformat())
+        row.update(value=100,period_end=(NOW+timedelta(hours=1)).isoformat())
+        self.assertEqual(self.run_model()['inputs']['rhr_selection']['kind'],'previous_day_fallback')
 
     def test_reference_has_no_recent_window_leak_and_duplicates_prefer_live(self):
         row=copy.deepcopy(self.rows[0]);row.update(id='archive-duplicate',source_name='garmin_export',value=5)
         result=self.run_model(rows=self.rows+[row])
         self.assertEqual(result['inputs']['hrv']['value'],50)
-        self.assertEqual(result['groups'][0]['baseline_end'],'2026-10-07')
+        self.assertEqual(result['groups'][0]['baseline_end'],'2026-10-03')
         self.assertNotIn(self.rows[0]['id'],result['groups'][0]['baseline_input_ids'])
 
     def test_unit_mismatch_and_invalid_values_are_missing(self):
@@ -159,7 +196,7 @@ class ReadinessCalculationTests(unittest.TestCase):
         self.assertEqual(self.run_model(activities=[unknown])['status'],'partial')
 
     def test_severity_monotonicity_for_hrv_sleep_and_rhr(self):
-        for kind,values,offset in [('hrv_last_night_average',[50,48,45,40,35],0),('sleep_duration',[28800,27000,25200,21600,18000],0),('resting_heart_rate',[50,51,52,54,56],1)]:
+        for kind,values,offset in [('hrv_last_night_average',[50,48,45,40,35],0),('sleep_duration',[28800,27000,25200,21600,18000],0),('resting_heart_rate',[50,51,52,54,56],0)]:
             self.rows=observations()
             scores=[]
             for value in values:
@@ -180,6 +217,22 @@ class ReadinessPersistenceTests(unittest.TestCase):
 
     def history(self,**kwargs):return readiness_history(DAY,14,'UTC',self.path,now=NOW,**kwargs)
 
+    def test_preparation_runs_once_for_history_and_all_sensitivity_variants(self):
+        from app import readiness
+        with patch('app.readiness._series',wraps=readiness._series) as series,patch('app.readiness._sessions',wraps=readiness._sessions) as sessions:
+            result=self.history()
+        self.assertEqual(series.call_count,1);self.assertEqual(sessions.call_count,1)
+        self.assertTrue(all(row['score']==100 for row in result['trend']))
+        self.assertTrue(all('sensitivity' in row for row in result['trend']))
+
+    def test_prepared_calculation_matches_independent_calculation(self):
+        from app.readiness import _series,_sessions
+        rows=observations();activities=[activity()]
+        direct=calculate(DAY,'UTC',rows,activities,COVERAGE,DEFAULTS,now=NOW)
+        from zoneinfo import ZoneInfo
+        prepared=calculate(DAY,'UTC',rows,activities,COVERAGE,DEFAULTS,now=NOW,prepared=(_series(rows,ZoneInfo('UTC')),_sessions(activities)))
+        self.assertEqual(prepared,direct)
+
     def test_repeat_queries_reuse_calculations_and_late_correction_creates_revision(self):
         first=self.history();second=self.history()
         self.assertEqual(first['latest']['calculation_id'],second['latest']['calculation_id'])
@@ -190,6 +243,28 @@ class ReadinessPersistenceTests(unittest.TestCase):
         with connect(self.path) as c:
             old=json.loads(c.execute('SELECT result_json FROM readiness_calculations WHERE id=?',(first['latest']['calculation_id'],)).fetchone()[0])
         self.assertEqual(old['score'],100)
+
+    def test_current_rhr_correction_creates_new_snapshot_without_overwriting_history(self):
+        first=self.history()['latest']
+        with connect(self.path) as c:c.execute("UPDATE metric_readings SET value=64 WHERE id=?",('resting_heart_rate:'+DAY.isoformat(),))
+        corrected=self.history()['latest']
+        self.assertEqual(corrected['inputs']['rhr']['value'],64)
+        self.assertNotEqual(corrected['calculation_id'],first['calculation_id'])
+        with connect(self.path) as c:stored=json.loads(c.execute('SELECT result_json FROM readiness_calculations WHERE id=?',(first['calculation_id'],)).fetchone()[0])
+        self.assertEqual(stored['inputs']['rhr']['value'],50)
+
+    def test_rhr_selection_formula_upgrade_preserves_old_config_and_parameters(self):
+        old_parameters={**DEFAULTS,'sleep_target_hours':9}
+        with connect(self.path) as c:
+            c.execute("INSERT INTO readiness_configs(version,formula_version,parameters_json) VALUES('legacy-v3','readiness-v3',?)",(json.dumps(old_parameters),))
+            c.execute("INSERT INTO readiness_settings(id,config_version) VALUES(1,'legacy-v3')")
+        updated=get_readiness_settings(self.path)
+        self.assertEqual(updated['formula_version'],'readiness-v4')
+        self.assertEqual(updated['parameters']['sleep_target_hours'],9)
+        with connect(self.path) as c:self.assertEqual(c.execute("SELECT formula_version FROM readiness_configs WHERE version='legacy-v3'").fetchone()[0],'readiness-v3')
+        result=self.history()
+        self.assertEqual(result['latest']['formula_version'],'readiness-v4')
+        self.assertEqual(result['latest']['inputs']['rhr']['wake_date'],DAY.isoformat())
 
     def test_parameter_versions_preserve_old_formula_and_portability(self):
         first=self.history();version=first['latest']['config_version']

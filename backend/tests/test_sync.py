@@ -47,6 +47,20 @@ def _seed(database: Path, coverage_date: str = "2026-01-01") -> None:
 
 
 class SyncTests(unittest.TestCase):
+    def test_renamed_activity_updates_stable_identity_and_keeps_details(self):
+        from app.sync import _upsert_activity
+        with tempfile.TemporaryDirectory() as root:
+            database=Path(root)/'rename.sqlite';_seed(database)
+            record={'source_record_id':'activity-1','started_at':'2026-01-01T07:00:00Z','activity_type':'cycling','name':'Renamed ride','duration_seconds':3600,'distance_meters':20000}
+            with connect(database) as c:
+                c.execute("UPDATE activities SET raw_json=? WHERE id='imported-activity'",(json.dumps({'fit_sessions':[{'timestamp':'2026-01-01T08:00:00Z'}],'archiveDetail':'retained'}),))
+                self.assertEqual(_upsert_activity(c,record),'updated')
+                self.assertEqual(_upsert_activity(c,record),'unchanged')
+                row=c.execute("SELECT * FROM activities WHERE source_record_id='activity-1'").fetchall()
+                self.assertEqual(len(row),1);self.assertEqual(row[0]['id'],'imported-activity');self.assertEqual(row[0]['name'],'Renamed ride')
+                self.assertEqual(json.loads(row[0]['raw_json'])['archiveDetail'],'retained')
+                self.assertIn('fit_sessions',json.loads(row[0]['raw_json']))
+
     def test_expired_or_missing_connection_stops_before_creating_a_job(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             database = Path(temporary) / "sync.sqlite3"

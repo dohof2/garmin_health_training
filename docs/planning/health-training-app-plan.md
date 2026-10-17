@@ -264,8 +264,18 @@ Maintenance application tools: `log_maintenance`, `list_maintenance`, `update_ma
 | 3A — Maintenance log | Chat-based maintenance/replacement entries, history screen, corrections/undo, CSV import/export | Clear prompts save accurately; ambiguous prompts ask targeted questions; retries/reimports do not duplicate entries; CSV and backup round trips preserve records |
 | 4 — Local training | Transparent daily readiness, just-in-time training questions, saved answers, weekly planning, feedback, local calendar | Readiness is reproducible from displayed inputs and handles missing data; missing context is requested before personalized advice and reused afterward; local plans work without Garmin publication |
 | 5 — Food and nutrition | Photo review, nutrient lookup, manual logging, target calculation | Known-portion meals assess estimate quality; edits and daily totals calculate correctly; uncertainty stays visible |
-| 6 — Daily-use finish | Explicit launch/quit lifecycle, backup/restore, reminders during open sessions | App-owned processes stop on exit; no closed-app sync/reminders or login autostart; reopening resumes pending work and catches up all missing intervals |
+| 6 — Daily-use finish | Explicit launch/quit lifecycle, backup/restore, reminders during open sessions; code efficiency and interaction smoothness review | App-owned processes stop on exit; no closed-app sync/reminders or login autostart; reopening resumes pending work and catches up all missing intervals; measured performance improvements pass normal-use and correctness checks |
 | 7 — Garmin workout publishing, last | Preview, publish, schedule, retry and read-back verification | Local app already passes normal-use checks; supported sports pass publication tests without duplicate sessions |
+
+### Phase 6 step — Code efficiency and smooth day-to-day use
+
+Added 13 October 2026. Review frontend and backend code using measured everyday workflows: opening the app, refreshing today/tomorrow readiness, syncing Garmin data, viewing activities and graphs, chatting with the coach, and reviewing the active training plan.
+
+- Record response times, CPU/memory use, database query costs, network requests and UI responsiveness with representative full-history data. Identify the slowest paths before changing code.
+- Reduce redundant requests, repeated calculations, unnecessary renders and database scans. Improve query/index use, batch compatible reads, and reuse calculations within a request. Any caching must invalidate when source records, settings, dates or timezone change.
+- Keep expensive work from blocking ordinary interactions. Show useful loading/progress states, handle cancellation and stale responses, and avoid duplicate work on opening, focus or sync.
+- Simplify duplicated code where it improves maintainability; preserve calculation accuracy, saved plans, user edits, data provenance and missing-data behavior.
+- Verify before/after timings on the same representative workflows and data, run relevant correctness/regression checks, and document remaining bottlenecks. Complete this step when measured improvements make daily navigation and refreshes responsive without stale results or data regressions.
 
 **Later iterations:** Decide whether to add background operation and automatic startup; neither is included in the first edition. Additional dashboard metrics based on use, AI-added graphs, and phone connectivity; potentially messaging if compatible with the approved budget. These are outside the initial release.
 

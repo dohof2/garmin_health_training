@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
+from .time_utils import timezone_info
 from typing import Literal
 
 from fastapi import FastAPI, HTTPException, Query, Request
@@ -137,9 +138,12 @@ def put_widgets(request: WidgetLayoutRequest):
 
 
 @app.get('/api/health/sleep')
-def sleep_night(day: date | None = None):
+def sleep_night(day: date | None = None, timezone: str = "UTC"):
     from .sleep_card import night
-    return night(day.isoformat() if day else None)
+    try:
+        return night(day.isoformat() if day else None,timezone_name=timezone)
+    except ValueError as error:
+        raise HTTPException(400,str(error)) from error
 
 
 @app.get('/api/health/widgets')
@@ -307,6 +311,8 @@ class CoachingRequest(BaseModel):
     timezone: str
     message: str | None = Field(default=None, max_length=4000)
     replace_plan_id: str | None = Field(default=None, max_length=160)
+    candidate_answers: dict[str, object] | None = None
+    session_changes: list[dict[str, object]] | None = None
     fingerprint: str | None = Field(default=None, max_length=64)
 
 
@@ -640,6 +646,21 @@ class TodayTrainingRequest(BaseModel):
     sport: str | None = None
 
 
+class TrainingSetupRequest(BaseModel):
+    model_config={"extra":"forbid"}
+    answers: dict[str,object]
+    brief: dict[str,object]
+    expected_preference_revision: int = Field(ge=0,strict=True)
+    expected_brief_revision: int = Field(ge=0,strict=True)
+
+
+@app.post('/api/training/setup')
+def store_training_setup(payload: TrainingSetupRequest):
+    from .training_coach import save_setup
+    try:return save_setup(payload.answers,payload.brief,payload.expected_preference_revision,payload.expected_brief_revision)
+    except ValueError as error:raise HTTPException(status_code=400,detail=str(error)) from error
+
+
 @app.post('/api/training/today')
 def today_training(payload: TodayTrainingRequest):
     from .active_training import suggest_today
@@ -673,10 +694,10 @@ def change_active_training(payload: ActiveTrainingRequest):
 @app.patch('/api/training/workouts/{workout_id}/schedule')
 def move_active_workout(workout_id: str, payload: TrainingWorkoutUpdate):
     from .active_training import reschedule
-    if set(payload.changes)!={'scheduled_for'}:
-        raise HTTPException(status_code=400,detail='Choose a new scheduled time')
+    if set(payload.changes)!={'scheduled_for'} and (set(payload.changes)-{'scheduled_date','start_time','timezone'} or 'scheduled_date' not in payload.changes):
+        raise HTTPException(status_code=400,detail='Choose a scheduled date, optionally including a start time')
     try:
-        return reschedule(workout_id,payload.changes['scheduled_for'],payload.expected_revision)
+        return reschedule(workout_id,payload.changes.get('scheduled_for'),payload.expected_revision,scheduled_date=payload.changes.get('scheduled_date'),start_time=payload.changes.get('start_time'))
     except (ValueError,TypeError) as error:
         raise HTTPException(status_code=400,detail=str(error)) from error
 
@@ -699,6 +720,13 @@ def get_coaching_brief():
     return read_brief()
 
 
+@app.get("/api/training/coach/candidate")
+def get_coaching_candidate(timezone: str = "UTC"):
+    from .training_questionnaire import candidate_snapshot
+    try:return candidate_snapshot(tz=timezone)
+    except ValueError as error:raise HTTPException(400,str(error)) from error
+
+
 @app.put("/api/training/coach")
 def put_coaching_brief(payload: CoachingBriefUpdate):
     try:
@@ -710,10 +738,19 @@ def put_coaching_brief(payload: CoachingBriefUpdate):
 @app.post("/api/training/coach/preview")
 def preview_coaching_plan(payload: CoachingRequest):
     try:
-        brief,recognized=parse_request(payload.message,payload.brief,payload.week_start) if payload.message else (payload.brief,[])
-        return {**coach_preview(brief,payload.week_start,payload.timezone,replace_plan_id=payload.replace_plan_id), 'recognized':recognized}
+        brief,recognized=parse_request(payload.message,payload.brief,payload.week_start,datetime.now(timezone_info(payload.timezone)).date()) if payload.message else (payload.brief,[])
+        return {**coach_preview(brief,payload.week_start,payload.timezone,replace_plan_id=payload.replace_plan_id,candidate_answers=payload.candidate_answers,session_changes=payload.session_changes), 'recognized':recognized}
     except ValueError as error:
         raise HTTPException(status_code=400,detail=str(error)) from error
+
+
+@app.post("/api/training/coach/approve")
+def approve_coaching_plan(payload: CoachingRequest):
+    from .training_coach import approve
+    try:
+        return approve(payload.brief,payload.week_start,payload.timezone,payload.fingerprint,replace_plan_id=payload.replace_plan_id,candidate_answers=payload.candidate_answers,session_changes=payload.session_changes)
+    except ValueError as error:
+        raise HTTPException(status_code=409,detail=str(error)) from error
 
 
 @app.post("/api/training/coach/draft")

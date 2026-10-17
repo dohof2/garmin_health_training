@@ -137,7 +137,7 @@ class TrainingTests(unittest.TestCase):
   self.assertEqual(training_context(restored,NOW)['answers'],ANSWERS)
   self.assertEqual(list_training(restored),list_training(self.path))
  def test_api_requires_review_and_validates_preferences(self):
-  with patch('app.database.database_path',return_value=self.path):
+  with patch('app.database.database_path',return_value=self.path),patch('app.training.datetime',FrozenClock):
    with TestClient(app) as client:
     self.assertEqual(client.get('/api/training/context').status_code,200)
     self.assertEqual(client.put('/api/training/preferences',json={'answers':ANSWERS,'expected_revision':0}).status_code,200)

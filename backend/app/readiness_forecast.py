@@ -6,7 +6,7 @@ from .database import connect
 from .readiness import _load, _series, _sessions, calculate, get_readiness_settings, stamp
 from .time_utils import timezone_info
 
-VERSION='readiness-forecast-v2'
+VERSION='readiness-forecast-v4'
 KINDS=('hrv_last_night_average','sleep_duration','sleep_score','resting_heart_rate')
 
 
@@ -25,8 +25,8 @@ def project(as_of, zone_name, rows, activities, coverage, config):
         history=sorted((r for key,r in series.get(kind,{}).items() if (day-timedelta(days=13)).isoformat()<=key<=day.isoformat()),key=lambda r:r['wake_date'])[-7:]
         if len(history)<5 or not history or history[-1]['wake_date']<(day-timedelta(days=2)).isoformat():
             missing.append(kind);continue
-        predicted=median(r['value'] for r in history)
-        key=day.isoformat() if kind=='resting_heart_rate' else target.isoformat()
+        predicted=sum(r['value'] for r in history[-3:])/len(history[-3:]) if kind=='hrv_last_night_average' else median(r['value'] for r in history)
+        key=target.isoformat()
         wake=datetime.combine(target,time(config['morning_hour']),zone)
         synthetic.append({'id':'projected:'+kind,'source_name':'projection','metric_type':kind,'recorded_at':key,'value':predicted,'unit':history[-1]['unit'],
                           'period_start':(wake-timedelta(seconds=predicted)).isoformat() if kind=='sleep_duration' else key,
@@ -78,17 +78,31 @@ def fit_predict(examples,x,baseline):
 
 def forecast(timezone_name='UTC',path=None,now=None):
     timezone_info(timezone_name);now=now or datetime.now(timezone.utc);zone=ZoneInfo(timezone_name);today=now.astimezone(zone).date()
-    settings=get_readiness_settings(path);config=settings['parameters'];lookback=max(config['baseline_days']+3,config['load_reference_days']+7)+101
+    settings=get_readiness_settings(path);config=settings['parameters'];lookback=max(config['baseline_days']+7,config['load_reference_days']+7)+101
     with connect(path) as c:rows,activities,coverage=_load(c,today-timedelta(days=lookback),today)
     prediction,inputs,missing=project(now,timezone_name,rows,activities,coverage,config)
     response={'date':(today+timedelta(days=1)).isoformat(),'as_of':now.isoformat(),'timezone':timezone_name,'model_version':VERSION,'config_version':settings['config_version'],
               'status':'insufficient_data','score':None,'range':None,'inputs':inputs,'missing_metrics':missing,'validation':None,
-              'assumptions':['No additional workouts before tomorrow morning; only recorded completed workouts are included.','Tonight’s HRV, sleep duration and sleep score follow the median of your latest seven available observations.','Today’s final resting heart rate is projected from earlier completed days.'],
+              'assumptions':['No additional workouts before tomorrow morning; only recorded completed workouts are included.','Tonight’s HRV uses the mean of the latest three available nights; readiness evaluates six recorded nights plus that projection as a seven-day average. Sleep duration and score use recent seven-observation medians.','Tomorrow’s resting heart rate is a projection from earlier completed days; today’s provisional RHR is excluded from forecast training inputs.'],
               'limitations':['App forecast of the prototype score, not Garmin’s measured training readiness.','Unexpected sleep, stress, illness and unrecorded exercise can change the result.','Historical checks use corrected records available now, not archived snapshots of what was known then.']}
     if prediction is None or prediction['score'] is None:
         response['reason']='Recent measurements or personal baseline/workout coverage are insufficient for a tomorrow estimate.'
         if prediction:response['missing_reasons']=prediction['warnings']
         return response
+    response['hrv_7day']=prediction['inputs']['hrv_7day']
+    measured=calculate(today,timezone_name,rows,activities,coverage,config,now=now)
+    names={'autonomic':'HRV and resting heart rate','sleep':'Sleep','workload':'Workout load'}
+    response['comparison']={
+        'today_score':measured['score'],
+        'today_hrv_7day':measured['inputs']['hrv_7day'],
+        'baseline_score':prediction['score'],
+        'contributors':[{'name':names[current['name']],
+                         'today_penalty':current['penalty_min'],
+                         'projected_penalty':future['penalty_min'],
+                         'score_change':round(current['penalty_min']-future['penalty_min'],2)}
+                        for current,future in zip(measured['groups'],prediction['groups'])
+                        if current['complete'] and future['complete']],
+        'explanation':'No further workouts does not assume unchanged HRV or sleep. HRV is assessed using a seven-day average, including one projected night. That night uses the latest three-night mean; sleep and resting heart rate use recent medians. These assumptions can differ from today’s readings.'}
     # Up to 100 historical targets, ordered oldest to newest. Labels are earlier measured app scores.
     examples=[]
     for offset in range(99,-1,-1):

@@ -1679,11 +1679,6 @@ for definition in TOOL_DEFINITIONS:
         definition['input_schema']['properties']['plots']['items']['properties']['min_repetitions']={'type':'integer','minimum':2,'maximum':50}
         definition['input_schema']['properties']['plots']['items']['properties']['fit_stat']={'type':'string','enum':['mean','maximum','minimum','sum','count']}
 
-TOOL_DEFINITIONS_BY_NAME = {
-    str(definition["name"]): definition for definition in TOOL_DEFINITIONS
-}
-
-
 def tool_definitions() -> list[dict[str, object]]:
     return TOOL_DEFINITIONS
 
@@ -1711,7 +1706,7 @@ TOOL_DEFINITIONS.append({'name':'get_active_training_plan','description':'Read t
 
 from .active_training import propose_adjustment
 TOOL_HANDLERS['propose_training_adjustment'] = propose_adjustment
-TOOL_DEFINITIONS.append({'name':'propose_training_adjustment','description':'Preview a requested active-plan schedule change or record feedback such as too hard. Supply the user request verbatim. No writes; the visible Save button applies the change with stale-revision protection.', 'input_schema':{'type':'object','properties':{'message':{'type':'string','maxLength':1500},'timezone':{'type':'string'}},'required':['message'],'additionalProperties':False}})
+TOOL_DEFINITIONS.append({'name':'propose_training_adjustment','description':'Preview a requested active-plan schedule change or record feedback such as too hard. Supply the user request verbatim. No writes; the visible Save button applies the change with stale-revision protection.', 'input_schema':{'type':'object','properties':{'message':{'type':'string','maxLength':1500},'timezone':{'type':'string'},'workout_id':{'type':'string'},'changes':{'type':'object','description':'Explicit feedback/completion/actual strength_sets only; use an exact saved workout ID.'}},'required':['message'],'additionalProperties':False}})
 
 from .active_training import suggest_today
 TOOL_HANDLERS['suggest_today_workout'] = suggest_today
@@ -1720,3 +1715,11 @@ TOOL_DEFINITIONS.append({'name':'suggest_today_workout','description':'Recommend
 from .active_training import recent_mix
 TOOL_HANDLERS['get_recent_training_mix'] = recent_mix
 TOOL_DEFINITIONS.append({'name':'get_recent_training_mix','description':'Assess recent endurance/base, tempo/threshold and short-hard-effort exposure from Garmin primary-benefit labels, with counts, evidence, coverage and possible gaps. Use for questions about which training type is missing; absence of labels is not proof of no training.', 'input_schema':{'type':'object','properties':{'days':{'type':'integer','minimum':7,'maximum':42},'timezone':{'type':'string'}},'additionalProperties':False}})
+
+from .training_coach import propose_setup
+TOOL_HANDLERS['propose_training_setup']=propose_setup
+TOOL_DEFINITIONS.append({'name':'propose_training_setup','description':'Propose explicit training preferences, direction, upcoming events, calibrated FTP/HR settings and strength roles from the user conversation. Read get_training_context first. No writes; show the review/save proposal. Do not invent missing answers.', 'input_schema':{'type':'object','properties':{'answers':{'type':'object'},'brief_changes':{'type':'object'}},'additionalProperties':False}})
+
+TOOL_DEFINITIONS_BY_NAME = {
+    str(definition["name"]): definition for definition in TOOL_DEFINITIONS
+}

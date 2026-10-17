@@ -25,12 +25,12 @@ class CoachTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.path=Path(self.tmp.name)/'health_training.sqlite3';migrate(self.path);save_preferences(copy.deepcopy(ANSWERS),0,self.path,NOW)
  def tearDown(self):self.tmp.cleanup()
- def brief(self,**patches):return {**copy.deepcopy(DEFAULT),'goal':'ftp',**patches}
+ def brief(self,**patches):return {**copy.deepcopy(DEFAULT),'duration_confirmed':True,'goal':'ftp',**patches}
  def preview(self,b=None,**kwargs):return preview(b or self.brief(),WEEK,'Asia/Jerusalem',self.path,NOW,**kwargs)
  def draft(self,b=None,**kwargs):
   b=b or self.brief();p=self.preview(b,**kwargs);return create_draft(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW,**kwargs)
  def test_distance_ascent_race_parsing_and_roadmap(self):
-  b,_=parse_request('Endurance. Wednesday race 80 km with 1500 m ascent, 3 hours at 08:00',DEFAULT,WEEK)
+  b,_=parse_request('8 weeks. Endurance. Wednesday race 80 km with 1500 m ascent, 3 hours at 08:00',DEFAULT,WEEK)
   event=b['fixed_events'][0];self.assertEqual(event['distance_km'],80);self.assertEqual(event['elevation_gain_meters'],1500);self.assertTrue(event['is_race'])
   b['goal']='endurance'
   p=self.preview(b);self.assertEqual(p['status'],'ready');fixed=next(s for s in p['sessions'] if s['definition'].get('fixed_commitment'))
@@ -72,19 +72,19 @@ class CoachTests(unittest.TestCase):
   with self.assertRaises(ValueError):create_draft(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
   self.assertEqual(list_training(self.path)['plans'],[])
  def test_fixed_wednesday_preserved_and_no_extra_quality(self):
-  b,_=parse_request('Increase FTP. Wednesday hard 3 hours at 08:00 ride',DEFAULT,WEEK)
+  b,_=parse_request('8 weeks. Increase FTP. Wednesday hard 3 hours at 08:00 ride',DEFAULT,WEEK)
   p=self.preview(b);self.assertEqual(p['status'],'ready');self.assertEqual(p['weekly_minutes']['cycling'],300)
   fixed=next(s for s in p['sessions'] if s['definition']['template_id']=='fixed_commitment')
   self.assertEqual(fixed['scheduled_for'],'2026-10-14T08:00:00+03:00');self.assertEqual(fixed['definition']['duration_minutes'],180)
   self.assertEqual({d['date'] for d in p['protected_days']},{'2026-10-13','2026-10-15'})
   self.assertNotIn('cycling_controlled_intervals',[s['definition']['template_id'] for s in p['sessions']])
  def test_ftp_has_one_exact_duration_interval_without_inferred_ftp(self):
-  p=self.preview();quality=[s for s in p['sessions'] if s['definition']['template_id']=='cycling_controlled_intervals']
+  p=self.preview();quality=[s for s in p['sessions'] if s['definition'].get('workout_kind')=='threshold']
   self.assertEqual(len(quality),1);self.assertEqual(quality[0]['definition']['effort_target']['method'],'perceived_effort')
   self.assertEqual(sum(s['duration_seconds'] for s in quality[0]['definition']['steps']),quality[0]['definition']['duration_minutes']*60)
-  confirmed=self.preview(self.brief(ftp_watts=250));self.assertIn('250 W',confirmed['sessions'][0]['definition']['effort_target']['description'])
+  confirmed=self.preview(self.brief(ftp_watts=250,calibration={'power_access':'outdoor','ftp_confirmed_on':'2026-10-11','hr_sensor':False}));self.assertTrue(any(step.get('target',{}).get('lower')==225 and step['target']['upper']==237.5 for step in confirmed['sessions'][0]['definition']['steps']))
  def test_long_trip_over_budget_is_not_shortened(self):
-  b,_=parse_request('Increase FTP. Wednesday hard 6 hours at 08:00 trip',DEFAULT,WEEK)
+  b,_=parse_request('8 weeks. Increase FTP. Wednesday hard 6 hours at 08:00 trip',DEFAULT,WEEK)
   p=self.preview(b);self.assertEqual(p['status'],'needs_input');self.assertEqual(p['sessions'][0]['definition']['duration_minutes'],360)
  def test_endurance_prioritizes_longest_slot(self):
   answers=copy.deepcopy(ANSWERS);answers['availability']=[{'weekday':0,'start_time':'18:00','minutes':30},{'weekday':5,'start_time':'08:00','minutes':120}];answers['weekly_minutes']['cycling']=120
@@ -100,13 +100,64 @@ class CoachTests(unittest.TestCase):
   b=self.brief();p=self.preview(b);save_preferences({'weekly_minutes':{'cycling':240}},1,self.path,NOW)
   with self.assertRaisesRegex(ValueError,'context changed'):create_draft(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
   history=self.draft();old=history['plans'][0]['id'];count=len(history['workouts']);new=self.draft(self.brief(goal='general'),replace_plan_id=old)
-  self.assertEqual(next(p for p in new['plans'] if p['id']==old)['status'],'superseded');self.assertEqual(sum(w['completion_status']=='cancelled' for w in new['workouts']),count)
+  self.assertEqual(next(p for p in new['plans'] if p['id']==old)['status'],'draft');self.assertEqual(sum(w['completion_status']=='cancelled' for w in new['workouts']),0)
  def test_existing_week_consumes_budget_instead_of_double_training(self):
   self.draft();p=self.preview();self.assertEqual(p['status'],'needs_review');self.assertEqual(p['weekly_minutes']['cycling'],300);self.assertEqual(p['sessions'],[])
  def test_completed_sessions_cannot_be_replaced_feedback_still_works(self):
   h=self.draft();w=h['workouts'][0]
   with patch('app.training.datetime',Clock):update_workout(w['id'],w['revision'],{'completion_status':'completed','effort':6},self.path)
-  with self.assertRaisesRegex(ValueError,'Completed'):self.preview(replace_plan_id=h['plans'][0]['id'])
+  p=self.preview(replace_plan_id=h['plans'][0]['id']);self.assertTrue(p['sessions']);self.assertEqual(next(x for x in list_training(self.path)['workouts'] if x['id']==w['id'])['completion_status'],'completed')
+ def test_atomic_approval_retry_conflict_and_duration(self):
+  from app.training_coach import approve
+  b=self.brief(duration_confirmed=True);p=self.preview(b)
+  first=approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
+  second=approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
+  self.assertEqual(len(first['plans']),1);self.assertEqual(len(second['workouts']),len(first['workouts']))
+  self.assertEqual(first['plans'][0]['status'],'active')
+  changed=self.brief(goal='general',duration_confirmed=True)
+  with self.assertRaisesRegex(ValueError,'different proposal'):approve(changed,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
+  with connect(self.path) as c:before=dict(c.execute('SELECT * FROM active_training_program').fetchone())
+  save_brief(changed,1,self.path)
+  with connect(self.path) as c:self.assertEqual(dict(c.execute('SELECT * FROM active_training_program').fetchone()),before)
+ def test_approval_requires_explicit_duration(self):
+  from app.training_coach import approve
+  b=self.brief(duration_confirmed=False);p=self.preview(b)
+  with self.assertRaisesRegex(ValueError,'Preview the plan'):approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
+  self.assertEqual(list_training(self.path)['plans'],[])
+ def test_candidate_preferences_preview_isolation_and_approval(self):
+  from app.training_coach import approve
+  from app.training import training_context
+  b=self.brief(duration_confirmed=True)
+  changes={'weekly_minutes':{'cycling':240}}
+  before=training_context(self.path,NOW)
+  p=preview(b,WEEK,'Asia/Jerusalem',self.path,NOW,candidate_answers=changes)
+  self.assertEqual(training_context(self.path,NOW),before)
+  approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW,candidate_answers=changes)
+  self.assertEqual(training_context(self.path,NOW)['answers']['weekly_minutes']['cycling'],240)
+ def test_approval_failure_rolls_back_program_and_brief(self):
+  from app.training_coach import approve
+  b=self.brief(duration_confirmed=True);p=self.preview(b)
+  with patch('app.active_training.activate',side_effect=ValueError('injected failure')):
+   with self.assertRaisesRegex(ValueError,'injected'):approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
+  self.assertEqual(list_training(self.path)['plans'],[]);self.assertEqual(read_brief(self.path)['revision'],0)
+ def test_stale_program_revision_conflicts(self):
+  from app.training_coach import approve
+  b=self.brief(duration_confirmed=True);p=self.preview(b)
+  save_brief(b,0,self.path)
+  with self.assertRaisesRegex(ValueError,'context changed'):approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW)
+ def test_manual_ftp_override_is_preserved(self):
+  with patch('app.training_ftp.resolve',return_value={'watts':300,'measurement_date':'2026-10-10','status':'usable'}):
+   p=self.preview(self.brief(ftp_watts=225,ftp_selection='manual'))
+   self.assertEqual(p['brief']['ftp_watts'],225)
+   p=self.preview(self.brief(ftp_watts=225,ftp_selection='garmin'))
+   self.assertEqual(p['brief']['ftp_watts'],300);self.assertEqual(p['brief']['calibration']['ftp_confirmed_on'],'2026-10-10')
+ def test_continuation_keeps_approved_ftp_snapshot(self):
+  from app.training_coach import _preview
+  b=self.brief(ftp_selection='garmin',ftp_watts=225,program_start=WEEK.isoformat(),calibration={'power_access':'outdoor','ftp_confirmed_on':'2026-10-10'})
+  with patch('app.training_ftp.resolve',return_value={'watts':300,'measurement_date':'2026-10-11','status':'usable'}):
+   with connect(self.path) as c:p=_preview(c,b,WEEK,'Asia/Jerusalem',NOW,None,resolve_ftp=False)
+  self.assertEqual(p['brief']['ftp_watts'],225)
+  self.assertEqual(p['garmin_ftp']['watts'],300)
  def test_saved_brief_revision_and_invalid_values(self):
   self.assertEqual(read_brief(self.path)['revision'],0);save_brief(self.brief(),0,self.path)
   self.assertEqual(read_brief(self.path)['brief']['goal'],'ftp')
@@ -116,9 +167,32 @@ class CoachTests(unittest.TestCase):
  def test_assistant_followup_preserves_brief_and_is_read_only(self):
   def ask(text,context=None):
    with patch('app.training_coach.datetime',Clock):return [json.loads(e) for e in chat_stream(text,coaching_context=context,timezone_name='Asia/Jerusalem',path=self.path)]
-  events=ask('Increase FTP. Wednesday I have a trip');coaching=next(e['evidence']['coaching'] for e in events if e['type']=='tool')
-  events=ask('3 hours at 08:00 hard',coaching);followup=next(e['evidence']['coaching'] for e in events if e['type']=='tool')
+  events=ask('Increase FTP. Wednesday I have a trip');coaching=next(e['evidence']['coaching'] for e in events if e['type']=='tool' and 'coaching' in e['evidence'])
+  self.assertEqual(coaching['sessions'],[]);self.assertEqual(coaching['roadmap'],[])
+  events=ask('8 weeks',coaching);coaching=next(e['evidence']['coaching'] for e in events if e['type']=='tool' and 'coaching' in e['evidence'])
+  self.assertTrue(coaching['brief']['duration_confirmed']);self.assertEqual(coaching['brief']['horizon_weeks'],8)
+  events=ask('3 hours at 08:00 hard',coaching);followup=next(e['evidence']['coaching'] for e in events if e['type']=='tool' and 'coaching' in e['evidence'])
   self.assertEqual(followup['brief']['goal'],'ftp');self.assertEqual(followup['brief']['fixed_events'][0]['duration_minutes'],180);self.assertEqual(followup['status'],'ready')
   self.assertEqual(list_training(self.path)['plans'],[]);self.assertEqual(read_brief(self.path)['revision'],0)
+ def test_current_recovery_block_controls_actual_sessions(self):
+  from app.training_coach import summarize_blocks,assistant_answer
+  b=self.brief(horizon_weeks=8,program_start=(WEEK-timedelta(weeks=3)).isoformat())
+  p=self.preview(b)
+  self.assertTrue(p['sessions'])
+  self.assertTrue(all(session['definition']['training_block']['phase']=='Recovery / review' for session in p['sessions']))
+  self.assertTrue(all(session['definition'].get('workout_kind')=='recovery' for session in p['sessions']))
+  self.assertEqual(sum(block['weeks'] for block in p['block_summary']),8)
+  self.assertIn('8-week',assistant_answer({**p,'recognized':[]}))
+ def test_today_chat_requests_time_then_suggests_without_plan(self):
+  from app.ai_chat import _today_chat_request
+  question='I can go today for a ride what would you suggest'
+  self.assertEqual(_forced_tool_name(question),'suggest_today_workout')
+  self.assertEqual(_forced_tool_name('I want two hard rides Tuesday and Wednesday. I can train today. I want FTP improvement.'),'preview_training_plan')
+  self.assertEqual(_today_chat_request(question,[])['minutes'],None)
+  self.assertEqual(_today_chat_request('60 minutes',[{'role':'user','content':question}]),{'minutes':60,'sport':'cycling'})
+  result={'session':{'title':'Easy ride','steps':[{'type':'Warm-up','duration_seconds':600}]},'reason':'Recent workload favors easy riding','warnings':['Preview only'],'saved':False}
+  with patch('app.ai_chat._execute_calls',return_value=([{'result':result}],[])):
+   events=[json.loads(event) for event in chat_stream('60 minutes',history=[{'role':'user','content':question},{'role':'assistant','content':'How much time?'}],timezone_name='Asia/Jerusalem',path=self.path)]
+  self.assertIn('Recent workload',str(events));self.assertEqual(list_training(self.path)['plans'],[])
  def test_ordinary_race_or_ftp_question_is_not_forced_to_coach(self):
   self.assertNotEqual(_forced_tool_name('What was my FTP last year?'),'preview_training_plan');self.assertNotEqual(_forced_tool_name('Compare that race to my rides'),'preview_training_plan')

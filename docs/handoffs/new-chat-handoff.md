@@ -213,3 +213,11 @@ The Training page now has a persistent active program with saved goal/blocks, a 
 The user prefers primarily agent-driven training and considers the separate goal form unnecessary. That broader page redesign remains a direction to address; the goal form still exists. The current local review engine uses provisional deterministic rules rather than a fresh model consultation. Live connected-model use of the new tools remains normal-use QC. No actual user training plan was invented or activated during verification.
 
 Activity More details replaces the sample-count sentence in the expanded summary; Remove is inside its bottom. The detailed view is curated for training. Assistant activity references are non-clickable. Activity stream plots label metrics with distinct colors, and axis padding uses half a plotted standard deviation. Power-vs-speed dashboard cards were removed from the saved layout and defaults.
+
+## Remediation completion — 13 October 2026
+
+Authorized training remediation implemented locally; see docs/qa/2026-10-13-coach/REPORT.md and live-results.json. 413 tests, typecheck/build pass. Migrations 024 actual strength performance and 025 cancelled active-plan status. Agent-led Training, atomic setup proposals, canonical program reconciliation, calibrated exact timed laps, strength roles and performance logging implemented. All changes uncommitted. Backend restarted on port 8000. Readiness follow-up adds focus/visibility refresh for both values, no-store and aborted-response guards. Original acceptance report remains intact.
+
+## Current checkpoint — 17 October 2026
+
+Recent trainer/QC changes prepared for commit: durable contextual questionnaire, optional clock times/date-only workouts, natural approximate/range replies with useful errors, reviewed atomic activation, Garmin FTP provenance, readiness performance/current-day RHR, sleep-card/VO2/date-range UI repairs. Latest backend466 tests pass; frontend build passes. See docs/qa/2026-10-17-trainer/REPORT.md for current evidence and pending items. Direct Garmin publication remains planning-only; abandoned download prototype removed. Earlier uncommitted/test-count statements are historical checkpoints.

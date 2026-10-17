@@ -84,6 +84,7 @@ def get_training_context(arguments: dict[str, object], path: Path | None = None)
     from .training import training_context
     settings = get_settings(path)
     from .active_training import read_active
+    from .training_coach import read_brief
     return {'active_plan':read_active({},path),'tool': 'get_training_context', 'profile': settings['profile'], 'goals': settings['goals'],
-            'training': training_context(path),
+            'training': training_context(path),'coaching_brief':read_brief(path),
             'limitations': ['User goals are context, not evidence of the intent of a particular session. Draft and save training preferences in the Training screen; the assistant does not change the schedule.']}

@@ -17,7 +17,7 @@ MOVEMENTS = ('squat', 'hinge', 'push', 'pull', 'core')
 FIELDS = ('sports','priority','availability','experience','equipment','weekly_minutes','blocked_sports','blocked_movements','restrictions_notes','pain_or_illness')
 QUESTIONS = {
     'sports':'Which sports should this plan include?', 'priority':'What is the immediate training priority? A long-term goal is optional.',
-    'availability':'Which days, start times, and maximum session lengths are available?',
+    'availability':'Which days and maximum session lengths are available? Start times are optional.',
     'experience':'How experienced are you in each selected sport?', 'equipment':'What training equipment is available?',
     'weekly_minutes':'What weekly minutes have been manageable recently for each selected sport?',
     'blocked_sports':'Which sports must be excluded? Select none explicitly if there are no exclusions.',
@@ -29,9 +29,11 @@ RULE_VERSION = 'training-v1'
 TEMPLATES = (
     {'id':'cycling_easy','sport':'cycling','title':'Easy endurance ride','equipment_any':['bike','trainer'],'minimum_minutes':20,'kind':'endurance'},
     {'id':'running_easy','sport':'running','title':'Easy conversational run','equipment_any':[],'minimum_minutes':15,'kind':'endurance'},
-    {'id':'strength_foundation','sport':'strength','title':'Strength foundation','equipment_any':['bodyweight','dumbbells','bands','gym','barbell'],'minimum_minutes':20,'kind':'strength'},
+    {'id':'strength_foundation','sport':'strength','title':'Strength foundation','equipment_any':['bodyweight','dumbbells','bands','gym','barbell','pull_up_bar','dip_bars'],'minimum_minutes':20,'kind':'strength'},
 )
 EXERCISES = (
+    {'id':'pullup_progression','name':'Pull-up progression','movement':'pull','equipment':'pull_up_bar'},
+    {'id':'dip_progression','name':'Dip progression','movement':'push','equipment':'dip_bars'},
     {'id':'chair_squat','name':'Chair squat','movement':'squat','equipment':'bodyweight'},
     {'id':'bodyweight_hinge','name':'Hip hinge practice','movement':'hinge','equipment':'bodyweight'},
     {'id':'wall_pushup','name':'Wall push-up','movement':'push','equipment':'bodyweight'},
@@ -81,7 +83,9 @@ def validate_answers(patch):
                 weekday=_number(slot['weekday'],'weekday',0,6,True)
                 if weekday in seen:raise ValueError('Only one session slot per day is supported')
                 seen.add(weekday)
-                minutes=_number(slot['minutes'],'session minutes',15,180,True)
+                minutes=_number(slot['minutes'],'session minutes',15,720,True)
+                if slot['start_time'] is None:
+                    slots.append({'weekday':weekday,'start_time':None,'minutes':minutes});continue
                 try:
                     clock=datetime.strptime(slot['start_time'],'%H:%M')
                     if clock.strftime('%H:%M')!=slot['start_time']:raise ValueError()
@@ -114,8 +118,12 @@ def _timestamp(value):
     return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
 
 
-def _context(c,now):
-    prefs=_preferences(c);answers=prefs['answers'];missing=[];stale=[]
+def _context(c,now,candidate_answers=None):
+    prefs=_preferences(c)
+    if candidate_answers:
+        patch=validate_answers(candidate_answers)
+        prefs={**prefs,'answers':{**prefs['answers'],**patch},'confirmed_at':{**prefs['confirmed_at'],**{key:now.replace(hour=0,minute=0,second=0,microsecond=0).isoformat() for key in patch}}}
+    answers=prefs['answers'];missing=[];stale=[]
     for field in FIELDS:
         if field not in answers or (field in ('experience','weekly_minutes') and any(s not in answers[field] for s in answers.get('sports',[]))):missing.append(field)
         elif field in prefs['confirmed_at']:
@@ -124,7 +132,7 @@ def _context(c,now):
     blockers=[]
     if answers.get('pain_or_illness'):blockers.append('Reported pain or illness: review before generating a plan.')
     pain_confirmed=prefs['confirmed_at'].get('pain_or_illness','')
-    recent_feedback=[dict(r) for r in c.execute('SELECT f.*,w.sport,w.scheduled_for FROM training_feedback f JOIN planned_workouts w ON w.id=f.workout_id')
+    recent_feedback=[dict(r) for r in c.execute('SELECT f.*,w.sport,w.scheduled_for,w.completion_status FROM training_feedback f JOIN planned_workouts w ON w.id=f.workout_id')
                      if _timestamp(r['updated_at']) >= now-timedelta(days=14)]
     if any(r['pain_or_illness'] and (not pain_confirmed or _timestamp(r['updated_at']) > _timestamp(pain_confirmed)) for r in recent_feedback):
         blockers.append('Recent session feedback reports pain or illness. Reconfirm the current training restrictions before generating another plan.')
@@ -139,7 +147,7 @@ def _context(c,now):
     return {**prefs,'missing':missing,'stale':stale,'questions':[{'field':f,'question':QUESTIONS[f],'reason':'missing' if f in missing else 'stale'} for f in missing+stale],
             'blockers':blockers,'ready':not(missing or stale or blockers),'templates':list(TEMPLATES),'rule_version':RULE_VERSION,
             'goals':[dict(r) for r in c.execute("SELECT id,title,goal_type FROM goals WHERE status='active'")],
-            'recent_feedback':recent_feedback}
+            'recent_feedback':recent_feedback,'recent_strength_performance':[dict(r) for r in c.execute("SELECT s.*,w.title FROM training_strength_performance s JOIN planned_workouts w ON w.id=s.workout_id WHERE w.completion_status='completed' AND s.recorded_at>=? ORDER BY s.recorded_at DESC LIMIT 100",((now-timedelta(days=90)).isoformat(),))]}
 
 
 def training_context(path:Path|None=None,now=None):
@@ -161,7 +169,7 @@ def save_preferences(answers,expected_revision,path:Path|None=None,now=None):
 def workout_definition(template_id,minutes,answers):
     template=next((t for t in TEMPLATES if t['id']==template_id),None)
     if template is None:raise ValueError('Unknown workout template')
-    _number(minutes,'workout minutes',template['minimum_minutes'],180,True)
+    _number(minutes,'workout minutes',template['minimum_minutes'],720,True)
     if template['sport'] not in answers['sports'] or template['sport'] in answers['blocked_sports']:raise ValueError('Workout sport violates stored preferences')
     if template['equipment_any'] and not set(template['equipment_any']) & set(answers['equipment']):raise ValueError('Required workout equipment is unavailable')
     result={'version':RULE_VERSION,'template_id':template_id,'sport':template['sport'],'title':template['title'],'duration_minutes':minutes,
@@ -193,7 +201,7 @@ def _snapshot(c,identifier):
 
 def _revision(c,row):
     feedback=c.execute('SELECT * FROM training_feedback WHERE workout_id=?',(row['id'],)).fetchone()
-    c.execute('INSERT INTO training_workout_revisions(workout_id,revision,snapshot_json) VALUES (?,?,?)',(row['id'],row['revision'],encoded({**row,'feedback':dict(feedback) if feedback else None})))
+    c.execute('INSERT INTO training_workout_revisions(workout_id,revision,snapshot_json) VALUES (?,?,?)',(row['id'],row['revision'],encoded({**row,'feedback':dict(feedback) if feedback else None,'strength_performance':[dict(r) for r in c.execute('SELECT * FROM training_strength_performance WHERE workout_id=?',(row['id'],))]})))
 
 
 def draft_week(week_start,timezone_name,expected_preference_revision,path:Path|None=None,now=None):
@@ -222,16 +230,19 @@ def draft_week(week_start,timezone_name,expected_preference_revision,path:Path|N
                 minutes=min(slot['minutes'],remaining,30 if answers['experience'][sport]=='new' else 60)
                 if minutes<template['minimum_minutes']:continue
                 definition=workout_definition(template['id'],minutes,answers)
-                local=datetime.fromisoformat(f"{scheduled_day}T{slot['start_time']}").replace(tzinfo=ZoneInfo(timezone_name))
+                local=datetime.fromisoformat(f"{scheduled_day}T{slot['start_time'] or '12:00'}").replace(tzinfo=ZoneInfo(timezone_name))
                 # Ambiguous/nonexistent wall times must be selected manually rather than guessed.
                 if local.astimezone(timezone.utc).astimezone(ZoneInfo(timezone_name)).replace(tzinfo=None)!=local.replace(tzinfo=None) or local.replace(fold=0).utcoffset()!=local.replace(fold=1).utcoffset():raise ValueError('A scheduled time crosses a timezone clock change; choose another time')
+                if slot['start_time'] is None:definition.update(scheduled_date=scheduled_day.isoformat(),time_unspecified=True,schedule_timezone=timezone_name)
                 scheduled=local.isoformat();ending=local+timedelta(minutes=minutes)
                 for existing in c.execute("SELECT scheduled_for,definition_json FROM planned_workouts WHERE completion_status NOT IN ('cancelled','skipped') AND scheduled_for IS NOT NULL"):
                     other=datetime.fromisoformat(existing['scheduled_for'].replace('Z','+00:00'))
                     if not other.tzinfo:raise ValueError('An existing workout has ambiguous timing; review it first')
-                    other_minutes=json.loads(existing['definition_json']).get('duration_minutes')
+                    other_definition=json.loads(existing['definition_json']);other_minutes=other_definition.get('duration_minutes')
                     if not _number(other_minutes,'existing workout duration',1,1440):continue
-                    if local<other+timedelta(minutes=other_minutes) and other<ending:raise ValueError('The draft conflicts with an existing scheduled workout')
+                    if definition.get('time_unspecified') or other_definition.get('time_unspecified'):
+                        if local.date()==other.astimezone(local.tzinfo).date() and minutes+other_minutes>slot['minutes']:raise ValueError('The draft exceeds the confirmed day budget')
+                    elif local<other+timedelta(minutes=other_minutes) and other<ending:raise ValueError('The draft conflicts with an existing scheduled workout')
                 sessions.append({'id':'workout-'+str(uuid.uuid4()),'sport':sport,'title':definition['title'],'scheduled_for':scheduled,'definition':definition})
                 allocated[sport]+=minutes
                 if sport=='strength':last_strength=scheduled_day
@@ -255,7 +266,10 @@ def list_training(path:Path|None=None):
         workouts=[]
         for row in c.execute('SELECT * FROM planned_workouts ORDER BY scheduled_for,id'):
             item={**dict(row),'definition':json.loads(row['definition_json'])}
+            item['scheduled_date']=item['definition'].get('scheduled_date') or (row['scheduled_for'] or '')[:10]
+            item['time_unspecified']=item['definition'].get('time_unspecified',False)
             feedback=c.execute('SELECT * FROM training_feedback WHERE workout_id=?',(row['id'],)).fetchone();item['feedback']=dict(feedback) if feedback else None
+            item['strength_performance']=[dict(r) for r in c.execute('SELECT * FROM training_strength_performance WHERE workout_id=? ORDER BY exercise_id,set_index',(row['id'],))]
             item['suggested_revision']='Review a reduction or rest; no schedule changed.' if feedback and (feedback['pain_or_illness'] or (feedback['soreness'] or 0)>=5 or (feedback['effort'] or 0)>=8) else 'Review the missed session; do not stack catch-up workouts.' if row['completion_status']=='skipped' else None
             workouts.append(item)
         return {'plans':plans,'workouts':workouts}
@@ -302,7 +316,7 @@ def accept_plan(identifier,path:Path|None=None):
 
 
 def update_workout(identifier,expected_revision,changes,path:Path|None=None):
-    allowed={'template_id','duration_minutes','completion_status','effort','soreness','pain_or_illness','notes','activity_id'}
+    allowed={'template_id','duration_minutes','completion_status','effort','soreness','pain_or_illness','notes','activity_id','strength_sets'}
     if not isinstance(changes,dict) or set(changes)-allowed:raise ValueError('Unknown workout change')
     if type(expected_revision) is not int:raise ValueError('Workout revision must be an integer')
     if 'pain_or_illness' in changes and type(changes['pain_or_illness']) is not bool:raise ValueError('Pain/illness feedback must be yes or no')
@@ -312,19 +326,25 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
         if row['revision']!=expected_revision:raise ValueError('Workout changed; reload before saving')
         if row['garmin_workout_id'] or row['publish_status']!='local':raise ValueError('Published workout edits require the T8 publication workflow')
         definition=json.loads(row['definition_json'])
+        schedule_metadata={key:definition[key] for key in ('scheduled_date','time_unspecified','schedule_timezone') if key in definition}
         restoring=row['completion_status'] in ('cancelled','skipped') and changes.get('completion_status') in ('planned','completed')
         if 'template_id' in changes or 'duration_minutes' in changes or restoring:
             context=_context(c,datetime.now(timezone.utc))
             if not context['ready']:raise ValueError('Preferences require review before changing training')
             if definition['template_id'] in ('fixed_commitment','cycling_controlled_intervals'): raise ValueError('Revise the coaching brief and preview a replacement week to change a coached session; feedback can be saved here.')
             template=changes.get('template_id',definition['template_id']);minutes=changes.get('duration_minutes',definition['duration_minutes'])
-            definition=workout_definition(template,minutes,context['answers'])
+            if definition.get('workout_kind') and template==definition['template_id']:
+                from .training_coach import read_brief
+                from .training_prescriptions import endurance
+                definition=endurance(definition['workout_kind'],minutes,read_brief(path)['brief'],definition['sport'])
+            else:definition=workout_definition(template,minutes,context['answers'])
+            definition.update(schedule_metadata)
             local=datetime.fromisoformat(row['scheduled_for'])
             slots={s['weekday']:s for s in context['answers']['availability']};slot=slots.get(local.weekday())
-            if not slot or local.strftime('%H:%M')!=slot['start_time'] or minutes>slot['minutes']:raise ValueError('Edit exceeds saved availability')
+            if not slot or (slot['start_time'] is not None and local.strftime('%H:%M')!=slot['start_time']) or minutes>slot['minutes']:raise ValueError('Edit exceeds saved availability')
             for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND completion_status NOT IN ('cancelled','skipped')",(identifier,)):
                 start=datetime.fromisoformat(other['scheduled_for']);other_def=json.loads(other['definition_json'])
-                if local<start+timedelta(minutes=other_def['duration_minutes']) and start<local+timedelta(minutes=minutes):raise ValueError('Edit conflicts with another workout')
+                if not(definition.get('time_unspecified') or other_def.get('time_unspecified')) and local<start+timedelta(minutes=other_def['duration_minutes']) and start<local+timedelta(minutes=minutes):raise ValueError('Edit conflicts with another workout')
             weekly_total=minutes
             monday=local.date()-timedelta(days=local.weekday())
             for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND sport=? AND completion_status NOT IN ('cancelled','skipped')",(identifier,definition['sport'])):
@@ -343,5 +363,18 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
         if feedback['activity_id'] and not c.execute('SELECT 1 FROM activities WHERE id=? AND deleted_at IS NULL',(feedback['activity_id'],)).fetchone():raise ValueError('Linked Garmin activity was not found')
         c.execute('UPDATE planned_workouts SET sport=?,title=?,definition_json=?,completion_status=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(definition['sport'],definition['title'],encoded(definition),status,identifier))
         c.execute('INSERT INTO training_feedback(workout_id,effort,soreness,pain_or_illness,activity_id,notes,updated_at) VALUES (?,?,?,?,?,?,?) ON CONFLICT(workout_id) DO UPDATE SET effort=excluded.effort,soreness=excluded.soreness,pain_or_illness=excluded.pain_or_illness,activity_id=excluded.activity_id,notes=excluded.notes,updated_at=excluded.updated_at',(identifier,feedback['effort'],feedback['soreness'],int(feedback['pain_or_illness']),feedback['activity_id'],feedback['notes'],datetime.now(timezone.utc).isoformat()))
+        if 'strength_sets' in changes:
+            sets=changes['strength_sets']
+            if row['sport']!='strength' or not isinstance(sets,list) or len(sets)>60:raise ValueError('Use up to 60 actual strength sets')
+            allowed_ids={e['id'] for e in definition.get('exercises',[])};seen=set()
+            for item in sets:
+                if not isinstance(item,dict) or set(item)-{'exercise_id','set_index','load_kg','repetitions','repetitions_in_reserve'} or item.get('exercise_id') not in allowed_ids:raise ValueError('Choose an exercise from this session')
+                _number(item.get('set_index'),'set number',1,20,True);_number(item.get('repetitions'),'actual repetitions',0,100,True)
+                if item.get('load_kg') is not None:_number(item['load_kg'],'actual load kg',0,500)
+                if item.get('repetitions_in_reserve') is not None:_number(item['repetitions_in_reserve'],'repetitions in reserve',0,10)
+                key=(item['exercise_id'],item['set_index'])
+                if key in seen:raise ValueError('Each actual set needs a unique exercise/set number')
+                seen.add(key)
+                c.execute('INSERT INTO training_strength_performance(workout_id,exercise_id,set_index,load_kg,repetitions,repetitions_in_reserve,recorded_at) VALUES(?,?,?,?,?,?,?) ON CONFLICT(workout_id,exercise_id,set_index) DO UPDATE SET load_kg=excluded.load_kg,repetitions=excluded.repetitions,repetitions_in_reserve=excluded.repetitions_in_reserve,recorded_at=excluded.recorded_at',(identifier,item['exercise_id'],item['set_index'],item.get('load_kg'),item['repetitions'],item.get('repetitions_in_reserve'),datetime.now(timezone.utc).isoformat()))
         _revision(c,_snapshot(c,identifier))
     return list_training(path)

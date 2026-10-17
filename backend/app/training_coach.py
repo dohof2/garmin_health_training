@@ -7,12 +7,12 @@ import uuid
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from .database import connect
-from .training import _context, _number, _revision, _snapshot, encoded, list_training, workout_definition
+from .training import _context, _number, _revision, _snapshot, encoded, list_training, workout_definition, validate_answers
 from .time_utils import timezone_info
 
 GOALS = {'ftp':'Increase FTP', 'endurance':'Build endurance', 'race':'Prepare for a race', 'general':'Stay in shape'}
 VERSION = 'training-coach-v1'
-DEFAULT = {'goal':None,'goal_sport':'cycling','horizon_weeks':12,'target_date':None,'event_name':'','ftp_watts':None,'fixed_events':[]}
+DEFAULT = {'goal':None,'goal_sport':'cycling','horizon_weeks':12,'target_date':None,'event_name':'','ftp_watts':None,'fixed_events':[],'calibration':{},'strength_role':None,'strength_purpose':None,'strength_capacity':{},'program_start':None,'workout_location':'outdoor','duration_confirmed':False,'ftp_selection':'manual','ftp_authorization':None,'sport_days':{},'weekly_time_ranges':{}}
 
 
 def validate_brief(value):
@@ -20,20 +20,45 @@ def validate_brief(value):
     b={**DEFAULT,**value}
     if b['goal'] is not None and (not isinstance(b['goal'],str) or b['goal'] not in GOALS): raise ValueError('Choose FTP, endurance, race or general fitness')
     if b['goal_sport'] not in ('cycling','running'): raise ValueError('Choose cycling or running for the endurance or race goal')
+    if not isinstance(b['weekly_time_ranges'],dict) or set(b['weekly_time_ranges'])-{'cycling','running','strength'}:raise ValueError('Invalid weekly time ranges')
+    for bounds in b['weekly_time_ranges'].values():
+        if not isinstance(bounds,list) or len(bounds)!=2:raise ValueError('Weekly ranges require lower and upper minutes')
+        for minutes in bounds:_number(minutes,'weekly range minutes',0,1260,True)
+        if bounds[0]>bounds[1]:raise ValueError('Weekly range minimum exceeds maximum')
+    if type(b['duration_confirmed']) is not bool:raise ValueError('Duration confirmation must be yes or no')
     _number(b['horizon_weeks'],'planning horizon',4,24,True)
     if b['target_date'] is not None and not isinstance(b['target_date'],str): raise ValueError('Race date must use YYYY-MM-DD')
     if b['target_date']: date.fromisoformat(b['target_date'])
     if not isinstance(b['event_name'],str) or len(b['event_name'])>160: raise ValueError('Event name must be text up to 160 characters')
+    if not isinstance(b['sport_days'],dict) or set(b['sport_days'])-{'cycling','running','strength'}:raise ValueError('Invalid sport days')
+    for days in b['sport_days'].values():
+        if not isinstance(days,list) or any(type(day) is not int or not 0<=day<=6 for day in days) or len(set(days))!=len(days):raise ValueError('Use unique weekdays 0–6')
+    authorization=b['ftp_authorization']
+    if authorization is not None:
+        if not isinstance(authorization,dict) or set(authorization)!={'authorized_on','watts','measurement_date','source'}:raise ValueError('Invalid FTP authorization metadata')
+        date.fromisoformat(authorization['authorized_on']);_number(authorization['watts'],'authorized FTP',40,700)
+        if authorization['measurement_date']:date.fromisoformat(authorization['measurement_date'])
+        if not isinstance(authorization['source'],str):raise ValueError('FTP authorization source is required')
+    if b['ftp_selection'] not in ('manual','garmin'):raise ValueError('Choose manual or Garmin FTP')
     if b['ftp_watts'] is not None: _number(b['ftp_watts'],'confirmed FTP watts',40,700)
     if not isinstance(b['fixed_events'],list) or len(b['fixed_events'])>20: raise ValueError('Use at most twenty fixed commitments')
+    from .training_prescriptions import validate_calibration
+    b['calibration']=validate_calibration(b['calibration'])
+    if b['workout_location'] not in ('indoor','outdoor'):raise ValueError('Choose indoor or outdoor cycling')
+    if b['strength_role'] not in (None,'primary','secondary'):raise ValueError('Strength role must be primary or secondary')
+    if b['strength_purpose'] not in (None,'general_fitness','cycling_support','strength_development'):raise ValueError('Choose a strength purpose')
+    if not isinstance(b['strength_capacity'],dict) or set(b['strength_capacity'])-{'pull_up_reps','dip_reps'}:raise ValueError('Invalid strength capability fields')
+    for count in b['strength_capacity'].values():_number(count,'confirmed comfortable repetitions',0,50,True)
+    if b['program_start']:date.fromisoformat(b['program_start'])
     events=[];seen=set()
     for event in b['fixed_events']:
-        if not isinstance(event,dict) or set(event)-{'date','title','sport','start_time','duration_minutes','effort','distance_km','elevation_gain_meters','is_race','duration_estimated'}: raise ValueError('Unsupported fixed commitment fields')
+        if not isinstance(event,dict) or set(event)-{'date','title','sport','start_time','duration_minutes','effort','distance_km','elevation_gain_meters','is_race','duration_estimated','id'}: raise ValueError('Unsupported fixed commitment fields')
         e={'duration_estimated':False,'distance_km':None,'elevation_gain_meters':None,'is_race':False,'title':'Fixed commitment','sport':'cycling','start_time':None,'duration_minutes':None,'effort':'unknown',**event}
         if not isinstance(e.get('date'),str): raise ValueError('Commitment date must use YYYY-MM-DD')
         day=date.fromisoformat(e['date']).isoformat()
-        if day in seen: raise ValueError('Use one fixed commitment per date')
-        seen.add(day)
+        if 'id' not in e:e['id']='event-'+str(uuid.uuid5(uuid.NAMESPACE_URL,e['title']+'|'+day+'|'+str(e['start_time'])))
+        if not isinstance(e['id'],str) or len(e['id'])>160 or e['id'] in seen:raise ValueError('Each event needs a unique stable ID')
+        seen.add(e['id'])
         if e['sport'] not in ('cycling','running','strength'): raise ValueError('Choose a supported commitment sport')
         if not isinstance(e['title'],str) or not e['title'].strip() or len(e['title'])>160: raise ValueError('Commitment title is required (up to 160 characters)')
         if type(e['duration_estimated']) is not bool:raise ValueError('Duration estimate flag must be yes or no')
@@ -55,7 +80,10 @@ def validate_brief(value):
 def read_brief(path=None):
     with connect(path) as c:
         row=c.execute('SELECT * FROM training_coach_brief WHERE id=1').fetchone()
-    return {'revision':row['revision'],'brief':json.loads(row['brief_json'])} if row else {'revision':0,'brief':dict(DEFAULT)}
+        active=c.execute("SELECT state_json FROM active_training_program WHERE id=1 AND status IN ('active','paused')").fetchone()
+    from .training_ftp import resolve
+    with connect(path) as c:ftp=resolve(c)
+    return {'garmin_ftp':ftp,'revision':row['revision'] if row else 0,'brief':validate_brief(json.loads(row['brief_json'])) if row else validate_brief(json.loads(active['state_json'])['brief']) if active else dict(DEFAULT),'active_brief':validate_brief(json.loads(active['state_json'])['brief']) if active else None}
 
 
 def save_brief(brief,expected_revision,path=None):
@@ -65,26 +93,32 @@ def save_brief(brief,expected_revision,path=None):
         row=c.execute('SELECT revision FROM training_coach_brief WHERE id=1').fetchone()
         if type(expected_revision) is not int or expected_revision!=(row[0] if row else 0): raise ValueError('Coaching brief changed; reload before saving')
         revision=expected_revision+1
-        c.execute('INSERT INTO training_coach_brief(id,revision,brief_json) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,brief_json=excluded.brief_json,updated_at=CURRENT_TIMESTAMP',(revision,encoded(b)))
-        c.execute('INSERT INTO training_coach_brief_revisions(revision,brief_json) VALUES(?,?)',(revision,encoded(b)))
-        active=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status IN ('active','paused')").fetchone()
-        if active:
-            state=json.loads(active['state_json'])
-            state['brief']={**state['brief'],'fixed_events':b['fixed_events']}
-            state['blocks']=roadmap(state['brief'],date.fromisoformat(state['starts_on']),_context(c,datetime.now(timezone.utc))['answers'])
-            state['commitment_revision']=revision
-            c.execute('UPDATE active_training_program SET state_json=?,revision=revision+1 WHERE id=1',(encoded(state),))
-
+        _store_brief(c,b,revision)
     return {'revision':revision,'brief':b}
 
 
-def parse_request(message,brief,week_start):
+def _store_brief(c,b,revision):
+    c.execute('INSERT INTO training_coach_brief(id,revision,brief_json) VALUES(1,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,brief_json=excluded.brief_json,updated_at=CURRENT_TIMESTAMP',(revision,encoded(b)))
+    c.execute('INSERT INTO training_coach_brief_revisions(revision,brief_json) VALUES(?,?)',(revision,encoded(b)))
+
+
+def parse_request(message,brief,week_start,today=None):
     """Extract explicit user facts only; ask for missing trip details instead of inventing them."""
     if not isinstance(message,str) or not 1<=len(message.strip())<=4000: raise ValueError('Describe your goal or commitment (up to 4,000 characters)')
+    today=today or date.today()
     b=validate_brief(brief);text=message.lower();recognized=[]
     for typo,day in [('wedensday','wednesday'),('wensday','wednesday'),('firday','friday'),('tusday','tuesday')]:
         text=re.sub(r'\b'+typo+r'\b',day,text)
     text=re.sub(r'\b(one|two|three|four|five|six)\s+(hours?|hrs?|minutes?|mins?)\b',lambda m:str({'one':1,'two':2,'three':3,'four':4,'five':5,'six':6}[m[1]])+' '+m[2],text)
+    if re.search(r'\bstrength\b.*\bprimary\b|\bprimary\b.*\bstrength\b',text):b['strength_role']='primary';b['strength_purpose']='strength_development'
+    if re.search(r'\bstrength\b.*\bsecondary\b|\bsecondary\b.*\bstrength\b',text):b['strength_role']='secondary'
+    if re.search(r'\b(cycling.support|strength.*(?:improve|support).*cycling)\b',text):b['strength_purpose']='cycling_support'
+    if 'strength' in text and 'general fitness' in text:b['strength_purpose']='general_fitness'
+    if re.search(r'\b(?:indoor|trainer) (?:workout|ride|session)s?\b',text):b['workout_location']='indoor'
+    if re.search(r'\boutdoor (?:workout|ride|session)s?\b',text):b['workout_location']='outdoor'
+    power=re.search(r'\bpower meter\b.*\b(indoors?|outdoors?|both|neither|none)\b',text)
+    if power:b['calibration']['power_access']={'indoors':'indoor','outdoors':'outdoor','neither':'none'}.get(power[1],power[1])
+    if re.search(r'\b(?:no|without|don.t have a) power meter\b',text):b['calibration']['power_access']='none'
     if re.search(r'\b(running|run|marathon)\b',text): b['goal_sport']='running'
     elif re.search(r'\b(cycling|bike|ride)\b',text): b['goal_sport']='cycling'
     goal_text=re.sub(r'\b(?:not (?:a )?|non[- ])race\b','',text)
@@ -92,18 +126,25 @@ def parse_request(message,brief,week_start):
     if len(goals)==1: b['goal']=goals[0];recognized.append(GOALS[goals[0]])
     elif len(goals)>1: recognized.append('Multiple goals mentioned: choose the primary goal below.')
     horizon=re.search(r'\b(\d{1,2})[ -]*weeks?\b',text)
-    if horizon: b['horizon_weeks']=int(horizon[1])
+    if horizon: b['horizon_weeks']=int(horizon[1]);b['duration_confirmed']=True
     ftp=re.search(r'\bftp\s*(?:is|of|=|at)?\s*(\d{2,3})\s*(?:w|watts)\b',text)
-    if ftp: b['ftp_watts']=int(ftp[1])
+    if ftp:
+        previous_ftp=b['ftp_watts'];b['ftp_watts']=int(ftp[1])
+        measured=re.search(r'\b(?:measured|tested|confirmed)(?:\s+on)?\s+(\d{4}-\d{2}-\d{2})\b',text)
+        if measured:b['calibration']['ftp_confirmed_on']=date.fromisoformat(measured[1]).isoformat()
+        elif re.search(r'\b(?:measured|tested|confirmed)(?:\s+it)?\s+today\b',text):b['calibration']['ftp_confirmed_on']=today.isoformat()
+        elif previous_ftp!=b['ftp_watts']:b['calibration']['ftp_confirmed_on']=None
     days=['monday','tuesday','wednesday','thursday','friday','saturday','sunday']
     clauses=re.split(r'(?<!\d)\.(?!\d)|[;\n]|\band\s+(?=(?:an?\s+)?(?:hard|easy|moderate|long)\b)|(?=\blong\s+(?:ride|trip|run)\b)',text)
     extracted=False
     for clause in clauses:
         mentioned=[i for i,name in enumerate(days) if re.search(r'\b'+name+r'\b',clause)]
         dates=re.findall(r'\b\d{4}-\d{2}-\d{2}\b',clause)
+        if not dates and not mentioned and re.search(r'\btomorrow\b',clause):dates=[(today+timedelta(days=1)).isoformat()]
+        elif not dates and not mentioned and re.search(r'\btoday\b',clause):dates=[today.isoformat()]
         if not re.search(r'\b(trips?|rides?|race|runs?|workouts?|sessions?)\b',clause) or not (mentioned or dates): continue
         extracted=True
-        when_list=dates or [(week_start+timedelta(days=day)).isoformat() for day in mentioned]
+        when_list=dates or [(week_start+timedelta(days=(day-week_start.weekday())%7)).isoformat() for day in mentioned]
         duration=re.search(r'\b(\d+(?:\.\d+)?)[\s-]*(hours?|hrs?|minutes?|mins?)\b',clause)
         minutes=round(float(duration[1])*(60 if duration[2].startswith(('h','hr')) else 1)) if duration else None
         clock=re.search(r'\b(?:at|starting)\s+(\d{1,2}:\d{2})\b',clause)
@@ -116,13 +157,17 @@ def parse_request(message,brief,week_start):
             event={'date':when,'title':'Race' if race else 'Fixed trip' if 'trip' in clause else 'Fixed session',
                    'sport':'running' if re.search(r'\brun(?:ning)?\b',clause) else 'strength' if 'strength' in clause else 'cycling',
                    'start_time':clock[1].zfill(5) if clock else None,'duration_minutes':minutes,'effort':effort,'distance_km':float(distance[1]) if distance else None,'elevation_gain_meters':float(climb[1]) if climb else None,'is_race':race}
-            previous=next((e for e in b['fixed_events'] if e['date']==when),{})
+            matches=[e for e in b['fixed_events'] if e['date']==when and (not event_name or e['title'].lower()==event_name[1].strip().lower())]
+            if len(matches)>1:raise ValueError('More than one event is on that date; identify it by name or ID.')
+            previous=matches[0] if matches else {}
+            if previous.get('id'):event['id']=previous['id']
+
             if event_name:event['title']=event_name[1].strip().title()
             elif previous.get('title'):event['title']=previous['title']
             for key in ('start_time','duration_minutes','distance_km','elevation_gain_meters'):
                 if event[key] is None: event[key]=previous.get(key)
             if effort=='unknown': event['effort']=previous.get('effort','unknown')
-            b['fixed_events']=[e for e in b['fixed_events'] if e['date']!=when]+[event]
+            b['fixed_events']=[e for e in b['fixed_events'] if not previous or e.get('id')!=previous.get('id')]+[event]
             if race: b['target_date']=when
             recognized.append('Fixed commitment on '+when)
     # A plain follow-up can complete the most recent incomplete commitment.
@@ -148,6 +193,8 @@ def roadmap(b,week_start,answers):
                'endurance':f"Prioritize a longer conversational {b['goal_sport']} session within confirmed time and volume limits.",
                'race':f"Build {b['goal_sport']} endurance for {b['event_name'] or 'the event'}; review specific demands before selecting workouts.",
                'general':'Maintain manageable, consistent sessions and a mix of the selected sports.'}.get(goal,'Choose a primary goal.')
+        if b.get('strength_role')=='primary':focus='Prioritize strength development: record actual load, clean repetitions and repetitions in reserve; progress only after tolerated completion. Cycling supports recovery and general aerobic fitness.'
+        elif b.get('strength_purpose')=='cycling_support':focus+=' Secondary strength supports squat/hinge/core capacity around key rides.'
         if recovery: phase='Recovery / review';focus='Reduce generated volume and review effort, soreness and completed sessions.'
         if target and start<=target<=start+timedelta(days=6): phase='Race week';focus='Keep surrounding sessions short and easy; protect the event day.'
         elif target and 0<(target-start).days<=14: phase='Freshen up';focus='Reduce generated volume approaching the event. Fixed commitments remain visible.'
@@ -160,35 +207,75 @@ def roadmap(b,week_start,answers):
             focus+=f" Prepare for {'race' if event.get('is_race') else 'fixed trip'} on {event['date']}: {demands}; emphasize sustained endurance and climbing as relevant."
         races=[e for e in b['fixed_events'] if e.get('is_race')]
         if any(start<=date.fromisoformat(e['date'])<=start+timedelta(days=6) for e in races):phase='Race week';focus+=' Prioritize freshness around the fixed race.'
-        rows.append({'week':i+1,'starts_on':start.isoformat(),'phase':phase,'focus':focus})
+        objectives={'volume_ceiling_minutes':sum(answers.get('weekly_minutes',{}).values()),'long_session_available_minutes':max((a['minutes'] for a in answers.get('availability',[])),default=0),'quality_session_limit':0 if recovery or phase in ('Race week','Freshen up','Post-event recovery') else 1,'progression':'Reassess completed sport-specific work and tolerated feedback; build only within confirmed limits.'}
+        rows.append({'week':i+1,'starts_on':start.isoformat(),'phase':phase,'focus':focus,'objectives':objectives})
     return rows
 
 
+def summarize_blocks(phases):
+    blocks=[]
+    for phase in phases:
+        if blocks and blocks[-1]['phase']==phase['phase']:
+            blocks[-1]['end_week']=phase['week'];blocks[-1]['weeks']+=1
+        else:blocks.append({'phase':phase['phase'],'start_week':phase['week'],'end_week':phase['week'],'weeks':1,'focus':phase['focus']})
+    return blocks
+
+
 def _scheduled(day,clock,tz):
-    local=datetime.fromisoformat(f'{day}T{clock}').replace(tzinfo=ZoneInfo(tz))
+    local=datetime.fromisoformat(f"{day}T{clock or '12:00'}").replace(tzinfo=ZoneInfo(tz))
     if local.astimezone(timezone.utc).astimezone(ZoneInfo(tz)).replace(tzinfo=None)!=local.replace(tzinfo=None) or local.replace(fold=0).utcoffset()!=local.replace(fold=1).utcoffset(): raise ValueError('Choose a time outside the timezone clock change')
     return local.isoformat()
 
 
-def _preview(c,brief,week_start,tz,now,replace_plan_id):
+def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,session_changes=None,resolve_ftp=True):
     b=validate_brief(brief);timezone_info(tz);today=now.astimezone(ZoneInfo(tz)).date()
-    if week_start.weekday()!=0 or week_start<today-timedelta(days=today.weekday()): raise ValueError('Choose a current or future Monday')
-    context=_context(c,now);answers=context['answers'];questions=[];warnings=[]
+    anchor=date.fromisoformat(b['program_start']) if b['program_start'] else None
+    if anchor:
+        if week_start<anchor or week_start+timedelta(days=6)<today:raise ValueError('Choose a current or future seven-day window within the agreed program dates')
+    elif week_start.weekday()!=0 or week_start<today-timedelta(days=today.weekday()):raise ValueError('Choose a current or future Monday, or agree an explicit program start date')
+    from .training_ftp import resolve
+    garmin_ftp=resolve(c,today)
+    if b['ftp_selection']=='garmin' and resolve_ftp:
+        b['ftp_watts']=garmin_ftp['watts']
+        b['calibration']['ftp_confirmed_on']=garmin_ftp['measurement_date']
+    from .training import validate_answers
+    patch=validate_answers(candidate_answers or {})
+    context=_context(c,now,patch)
+    answers=context['answers'];questions=[];warnings=[]
+    if answers.get('pain_or_illness'):questions.append('Resolve current pain or illness before approving training')
+    if answers.get('restrictions_notes'):questions.append('Review training restrictions before approval')
     if b['goal'] is None: questions.append('What is the primary goal: FTP, endurance, race preparation or staying in shape?')
     if b['goal']=='ftp' and 'cycling' not in answers.get('sports',[]): questions.append('Select cycling in Training preferences for an FTP plan.')
     if b['goal'] in ('endurance','race') and b['goal_sport'] not in answers.get('sports',[]): questions.append('Select the goal sport in Training preferences.')
     if b['goal']=='race' and not b['event_name'].strip(): questions.append('What kind of race is it? Add its distance, terrain and demands.')
     if b['goal']=='race' and not b['target_date']: questions.append('What is the race date? Add the event name and its demands in the commitment title.')
-    if b['target_date'] and date.fromisoformat(b['target_date'])<today: questions.append('The target event is in the past; choose an upcoming date.')
+    if b['target_date'] and date.fromisoformat(b['target_date'])<today and not b['program_start']: questions.append('The target event is in the past; choose an upcoming date.')
+    from .training_prescriptions import questions as calibration_questions
+    sensor_questions=calibration_questions(b,answers.get('sports',[]))
+    if b['goal']=='ftp' and b['ftp_watts'] and b['calibration']['power_access']=='unknown':questions.append(sensor_questions[0])
+    strength_questions=[]
+    if 'strength' in answers.get('sports',[]):
+        if b['strength_role'] is None:strength_questions.append('Is strength primary or secondary, and should it support cycling, general fitness, or strength development?')
+        for equipment,key in [('pull_up_bar','pull_up_reps'),('dip_bars','dip_reps')]:
+            if equipment in answers.get('equipment',[]) and key not in b['strength_capacity']:questions.append('How many comfortable '+('pull-ups' if key=='pull_up_reps' else 'dips')+' can you perform? Equipment alone does not establish capability.')
     questions.extend(q['question'] for q in context['questions']);questions.extend(context['blockers'])
+    active_legacy=c.execute("SELECT state_json FROM active_training_program WHERE id=1 AND status IN ('active','paused')").fetchone()
+    legacy_duration=bool(active_legacy and b.get('program_start') and json.loads(active_legacy['state_json']).get('starts_on')==b['program_start'])
+    if not b['duration_confirmed'] and not legacy_duration:
+        duration_question='How many weeks would you like to train for? Choose 4, 8, 12, 16, or a custom duration from 4–24 weeks.'
+        return {'status':'needs_input','brief':b,'duration_confirmed':False,'questions':[duration_question]+questions,'calibration_questions':sensor_questions,'strength_questions':strength_questions,'warnings':warnings,'roadmap':[],'block_summary':[],'sessions':[],'protected_days':[],'weekly_minutes':{},'week_start':week_start.isoformat(),'timezone':tz,'garmin_ftp':garmin_ftp,'candidate_answers':patch,'session_changes':session_changes or [],'expected_preference_revision':context['revision'],'fingerprint':None,'replace_plan_id':replace_plan_id,'replaces_session_count':0,'rationale':[],'advisory':'Choose the duration in the trainer conversation before reviewing a long-term plan.'}
     existing=[dict(r) for r in c.execute("SELECT * FROM planned_workouts WHERE completion_status NOT IN ('cancelled','skipped') AND scheduled_for IS NOT NULL ORDER BY id")]
     plan=c.execute('SELECT * FROM training_plans WHERE id=?',(replace_plan_id,)).fetchone() if replace_plan_id else None
-    replaceable=[]
+    replaceable=[];replace_ids=set()
     if replace_plan_id:
-        if not plan or plan['starts_on']!=week_start.isoformat() or plan['status'] not in ('draft','active'): raise ValueError('Choose a draft or active plan for this week to replace')
-        replaceable=[w for w in existing if w['training_plan_id']==replace_plan_id]
-        if any(w['completion_status']!='planned' or w['garmin_workout_id'] or w['publish_status']!='local' for w in replaceable): raise ValueError('Completed or published sessions cannot be replaced; choose a future week')
-    active=[w for w in existing if w['training_plan_id']!=replace_plan_id]
+        if not plan or plan['status'] not in ('draft','active'):raise ValueError('Choose a draft or active plan to replace')
+        replace_ids.add(replace_plan_id)
+        for child in c.execute("SELECT id,context_json FROM training_plans WHERE status='active'"):
+            if json.loads(child['context_json']).get('program_id')==replace_plan_id:replace_ids.add(child['id'])
+        replaceable=[w for w in existing if w['training_plan_id'] in replace_ids and w['completion_status']=='planned' and (datetime.fromisoformat(w['scheduled_for'])>=now or json.loads(w['definition_json']).get('time_unspecified') and datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()>=today)]
+        if any(w['garmin_workout_id'] or w['publish_status']!='local' for w in replaceable):raise ValueError('Published sessions cannot be replaced locally')
+    excluded={w['id'] for w in replaceable}
+    active=[w for w in existing if w['id'] not in excluded]
     import statistics
     for event in b['fixed_events']:
         if event['duration_minutes'] is None and event.get('distance_km') and event['sport'] in ('cycling','running'):
@@ -210,7 +297,7 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id):
             slots=[slot for slot in answers.get('availability',[]) if slot['weekday']==date.fromisoformat(event['date']).weekday()]
             if slots:event['start_time']=slots[0]['start_time']
         if event.get('duration_estimated'):warnings.append(f"{event['title']}: approximately {event['duration_minutes']} minutes estimated from comparable recorded activities. Distance/elevation remain the planned demands; review this estimate.")
-    anchors=[e for e in b['fixed_events'] if week_start.isoformat()<=e['date']<=(week_start+timedelta(days=6)).isoformat()]
+    anchors=[e for e in b['fixed_events'] if week_start.isoformat()<=e['date']<=(week_start+timedelta(days=6)).isoformat() and not (e['date']<today.isoformat() and any(json.loads(w['definition_json']).get('event_id')==e['id'] for w in existing))]
     # Adjacent commitments also protect recovery across week boundaries.
     protected={};occupied={e['date'] for e in anchors};sessions=[];allocated={s:0 for s in answers.get('sports',[])}
     hard=False
@@ -223,8 +310,8 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id):
             questions.append('An existing workout has an unknown duration; review it.');continue
         if week_start<=day<=week_start+timedelta(days=6):
             if w['sport'] in allocated: allocated[w['sport']]+=minutes
-            if definition.get('template_id')=='cycling_controlled_intervals' or definition.get('fixed_commitment') and 'hard' in definition.get('effort_target',{}).get('description',''): hard=True
-        if minutes>=90 or definition.get('template_id')=='cycling_controlled_intervals':
+            if definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals' or definition.get('fixed_commitment') and 'hard' in definition.get('effort_target',{}).get('description',''): hard=True
+        if minutes>=90 or definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals':
             for offset in (-1,1): protected[(day+timedelta(days=offset)).isoformat()]='Recovery around an existing demanding session.'
     for e in b['fixed_events']:
         demanding=e.get('is_race') or e['effort'] in ('hard','unknown') or (e['duration_minutes'] or 0)>=90 or (e.get('distance_km') or 0)>=60 or (e.get('elevation_gain_meters') or 0)>=1000
@@ -236,18 +323,25 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id):
         occupied.add(b['target_date'])
         for offset in (-2,-1,1,2): protected[(date.fromisoformat(b['target_date'])+timedelta(days=offset)).isoformat()]='Protect freshness and recovery around the race.'
     for e in anchors:
-        if not e['start_time'] or e['duration_minutes'] is None: questions.append(f"{e['title']} on {e['date']}: what start time and expected duration?");continue
-        if datetime.fromisoformat(_scheduled(e['date'],e['start_time'],tz))<now: questions.append(f"{e['title']} is in the past; select a future commitment.")
+        if e['duration_minutes'] is None: questions.append(f"{e['title']} on {e['date']}: what expected duration?");continue
+        if (e['start_time'] and datetime.fromisoformat(_scheduled(e['date'],e['start_time'],tz))<now) or e['date']<today.isoformat(): questions.append(f"{e['title']} is in the past; select a future commitment.")
         if e.get('is_race') and e['effort']=='unknown':e['effort']='hard'
         if e['effort']=='unknown': questions.append(f"{e['title']} on {e['date']}: is the expected effort easy, moderate or hard?")
         if e['sport'] not in allocated or e['sport'] in answers.get('blocked_sports',[]): questions.append('The fixed commitment sport must be selected and not excluded.');continue
         allocated[e['sport']]+=e['duration_minutes'];hard=hard or e['effort'] in ('hard','unknown')
         definition={'version':VERSION,'template_id':'fixed_commitment','sport':e['sport'],'title':e['title'],'duration_minutes':e['duration_minutes'],
-                    'fixed_commitment':True,'distance_km':e.get('distance_km'),'elevation_gain_meters':e.get('elevation_gain_meters'),'is_race':e.get('is_race',False),'duration_estimated':e.get('duration_estimated',False),'effort_target':{'method':'user_reported','description':e['effort']+' effort, as specified by you.'},'rationale':['Preserved fixed commitment; time and duration come from your brief.'],'steps':[{'type':'fixed','duration_seconds':e['duration_minutes']*60,'effort':e['effort']}]}
+                    'fixed_commitment':True,'event_id':e['id'],'distance_km':e.get('distance_km'),'elevation_gain_meters':e.get('elevation_gain_meters'),'is_race':e.get('is_race',False),'duration_estimated':e.get('duration_estimated',False),'effort_target':{'method':'user_reported','description':e['effort']+' effort, as specified by you.'},'rationale':['Preserved fixed commitment; time and duration come from your brief.'],'steps':[{'type':'fixed','duration_seconds':e['duration_minutes']*60,'effort':e['effort']}]}
+        if e['start_time'] is None:definition.update(scheduled_date=e['date'],time_unspecified=True,schedule_timezone=tz)
         sessions.append({'sport':e['sport'],'title':e['title'],'scheduled_for':_scheduled(e['date'],e['start_time'],tz),'definition':definition})
     for sport,total in allocated.items():
         if total>answers.get('weekly_minutes',{}).get(sport,0): questions.append(f"Fixed and existing {sport} sessions total {total} minutes, above the confirmed weekly limit. Review the manageable volume in Training preferences; the trip is not shortened.")
-    phases=roadmap(b,week_start,answers)
+    program_start=date.fromisoformat(b['program_start']) if b['program_start'] else week_start
+    phases=roadmap(b,program_start,answers)
+    block=next((phase for phase in phases if date.fromisoformat(phase['starts_on'])<=week_start<date.fromisoformat(phase['starts_on'])+timedelta(days=7)),None)
+    if block is None:questions.append('The reviewed week is outside the chosen training duration')
+    block=block or {'phase':'Outside plan','objectives':{'quality_session_limit':0}}
+    reduced=block['phase'] in ('Recovery / review','Freshen up','Post-event recovery','Race week')
+    if block['objectives']['quality_session_limit']==0:hard=True
     from .active_training import capability
     from pathlib import Path
     db_path=Path(c.execute('PRAGMA database_list').fetchone()['file'])
@@ -259,48 +353,142 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id):
     if capacity['activity_count']>=6 and capacity['anaerobic_effect'] is not None and capacity['anaerobic_effect']>=3:
         hard=True;warnings.append('Recent Garmin anaerobic stimulus is substantial; no additional interval session is added.')
 
+    for sport_context in capacity.get('sports',[]):
+        for observed in sport_context.get('difficulty',{}).get('demanding_sessions',[]):
+            day=date.fromisoformat(observed['date'])
+            if day>=today-timedelta(days=1):protected[(day+timedelta(days=1)).isoformat()]='Recovery after demanding recorded '+sport_context['sport']+' activity.'
+    program_start=date.fromisoformat(b['program_start']) if b['program_start'] else week_start
+    week_index=max(0,(week_start-program_start).days//7)
+    strength_performance=[dict(r) for r in c.execute("SELECT s.* FROM training_strength_performance s JOIN planned_workouts w ON w.id=s.workout_id WHERE w.completion_status='completed' ORDER BY recorded_at")]
+    history_feedback=context['recent_feedback']
+    tolerated=sum(f.get('completion_status')=='completed' and f.get('effort') is not None and f['effort']<=7 and (f.get('soreness') or 0)<=3 and not f['pain_or_illness'] for f in history_feedback)>=2 and not adverse_feedback
+    priority_strength=b['strength_role']=='primary' or answers.get('priority')=='strength'
     # First weekly draft is a starting week; each later draft is reassessed, never automatically intensified.
     if context['ready'] and not questions:
         slots=answers['availability']
         for slot in sorted(slots,key=(lambda s:(-s['minutes'],s['weekday'])) if b['goal'] in ('endurance','race') else (lambda s:s['weekday'])):
-            day=week_start+timedelta(days=slot['weekday']);key=day.isoformat()
+            day=week_start+timedelta(days=(slot['weekday']-week_start.weekday())%7);key=day.isoformat()
             if day<today or key in occupied or key in protected or len(sessions)+sum(week_start<=datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()<=week_start+timedelta(days=6) for w in active)>=6: continue
-            if datetime.fromisoformat(_scheduled(key,slot['start_time'],tz))<now: continue
+            if slot['start_time'] is not None and datetime.fromisoformat(_scheduled(key,slot['start_time'],tz))<now: continue
             if any(datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()==day for w in active): warnings.append(f'{key}: existing workout retained; no additional session added.');continue
-            candidates=sorted(answers['sports'],key=lambda s:(allocated[s]/max(1,answers['weekly_minutes'][s]),0 if s==('cycling' if b['goal']=='ftp' else b['goal_sport']) and b['goal'] in ('ftp','endurance','race') else 1))
+            candidates=sorted(answers['sports'],key=lambda s:(allocated[s]/max(1,answers['weekly_minutes'][s])*(.5 if s=='strength' and priority_strength else 1),0 if (s=='strength' if priority_strength else s==b['goal_sport']) else 1))
             for sport in candidates:
+                if sport in b['sport_days'] and day.weekday() not in b['sport_days'][sport]:continue
                 if sport=='strength' and any(abs((datetime.fromisoformat(s['scheduled_for']).astimezone(ZoneInfo(tz)).date()-day).days)<2 for s in sessions+active if s['sport']=='strength'): continue
-                minutes=min(slot['minutes'],answers['weekly_minutes'][sport]-allocated[sport],30 if answers['experience'][sport]=='new' else (120 if sport=='cycling' else 90) if sport==b['goal_sport'] and b['goal'] in ('endurance','race') else 60)
+                minutes=min(slot['minutes'],answers['weekly_minutes'][sport]-allocated[sport],30 if answers['experience'][sport]=='new' else slot['minutes'] if sport=='cycling' else 90 if sport==b['goal_sport'] and b['goal'] in ('endurance','race') else 60)
                 if b['goal']=='race' and b['target_date'] and (date.fromisoformat(b['target_date'])-day).days<=14: minutes=min(minutes,30)
                 template={'cycling':'cycling_easy','running':'running_easy','strength':'strength_foundation'}[sport]
                 if capacity['activity_count']>=6 and capacity['longest_minutes']>0 and sport==b['goal_sport']:
-                    minutes=min(minutes,max(30,capacity['longest_minutes']))
+                    sport_rows=[row for row in capacity.get('sports',[]) if row['sport']==sport]
+                    longest=sport_rows[0]['longest_minutes'] if sport_rows else 0
+                    if longest:minutes=min(minutes,max(30,round(longest*(1+min(.15,.05*week_index)) if tolerated else longest)))
+                if reduced:minutes=max(15 if sport=='running' else 20,round(minutes*.7))
                 if adverse_feedback: minutes=min(minutes,45)
                 if minutes<(15 if sport=='running' else 20): continue
-                definition=workout_definition(template,min(minutes,180),answers)
-                if b['goal']=='ftp' and sport=='cycling' and answers['experience'][sport]!='new' and not hard and minutes>=45 and answers['weekly_minutes'][sport]>=120:
-                    definition.update(template_id='cycling_controlled_intervals',title='Controlled cycling intervals',duration_minutes=minutes,
-                        effort_target={'method':'confirmed_ftp' if b['ftp_watts'] else 'perceived_effort','description':f"Work intervals at 90–95% of your confirmed {b['ftp_watts']:g} W FTP; ease off if this feels harder than controlled." if b['ftp_watts'] else 'Controlled work intervals, perceived effort about 6–7/10. No FTP is inferred.'})
-                    definition['steps']=[{'type':'warmup','duration_seconds':600,'effort':'easy'}, {'type':'work','duration_seconds':360,'effort':definition['effort_target']['description']}, {'type':'recovery','duration_seconds':240,'effort':'easy'}, {'type':'work','duration_seconds':360,'effort':definition['effort_target']['description']}, {'type':'easy','duration_seconds':(minutes-26)*60,'effort':'conversational'}]
-                    definition['rationale'].append('One controlled interval session for the FTP goal; two 6-minute efforts are a provisional starting template.');hard=True
-                    protected[(day+timedelta(days=1)).isoformat()]='Recovery after the controlled interval session.'
+                definition=workout_definition(template,minutes,answers)
+                from .training_prescriptions import endurance, strength
+                if sport=='strength':
+                    try:definition=strength(definition,{**b,'strength_performance':strength_performance},answers,week_index,tolerated)
+                    except ValueError as error:questions.append(str(error));continue
+                elif sport=='cycling':
+                    kind='endurance'
+                    long_already=any(s['sport']=='cycling' and s['definition']['duration_minutes']>=90 for s in sessions)
+                    if minutes>=90 and not long_already:
+                        kind='climbing_endurance' if any((e.get('elevation_gain_meters') or 0)>=1000 for e in b['fixed_events']) else 'long_tempo' if tolerated and week_index%3==2 and not hard else 'long_endurance'
+                        if kind=='long_tempo':hard=True
+                    elif long_already:minutes=min(minutes,60)
+                    if b['goal']=='ftp' and answers['experience'][sport]!='new' and not hard and minutes>=45 and answers['weekly_minutes'][sport]>=120:
+                        kind=('threshold','tempo','vo2')[week_index%3];minutes=min(minutes,60);hard=True
+                        protected[(day+timedelta(days=1)).isoformat()]='Recovery after a quality cycling session.'
+                    if reduced:kind='recovery'
+                    definition=endurance(kind,minutes,b,sport,today=today)
+                    definition['rationale'].append(f'Building-block week {week_index+1}; sustained endurance for the selected event/direction.')
+                    if any((e.get('elevation_gain_meters') or 0)>=1000 for e in b['fixed_events']):definition['rationale'].append('For the hilly event, use a sustained climbing route while keeping the prescribed intensity.')
+                definition['training_block']={'phase':block['phase'],'week':week_index+1,'program_start':program_start.isoformat()}
+                definition['rationale'].append('Current block: '+block['phase']+'. '+block.get('focus',''))
                 definition['rationale'].append('Goal: '+GOALS[b['goal']]+'. Fixed commitments count toward the confirmed weekly budget.')
+                if slot['start_time'] is None:definition.update(scheduled_date=key,time_unspecified=True,schedule_timezone=tz)
                 sessions.append({'sport':sport,'title':definition['title'],'scheduled_for':_scheduled(key,slot['start_time'],tz),'definition':definition});allocated[sport]+=minutes;occupied.add(key);break
+    sessions.sort(key=lambda session:session['scheduled_for'])
+    for index,session in enumerate(sessions):session['candidate_index']=index
+    changes=session_changes or []
+    if not isinstance(changes,list) or len(changes)>20:raise ValueError('Use at most twenty session changes')
+    for change in changes:
+        if not isinstance(change,dict) or set(change)-{'index','scheduled_for','scheduled_date','start_time','duration_minutes','title','exercises'}:raise ValueError('Unsupported session change')
+        index=change.get('index')
+        if type(index) is not int or not 0<=index<len(sessions):raise ValueError('Session changed; preview again')
+        session=sessions[index]
+        original_schedule={key:session['definition'][key] for key in ('scheduled_date','time_unspecified','schedule_timezone') if key in session['definition']}
+        if session['definition'].get('fixed_commitment'):raise ValueError('Edit fixed commitments in the event fields')
+        if 'title' in change:
+            if not isinstance(change['title'],str) or not 1<=len(change['title'].strip())<=160:raise ValueError('Session title required up to 160 characters')
+            session['title']=change['title'].strip()
+        if 'scheduled_for' in change:
+            when=datetime.fromisoformat(change['scheduled_for'])
+            if not when.tzinfo or when<now or not week_start<=when.astimezone(ZoneInfo(tz)).date()<=week_start+timedelta(days=6):raise ValueError('Choose a future session time in the reviewed week')
+            session['scheduled_for']=when.isoformat();original_schedule={}
+        if 'scheduled_date' in change:
+            date_only=date.fromisoformat(change['scheduled_date']);clock=change.get('start_time')
+            if date_only<today or not week_start<=date_only<=week_start+timedelta(days=6):raise ValueError('Choose a current or future day in the reviewed window')
+            session['scheduled_for']=_scheduled(date_only.isoformat(),clock,tz)
+            original_schedule={'scheduled_date':date_only.isoformat(),'time_unspecified':clock is None,'schedule_timezone':tz}
+        if 'duration_minutes' in change:
+            minutes=_number(change['duration_minutes'],'session minutes',20,360,True)
+            from .training_prescriptions import endurance,strength
+            if session['sport']=='strength':
+                base=workout_definition('strength_foundation',minutes,answers)
+                session['definition']=strength(base,b,answers,week_index,tolerated)
+            else:session['definition']=endurance(session['definition'].get('workout_kind','endurance'),minutes,b,session['sport'],today=today)
+        if 'exercises' in change:
+            if session['sport']!='strength' or not isinstance(change['exercises'],list) or not 1<=len(change['exercises'])<=20:raise ValueError('Exercise edits require a strength session')
+            existing_exercises={exercise['id']:exercise for exercise in session['definition'].get('exercises',[])}
+            seen=set()
+            for edit in change['exercises']:
+                if not isinstance(edit,dict) or set(edit)-{'id','sets','repetitions','rest_seconds','load_target_kg'} or edit.get('id') not in existing_exercises or edit['id'] in seen:raise ValueError('Edit each existing exercise at most once')
+                seen.add(edit['id']);exercise=existing_exercises[edit['id']]
+                for field,bounds in [('sets',(1,10)),('repetitions',(1,50)),('rest_seconds',(15,600))]:
+                    if field in edit:_number(edit[field],field,*bounds,True);exercise[field]=edit[field]
+                if 'load_target_kg' in edit:
+                    _number(edit['load_target_kg'],'exercise load kg',0,500);exercise['load_target_kg']=edit['load_target_kg']
+            cost=sum(exercise['sets']*(60+exercise['rest_seconds']) for exercise in existing_exercises.values())
+            if cost>session['definition']['duration_minutes']*60-300:raise ValueError('Exercise sets and rest exceed session time; increase duration or reduce sets')
+        for key in ('scheduled_date','time_unspecified','schedule_timezone'):session['definition'].pop(key,None)
+        session['definition'].update(original_schedule)
+        day=datetime.fromisoformat(session['scheduled_for']).astimezone(ZoneInfo(tz))
+        slot=next((slot for slot in answers.get('availability',[]) if slot['weekday']==day.weekday()),None)
+        if not slot or session['definition']['duration_minutes']>slot['minutes']:raise ValueError('Session exceeds confirmed availability')
+    for sport in answers.get('sports',[]):
+        if changes and sum(x['definition']['duration_minutes'] for x in sessions if x['sport']==sport)>answers['weekly_minutes'][sport]:raise ValueError('Edited sessions exceed weekly volume')
+    for i,s in enumerate(sessions):
+        start=datetime.fromisoformat(s['scheduled_for']);finish=start+timedelta(minutes=s['definition']['duration_minutes'])
+        for other in sessions[i+1:]:
+            if s['definition'].get('time_unspecified') or other['definition'].get('time_unspecified'):continue
+            other_start=datetime.fromisoformat(other['scheduled_for'])
+            if start<other_start+timedelta(minutes=other['definition']['duration_minutes']) and other_start<finish:questions.append('Upcoming events overlap; choose distinct times or an event priority.')
     for s in sessions:
         begin=datetime.fromisoformat(s['scheduled_for']);end=begin+timedelta(minutes=s['definition']['duration_minutes'])
         for w in active:
+            if s['definition'].get('time_unspecified') or json.loads(w['definition_json']).get('time_unspecified'):continue
             other=datetime.fromisoformat(w['scheduled_for'])
             if not other.tzinfo: questions.append('An existing workout has ambiguous timing; review it.');continue
             duration=json.loads(w['definition_json']).get('duration_minutes')
             if not isinstance(duration,(int,float)) or isinstance(duration,bool) or duration<=0: questions.append('An existing workout has an unknown duration; review it.');continue
             if begin<other+timedelta(minutes=duration) and other<end: questions.append('A fixed or generated session overlaps an existing workout. Select the existing week to replace or revise the commitment.')
+    for session in sessions:
+        session['scheduled_date']=session['definition'].get('scheduled_date') or session['scheduled_for'][:10]
+        session['time_unspecified']=session['definition'].get('time_unspecified',False)
+    for day in {session['scheduled_date'] for session in sessions if session['time_unspecified'] or any(json.loads(w['definition_json']).get('time_unspecified') and datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date().isoformat()==session['scheduled_date'] for w in active)}:
+        day_sessions=[session for session in sessions if session['scheduled_date']==day]
+        day_total=sum(session['definition']['duration_minutes'] for session in day_sessions)+sum(json.loads(w['definition_json'])['duration_minutes'] for w in active if datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date().isoformat()==day)
+        slot=next((slot for slot in answers.get('availability',[]) if slot['weekday']==date.fromisoformat(day).weekday()),None)
+        if day_total>(slot['minutes'] if slot else 1440):questions.append('Sessions on '+day+' exceed the confirmed day budget; adjust duration or assign explicit non-overlapping times.')
     recorded=[dict(r) for r in c.execute("SELECT activity_type,COUNT(*) AS activities,SUM(duration_seconds)/60 AS minutes FROM activities WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture' AND substr(started_at,1,10)>=? AND substr(started_at,1,10)<? GROUP BY activity_type",((today-timedelta(days=28)).isoformat(),today.isoformat()))]
-    state={'brief':b,'today':today.isoformat(),'sessions':sessions,'preferences':context,'existing':existing,'replace_plan_id':replace_plan_id,'week_start':week_start.isoformat(),'timezone':tz}
+    state={'brief':b,'today':today.isoformat(),'sessions':sessions,'candidate_answers':patch,'session_changes':changes,'preferences':context,'source_brief_revision':(c.execute('SELECT revision FROM training_coach_brief WHERE id=1').fetchone() or [0])[0],'source_program':dict(c.execute('SELECT * FROM active_training_program WHERE id=1').fetchone() or {}),'existing':existing,'replace_plan_id':replace_plan_id,'week_start':week_start.isoformat(),'timezone':tz}
     fingerprint=hashlib.sha256(encoded(state).encode()).hexdigest()
     questions=list(dict.fromkeys(questions))
-    return {'status':'needs_input' if questions else 'ready' if sessions else 'needs_review','brief':b,'week_start':week_start.isoformat(),'timezone':tz,
-            'questions':questions or ([] if sessions else ['No session fits the constraints. Review availability and fixed commitments.']),
-            'warnings':warnings,'roadmap':phases,'sessions':sorted(sessions,key=lambda s:s['scheduled_for']),
+    return {'candidate_answers':patch,'session_changes':changes,'garmin_ftp':garmin_ftp,'duration_confirmed':b['duration_confirmed'],'status':'needs_input' if questions else 'ready' if sessions else 'needs_review','brief':b,'week_start':week_start.isoformat(),'timezone':tz,
+            'calibration_questions':sensor_questions,'strength_questions':strength_questions,'questions':questions or ([] if sessions else ['No session fits the constraints. Review availability and fixed commitments.']),
+            'warnings':warnings,'roadmap':phases,'block_summary':summarize_blocks(phases),'sessions':sorted(sessions,key=lambda s:s['scheduled_for']),
             'protected_days':[{'date':day,'reason':reason} for day,reason in sorted(protected.items()) if week_start.isoformat()<=day<=(week_start+timedelta(days=6)).isoformat()],
             'weekly_minutes':allocated,'capability_context':capacity,'recorded_history':{'start':(today-timedelta(days=28)).isoformat(),'end':today.isoformat(),'note':'Recorded history provides context; it does not automatically increase volume.','sports':[{'activity_type':r['activity_type'],'activity_count':r['activities'],'recorded_minutes':r['minutes'] or 0} for r in recorded]},'expected_preference_revision':context['revision'],
             'fingerprint':fingerprint,'replace_plan_id':replace_plan_id,'replaces_session_count':len(replaceable),
@@ -308,8 +496,9 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id):
             'advisory':'This is a reviewed starting plan. Phase lengths, recovery buffers and interval doses are provisional planning defaults; no FTP improvement or race result is promised.'}
 
 
-def preview(brief,week_start,tz,path=None,now=None,replace_plan_id=None):
-    with connect(path) as c: return _preview(c,brief,week_start,tz,now or datetime.now(timezone.utc),replace_plan_id)
+def preview(brief,week_start,tz,path=None,now=None,replace_plan_id=None,candidate_answers=None,session_changes=None):
+    if brief.get('program_start') and week_start<date.fromisoformat(brief['program_start']):week_start=date.fromisoformat(brief['program_start'])
+    with connect(path) as c: return _preview(c,brief,week_start,tz,now or datetime.now(timezone.utc),replace_plan_id,candidate_answers,session_changes)
 
 
 def create_draft(brief,week_start,tz,fingerprint,path=None,now=None,replace_plan_id=None):
@@ -318,10 +507,6 @@ def create_draft(brief,week_start,tz,fingerprint,path=None,now=None,replace_plan
         c.execute('BEGIN IMMEDIATE');p=_preview(c,brief,week_start,tz,now,replace_plan_id)
         if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
         if p['status']!='ready': raise ValueError('Answer the coaching questions before creating a draft')
-        if replace_plan_id:
-            for row in c.execute("SELECT id FROM planned_workouts WHERE training_plan_id=? AND completion_status='planned'",(replace_plan_id,)).fetchall():
-                c.execute("UPDATE planned_workouts SET completion_status='cancelled',revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?",(row['id'],));_revision(c,_snapshot(c,row['id']))
-            c.execute("UPDATE training_plans SET status='superseded',updated_at=CURRENT_TIMESTAMP WHERE id=?",(replace_plan_id,))
         identifier='plan-'+str(uuid.uuid4())
         stored={**p,'preferences':_context(c,now),'rule_version':VERSION,'coaching':True}
         c.execute("INSERT INTO training_plans(id,name,status,starts_on,ends_on,context_json) VALUES(?,?,'draft',?,?,?)",(identifier,GOALS[p['brief']['goal']]+' · '+week_start.isoformat(),week_start.isoformat(),(week_start+timedelta(days=6)).isoformat(),encoded(stored)))
@@ -338,19 +523,97 @@ def assistant_preview(arguments,path=None):
         weekday=next((i for i,name in enumerate(('monday','tuesday','wednesday','thursday','friday','saturday','sunday')) if re.search(r'\b'+name+r'\b',message,re.I)),None)
         if weekday is not None and weekday>=today.weekday(): week=today-timedelta(days=today.weekday())
     brief=arguments.get('brief') or read_brief(path)['brief']
-    brief,recognized=parse_request(message,brief,week)
+    brief,recognized=parse_request(message,brief,week,today)
     return {'tool':'preview_training_plan',**preview(brief,week,tz,path,now,arguments.get('replace_plan_id')),'recognized':recognized}
 
 
 def assistant_answer(result):
-    b=result['brief'];lines=[f"Coaching preview: {GOALS.get(b['goal'],'choose your primary goal')} · {b['horizon_weeks']} weeks. Nothing has been saved."]
-    lines.extend(result['recognized'])
-    if result['questions']:
-        lines.append(result['questions'][0])
-        if len(result['questions'])>1: lines.append('The remaining details are listed in the review panel.')
+    b=result['brief']
+    if result.get('questionnaire') and result.get('questions'):
+        return ' '.join([*result.get('recognized',[]),result['questions'][0]])
+    if not b.get('duration_confirmed') and not b.get('program_start'):
+        return 'Before I build your long-term plan: '+result['questions'][0]
+    lines=[f"Here is the proposed {b['horizon_weeks']}-week plan to {GOALS.get(b['goal'],'work toward your goal').lower()}. Nothing has been saved."]
+    lines.extend(result.get('recognized',[]))
+    for block in result.get('block_summary',[]):
+        span=str(block['start_week']) if block['start_week']==block['end_week'] else str(block['start_week'])+'–'+str(block['end_week'])
+        lines.append(f"Weeks {span}: {block['phase']} ({block['weeks']} {'week' if block['weeks']==1 else 'weeks'}). {block['focus']}")
+    if result['questions']:lines.append(result['questions'][0])
     else:
-        lines.append('Weekly volume: '+', '.join(f'{sport}: {minutes} min' for sport,minutes in result['weekly_minutes'].items())+'.')
-        if result['protected_days']: lines.append('Recovery is protected around your fixed commitments.')
+        lines.append('Your next seven days follow the current block, confirmed availability and upcoming events: '+', '.join(f"{sport}: {minutes} min" for sport,minutes in result['weekly_minutes'].items())+'.')
     lines.extend(result['warnings'])
-    lines.append('Open the proposal in Training to review the full week and longer-term direction before saving.')
+    lines.append('Review the proposal and choose Approve and activate plan when you are happy with it.')
     return '\n\n'.join(lines)
+
+
+def propose_setup(arguments,path=None):
+    from .training import validate_answers
+    current=training_context_for_setup(path);saved=read_brief(path)
+    changes=arguments.get('answers') or {};patch=arguments.get('brief_changes') or {}
+    answers=validate_answers(changes)
+    b=validate_brief({**saved['brief'],**patch})
+    if not answers and not patch:raise ValueError('Provide explicit preference or direction changes')
+    return {'tool':'propose_training_setup','answers':answers,'brief':b,'expected_preference_revision':current['revision'],'expected_brief_revision':saved['revision'],'status':'proposal','message':'Review the preferences and direction extracted from your conversation; nothing is saved yet.'}
+
+
+def training_context_for_setup(path=None):
+    from .training import training_context
+    return training_context(path)
+
+
+def save_setup(answers,brief,expected_preference_revision,expected_brief_revision,path=None):
+    from .training import validate_answers,_preferences
+    patch=validate_answers(answers);b=validate_brief(brief);now=datetime.now(timezone.utc)
+    if b['ftp_selection']=='garmin':
+        from .training_ftp import resolve
+        with connect(path) as ftp_connection:ftp=resolve(ftp_connection,now.date())
+        b['ftp_watts']=ftp['watts'];b['calibration']['ftp_confirmed_on']=ftp['measurement_date'];b['calibration']['ftp_source']=ftp['source'] or 'Garmin cycling FTP'
+    with connect(path) as c:
+        c.execute('BEGIN IMMEDIATE');current=_preferences(c)
+        stored=c.execute('SELECT revision FROM training_coach_brief WHERE id=1').fetchone()
+        if current['revision']!=expected_preference_revision or (stored[0] if stored else 0)!=expected_brief_revision:raise ValueError('Training context changed; ask the coach for a fresh proposal')
+        if patch:
+            merged={**current['answers'],**patch};confirmed={**current['confirmed_at'],**{k:now.isoformat() for k in patch}};revision=current['revision']+1
+            c.execute('INSERT INTO training_preferences(id,revision,answers_json,confirmed_json) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,answers_json=excluded.answers_json,confirmed_json=excluded.confirmed_json',(revision,encoded(merged),encoded(confirmed)))
+            c.execute('INSERT INTO training_preference_revisions(revision,answers_json,confirmed_json) VALUES(?,?,?)',(revision,encoded(merged),encoded(confirmed)))
+        _store_brief(c,b,expected_brief_revision+1)
+    saved=read_brief(path)
+    current=training_context_for_setup(path)
+    return {'status':'saved','message':'Training preferences, calibration and direction saved. No workout schedule has been activated.','brief':saved['brief'],'brief_revision':saved['revision'],'preferences':current,'next_action':'review_plan','schedule_activated':False}
+
+
+def approve(brief,week_start,tz,fingerprint,path=None,now=None,replace_plan_id=None,candidate_answers=None,session_changes=None):
+    """Recompute and persist a reviewed program in one transaction; fingerprint is its retry key."""
+    now=now or datetime.now(timezone.utc)
+    if not isinstance(fingerprint,str) or len(fingerprint)!=64:
+        raise ValueError('Preview the plan before approving')
+    if brief.get('program_start') and date.fromisoformat(brief['program_start'])!=week_start:raise ValueError('Review the first seven days from the agreed program start date before activating')
+    identifier='plan-approved-'+fingerprint
+    with connect(path) as c:
+        c.execute('BEGIN IMMEDIATE')
+        previous=c.execute('SELECT * FROM training_plans WHERE id=?',(identifier,)).fetchone()
+        if previous:
+            saved=json.loads(previous['context_json'])
+            if saved.get('approval_input')!=validate_brief(brief) or saved.get('candidate_answers',{})!=validate_answers(candidate_answers or {}) or saved.get('session_changes',[])!=(session_changes or []) or saved['week_start']!=week_start.isoformat() or saved['timezone']!=tz or saved.get('replace_plan_id')!=replace_plan_id:
+                raise ValueError('Approval key belongs to a different proposal')
+        else:
+            if not brief.get('duration_confirmed'):raise ValueError('Confirm how many weeks you would like to train for (4, 8, 12, 16 or custom 4–24)')
+            p=_preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers,session_changes)
+            if p['fingerprint']!=fingerprint:raise ValueError('Planning context changed; preview again before approving')
+            if p['status']!='ready':raise ValueError('Answer the coaching questions before approving')
+            if candidate_answers:
+                from .training import _preferences
+                old=_preferences(c);merged={**old['answers'],**candidate_answers};confirmed={**old['confirmed_at'],**{k:now.isoformat() for k in candidate_answers}};rev=old['revision']+1
+                c.execute('INSERT INTO training_preferences(id,revision,answers_json,confirmed_json) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,answers_json=excluded.answers_json,confirmed_json=excluded.confirmed_json',(rev,encoded(merged),encoded(confirmed)))
+                c.execute('INSERT INTO training_preference_revisions(revision,answers_json,confirmed_json) VALUES(?,?,?)',(rev,encoded(merged),encoded(confirmed)))
+            stored={**p,'approval_input':validate_brief(brief),'preferences':_context(c,now),'rule_version':VERSION,'coaching':True}
+            c.execute("INSERT INTO training_plans(id,name,status,starts_on,ends_on,context_json) VALUES(?,?,'active',?,?,?)",(identifier,GOALS[p['brief']['goal']]+' · '+week_start.isoformat(),week_start.isoformat(),(week_start+timedelta(days=6)).isoformat(),encoded(stored)))
+            for session in p['sessions']:
+                wid='workout-'+str(uuid.uuid4())
+                c.execute('INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json) VALUES(?,?,?,?,?,?)',(wid,identifier,session['sport'],session['title'],session['scheduled_for'],encoded(session['definition'])))
+                _revision(c,_snapshot(c,wid))
+            row=c.execute('SELECT revision FROM training_coach_brief WHERE id=1').fetchone()
+            _store_brief(c,p['brief'],(row[0] if row else 0)+1)
+            from .active_training import activate
+            activate(c,c.execute('SELECT * FROM training_plans WHERE id=?',(identifier,)).fetchone())
+    return list_training(path)

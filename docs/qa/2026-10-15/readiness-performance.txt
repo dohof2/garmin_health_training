@@ -1,0 +1,26 @@
+Readiness performance investigation — 2026-10-15
+Method: SQLite backup of existing database into TemporaryDirectory; all readiness persistence and profiling ran against the disposable copy. Live database opened read-only only for backup. No production calculations/plans changed.
+
+Baseline cProfile, readiness_history(days=14, timezone_name='Asia/Jerusalem'):
+Wall time 12.884 seconds.
+126 calculate calls: 12.811 seconds cumulative.
+126 _sessions calls: 12.572 seconds cumulative.
+4034 JSON loads: 11.575 seconds cumulative.
+Repeated parsing of retained activity payloads dominated calculation time.
+
+Change:
+Prepare metric series and activity sessions once per history request and reuse across days and all sensitivity variants. Avoid parsing activity raw JSON when its recorded end timestamp already supplies the required timing evidence. No persistent/in-memory response cache; each request reads current corrected observations.
+
+After, same copied database and API-equivalent calls:
+14 days first: 0.1558 seconds; latest score 22.
+1 day: 0.0664 seconds; latest score 22.
+14 days repeat: 0.0897 seconds; latest score 22.
+First 14-day call approximately 83 times faster than measured baseline.
+
+Regression checks:
+readiness suite: 26 passed (includes independent prepared/unprepared output parity, one preparation across full history/sensitivity, late correction freshness, versioning, missingness and portability).
+sync suite: 12 passed (includes stable activity ID rename, retry without duplication, retained archive/FIT details).
+assistant education suite: 3 passed (general power/TSS/FTP/VO2 questions use no record tools; personal questions still require evidence; conversational tone instructions).
+
+Limits:
+Timings are direct function measurements on a disposable copy, not an end-to-end browser/network percentile study. Intermittent frontend loading reliability requires browser verification. Frontend independently removes forecast dependency from today's score and adds race/abort handling. Renamed activity sync is verified for returned activity records; a change older than the configured sync overlap requires that historical period to be fetched.

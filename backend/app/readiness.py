@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 from .database import connect
 from .time_utils import timezone_info
 
-FORMULA_VERSION = 'readiness-v2'
+FORMULA_VERSION = 'readiness-v4'
 DEFAULTS = {
     'sleep_target_hours': 8.0, 'load_half_life_hours': 36.0,
     'autonomic_weight': 40.0, 'sleep_weight': 35.0, 'workload_weight': 25.0,
@@ -146,8 +146,8 @@ def _sessions(rows):
         start = stamp(row['started_at'])
         if not start:
             continue
-        payload = json.loads(row.get('raw_json') or '{}')
         end = stamp(row.get('ended_at'))
+        payload = json.loads(row.get('raw_json') or '{}') if not end else {}
         method = 'recorded_end'
         if not end:
             fits = [stamp(s.get('timestamp')) for s in payload.get('fit_sessions', [])]
@@ -194,19 +194,18 @@ def _exposure(sessions, cutoff, half_life, coverage, zone):
     return total, covered and not missing, selected, missing
 
 
-def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None):
+def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None, prepared=None):
     """Pure calculation: dates after the observation never enter references."""
     zone = ZoneInfo(zone_name)
     p = parameters(config)
-    series = _series(rows, zone)
-    sessions = _sessions(activity_rows)
+    series, sessions = prepared if prepared is not None else (_series(rows, zone), _sessions(activity_rows))
     key = day.isoformat()
     sleep = series.get('sleep_duration', {}).get(key)
     wake = stamp(sleep.get('period_end')) if sleep else None
     cutoff = datetime.combine(day, time(p['morning_hour']), zone).astimezone(timezone.utc)
     if wake:
         cutoff = wake
-    warnings = ['rhr_previous_day_context', 'historical_estimate_uses_current_corrected_records']
+    warnings = ['historical_estimate_uses_current_corrected_records']
     inputs = {}
 
     def reading(kind, offset=0):
@@ -218,21 +217,32 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
         return {k: row.get(k) for k in ('id','value','unit','wake_date','source_name','period_start','period_end')}
 
     h = reading('hrv_last_night_average')
-    r = reading('resting_heart_rate', 1)  # completed day only; never today's whole-day RHR
+    previous_rhr = reading('resting_heart_rate', 1)
+    current_rhr = reading('resting_heart_rate')
+    observation_now=now or datetime.now(timezone.utc)
+    if current_rhr:
+        observed_end=stamp(current_rhr.get('period_end'))
+        if observed_end and observed_end>observation_now:current_rhr=None
+    r=current_rhr or previous_rhr
+    provisional=bool(current_rhr and day==observation_now.astimezone(zone).date() and current_rhr.get('source_name')!='projection')
+    selection='projected' if r and r.get('source_name')=='projection' else 'same_day' if current_rhr else 'previous_day_fallback' if previous_rhr else 'missing'
+    if provisional:warnings.append('rhr_same_day_provisional')
+    elif selection=='same_day':warnings.append('rhr_same_day_historical_reconstruction')
+    elif selection=='previous_day_fallback':warnings.append('rhr_previous_day_fallback')
     q = reading('sleep_score')
-    inputs.update(hrv=evidence(h), rhr_previous_day=evidence(r), sleep=evidence(sleep), sleep_score=evidence(q))
-    baseline_start = day-timedelta(days=p['baseline_days']+2)
-    baseline_end = day-timedelta(days=3)
+    inputs.update(hrv=evidence(h),rhr=evidence(r),rhr_previous_day=evidence(previous_rhr),rhr_selection={'kind':selection,'date':r.get('wake_date') if r else None,'provisional':provisional,'description':'Current stored resting heart rate; may change as today’s record is updated.' if provisional else 'Same-day value from currently corrected historical records; availability at the historical morning is unknown.' if selection=='same_day' else 'Previous day used because no eligible same-day value is stored.' if selection=='previous_day_fallback' else 'Projected input, not a measured future resting heart rate.' if selection=='projected' else 'No eligible resting heart rate observation.'},sleep=evidence(sleep), sleep_score=evidence(q))
+    baseline_start = day-timedelta(days=p['baseline_days']+6)
+    baseline_end = day-timedelta(days=7)
     h_values, r_values, baseline_ids = [], [], []
-    for offset in range(3, p['baseline_days']+3):
-        for kind, values, log in [('hrv_last_night_average',h_values,True), ('resting_heart_rate',r_values,False)]:
+    for kind, values, log, first in [('hrv_last_night_average',h_values,True,7), ('resting_heart_rate',r_values,False,3)]:
+        for offset in range(first, p['baseline_days']+first):
             row = reading(kind, offset)
             if row:
                 values.append(math.log(row['value']) if log else row['value'])
                 baseline_ids.append(row['id'])
     hb = robust(h_values, p['hrv_scale_floor'], p['baseline_min_nights'])
     rb = robust(r_values, p['rhr_scale_floor'], p['baseline_min_nights'])
-    recent_h = [reading('hrv_last_night_average', i) for i in range(3)]
+    recent_h = [reading('hrv_last_night_average', i) for i in range(7)]
     recent_h = [row for row in recent_h if row]
     recent_s = [reading('sleep_duration', i) for i in range(3)]
     recent_s = [row for row in recent_s if row]
@@ -240,9 +250,10 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
     inputs['recent_sleep'] = [evidence(row) for row in recent_s]
     hp = rp = dp = qp = None
     zh = zr = None
-    if h and hb and len(recent_h) >= 2:
-        zh = min((math.log(h['value'])-hb['center'])/hb['scale'],
-                 (sum(math.log(row['value']) for row in recent_h)/len(recent_h)-hb['center'])/hb['scale'])
+    hrv_average = sum(row['value'] for row in recent_h)/len(recent_h) if recent_h else None
+    inputs['hrv_7day'] = {'average':hrv_average,'nights':len(recent_h),'window_days':7,'minimum_nights':5}
+    if h and hb and len(recent_h) >= 5:
+        zh = (math.log(hrv_average)-hb['center'])/hb['scale']
         hp = clip((-zh-p['deviation_tolerance'])/2)
         if (math.log(h['value'])-hb['center'])/hb['scale'] > 2.5:
             warnings.append('unusually_high_hrv_no_bonus')
@@ -292,7 +303,7 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
         groups.append({'name':name,'budget':weight,'penalty_min':round(minimum,2),'penalty_max':round(maximum,2),'complete':complete,**extra})
 
     group('autonomic',p['autonomic_weight'],[hp,rp], {'hrv_z':zh,'rhr_z':zr,'hrv_baseline':hb,'rhr_baseline':rb,
-        'baseline_start':baseline_start.isoformat(),'baseline_end':baseline_end.isoformat(),'baseline_input_ids':sorted(baseline_ids)})
+        'baseline_start':baseline_start.isoformat(),'baseline_end':baseline_end.isoformat(),'rhr_baseline_start':(day-timedelta(days=p['baseline_days']+2)).isoformat(),'rhr_baseline_end':(day-timedelta(days=3)).isoformat(),'baseline_input_ids':sorted(baseline_ids)})
     # A missing short sleep trend leaves the duration portion uncertain.
     group('sleep',p['sleep_weight'],[dp,qp,dp if len(recent_s)>=2 else None], {'target_hours':p['sleep_target_hours'],'recent_nights':len(recent_s)})
     group('workload',p['workload_weight'],[wp], {'exposure':round(exposure,3),'percentile':percentile,'reference_mornings':len(reference),
@@ -346,12 +357,14 @@ def readiness_history(end_date=None, days=14, timezone_name='UTC', path: Path | 
         if row is None or row['formula_version'] != FORMULA_VERSION:
             raise ValueError('Unknown or unsupported readiness formula version')
         config = json.loads(row['parameters_json'])
-        lookback = max(config['baseline_days']+3,config['load_reference_days']+7)
+        lookback = max(config['baseline_days']+7,config['load_reference_days']+7)
         rows,activities,coverage = _load(c,start-timedelta(days=lookback),end_date)
+    # Observations do not vary between day/sensitivity calculations. Parse retained payloads once.
+    prepared=(_series(rows,ZoneInfo(timezone_name)),_sessions(activities))
     results=[]
     for offset in range(days):
         day = start+timedelta(days=offset)
-        result = calculate(day,timezone_name,rows,activities,coverage,config,now=now)
+        result = calculate(day,timezone_name,rows,activities,coverage,config,now=now,prepared=prepared)
         result['config_version']=version
         if result['status']=='complete':
             variants=[]
@@ -361,7 +374,7 @@ def readiness_history(end_date=None, days=14, timezone_name='UTC', path: Path | 
                             {'autonomic_weight':35.,'sleep_weight':35.,'workload_weight':30.},
                             {'autonomic_weight':45.,'sleep_weight':30.,'workload_weight':25.},
                             {'deviation_tolerance':.25},{'deviation_tolerance':.75}]:
-                alternative=calculate(day,timezone_name,rows,activities,coverage,{**config,**altered},now=now)
+                alternative=calculate(day,timezone_name,rows,activities,coverage,{**config,**altered},now=now,prepared=prepared)
                 if alternative['score'] is not None:
                     variants.append(alternative['score'])
             result['sensitivity']={'low':min(variants+[result['score']]),'high':max(variants+[result['score']]),

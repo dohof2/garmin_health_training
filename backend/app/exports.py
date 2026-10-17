@@ -68,6 +68,7 @@ CSV_DATASETS: dict[str, tuple[str, str]] = {
 }
 
 PORTABLE_TABLES = (
+    "training_questionnaire",
     "training_coach_brief",
     "training_coach_brief_revisions",
     "meal_revisions",
@@ -78,6 +79,7 @@ PORTABLE_TABLES = (
     "training_preference_revisions",
     "training_workout_revisions",
     "training_feedback",
+    "training_strength_performance",
     "readiness_configs",
     "readiness_settings",
     "readiness_calculations",
@@ -232,7 +234,7 @@ def export_json(
                 start_date,
                 end_date,
             )
-            if table in ("activity_metrics", "training_feedback", "training_workout_revisions", "meal_items", "meal_revisions") and (start_date or end_date):
+            if table in ("activity_metrics", "training_feedback", "training_workout_revisions", "training_strength_performance", "meal_items", "meal_revisions") and (start_date or end_date):
                 meal_child=table in ("meal_items", "meal_revisions")
                 parent = "meals" if meal_child else "activities" if table == "activity_metrics" else "planned_workouts"
                 date_column = "eaten_at" if meal_child else "started_at" if table == "activity_metrics" else "scheduled_for"
