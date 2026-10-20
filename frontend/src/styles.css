@@ -1849,7 +1849,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workout-prescription td, .workout-prescription th { padding: .5rem; border-bottom: 1px solid #dbe5ee; }
 .training-history { margin: 2rem 0; }
 
-.training-week {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:10px;margin:16px 0}.training-week>div{padding:10px;border:1px solid var(--border,#ddd);border-radius:10px;min-width:0}.workout-day{display:block;width:100%;text-align:left;margin-top:8px;border-left:5px solid #477fb5}.workout-day small{display:block;white-space:normal}.workout-day[aria-expanded=true]{outline:3px solid #477fb5}.workout-day.recovery{border-left-color:#55a8a1}.workout-day.endurance{border-left-color:#559552}.workout-day.tempo{border-left-color:#d19333}.workout-day.threshold,.workout-day.vo2,.workout-day.sprint{border-left-color:#cc5555}.workout-day.strength{border-left-color:#9866ad}.workout-day.run{border-left-color:#bd6c35}.today-workout{padding:24px;border:1px solid var(--border,#ddd);border-radius:16px;margin:24px 0}@media(max-width:900px){.training-week{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:480px){.training-week{grid-template-columns:1fr}}
+.training-week { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:18px; margin:20px 0 28px; align-items:stretch; }
+.training-week > .training-day-card { min-width:0; min-height:300px; padding:18px; border:1px solid var(--border,#d5dfeb); border-radius:18px; background:#fff; display:flex; flex-direction:column; gap:14px; }
+.training-day-heading { display:flex; flex-direction:column; gap:4px; }
+.training-day-heading strong { font-size:1.05rem; line-height:1.3; }
+.training-day-heading time { font-size:1rem; color:#52647b; }
+.workout-day { display:flex; flex:1; flex-direction:column; align-items:stretch; gap:12px; width:100%; min-height:220px; padding:18px 10px; text-align:left; border:1px solid #d9e3ef; border-left:6px solid #477fb5; border-radius:12px; white-space:normal; background:#f6f9fd; color:#23364d; }
+.workout-day-type { display:flex; flex-direction:column; align-items:flex-start; gap:10px; font-size:1.05rem; font-weight:700; }
+.workout-sport-icon { width:34px; height:34px; flex-shrink:0; }
+.workout-day-title { font-size:1rem; line-height:1.45; overflow-wrap:anywhere; }
+.workout-day-duration { font-size:clamp(1.4rem,2.4vw,1.9rem); line-height:1.15; letter-spacing:-.03em; }
+.workout-day-action { display:flex; justify-content:space-between; gap:8px; margin-top:auto; font-size:.8rem; color:#52647b; }
+.workout-day:hover { background:#edf3fa; }
+.workout-day[aria-expanded=true] { outline:3px solid #477fb5; outline-offset:2px; }
+.workout-day.recovery { border-left-color:#55a8a1; }.workout-day.endurance { border-left-color:#559552; }.workout-day.tempo { border-left-color:#d19333; }.workout-day.threshold,.workout-day.vo2,.workout-day.sprint,.workout-day.anaerobic { border-left-color:#cc5555; }.workout-day.strength { border-left-color:#9866ad; }.workout-day.run { border-left-color:#bd6c35; }
+.training-rest-day { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; border-radius:12px; background:#f5f7fa; color:#65758b; text-align:center; }
+.training-rest-day > span { font-size:2.2rem; }.training-rest-day strong { font-size:1.1rem; }.training-rest-day small { font-size:.85rem; }
+.today-workout { padding:24px; border:1px solid var(--border,#ddd); border-radius:16px; margin:24px 0; }
+@media(max-width:720px) { .training-week { grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; } }
+@media(max-width:480px) { .training-week { grid-template-columns:1fr; } .training-week > .training-day-card { min-height:230px; } }
+
 .sleep-card .sleep-score-latest { align-items:baseline;flex-wrap:wrap;margin:.3rem 0 1rem;gap:1rem; }
 .sleep-card .sleep-score-latest > strong {font-size:3.2rem;color:inherit;line-height:1.1;}
 .sleep-card .sleep-score-latest > b {font-size:1.5rem;}
@@ -1860,3 +1879,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sleep-hrv-annotation { position: absolute; top: 3.4rem; right: 1rem; background: rgba(255,255,255,.92); border-radius: .4rem; padding: .3rem .5rem; font-size: .8rem; color: #52647b; pointer-events: none; }
 .sleep-hrv-annotation strong { color: #23364d; margin-left: .3rem; }
 .sleep-plot-canvas > .graph-empty { min-height: 220px; }
+
+#selected-workout-detail { scroll-margin-top: 110px; }
+#selected-workout-detail:focus { outline: none; }
+.training-plan-name {display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;width:100%;text-align:left;padding:1rem;margin:1rem 0;font-size:1.1rem;}.training-plan-name span{font-size:.9rem;}.training-day-editor{margin:1rem 0;padding:1rem;}.training-day-editor .builder-fields{padding:.75rem 0;border-bottom:1px solid #dce3ec;}.workout-day.hiking{border-left-color:#718341}.workout-day.other{border-left-color:#6f7086}.training-volume-estimates{margin:1rem 0;}

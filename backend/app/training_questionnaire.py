@@ -8,6 +8,7 @@ from .training import _context,validate_answers,encoded
 from .training_coach import DEFAULT,validate_brief,parse_request,read_brief,preview
 from .time_utils import timezone_info
 from .training_ftp import resolve
+from .training_constraints import merge_answers, merge_schedule, SPORT_CATALOG
 
 DAYS=('monday','tuesday','wednesday','thursday','friday','saturday','sunday')
 MONTHS={name:index for index,name in enumerate(('january','february','march','april','may','june','july','august','september','october','november','december'),1)}
@@ -46,7 +47,7 @@ def _history(c,today,sports):
         weeks={date.fromisoformat(row['started_at'][:10]).isocalendar()[:2] for row in rows}
         count=len(rows);longest=max((row['duration_seconds']/60 for row in rows),default=0)
         experience='experienced' if count>=12 and len(weeks)>=4 and longest>=90 else 'regular' if count>=6 and len(weeks)>=3 else None
-        result[sport]={'activity_count':count,'recorded_weeks':len(weeks),'longest_minutes':longest,'experience':experience,'source':'recorded_history','note':'Experience context only; manageable weekly volume still requires confirmation.'}
+        result[sport]={'activity_count':count,'recorded_weeks':len(weeks),'longest_minutes':longest,'experience':experience,'source':'recorded_history','note':'Recorded experience context; current manageable volume is estimated separately from optional user caps.'}
     return result
 
 
@@ -78,7 +79,7 @@ def _contextual_reply(state,message):
                 if low>high:state['clarifications'].append('The range is reversed. Give the smaller value first, for example “6–7 hours”.')
                 elif not 0<=lower<=upper<=1260 or not lower.is_integer() or not upper.is_integer():state['clarifications'].append('Use a weekly time between 0 and 21 hours (1260 minutes), for example “6–7 hours”.')
                 else:
-                    sport=target.split(':')[1];answers.setdefault('weekly_minutes',{})[sport]=int(upper)
+                    sport=target.split(':')[1];answers.setdefault('weekly_caps',{})[sport]={'max_minutes':int(upper),**({'range_min_minutes':int(lower)} if match[2] else {})}
                     if match[2]:state['range_acknowledgment']=f'I kept {sport} at {low:g}–{high:g} {unit} per week. The upper end is a limit, not a required training volume.'
                     brief['weekly_time_ranges']={**brief.get('weekly_time_ranges',{}),sport:[int(lower),int(upper)]}
                     state['provenance']['weekly_minutes.'+sport]={'source':'contextual_user_reply','text':message,'unit':unit,'range_minutes':[int(lower),int(upper)],'approximate':bool(re.search(r'about|around|roughly|approximately|maybe',text)),'planning_rule':'upper bound is a cap, not a required workout volume'}
@@ -117,7 +118,7 @@ def _contextual_reply(state,message):
 
 
 def _extract(state,message,today,week):
-    text=message.lower().replace('–','-').replace('—','-');partial=state['partial'];answers=state['answers'];brief=state['brief']
+    text=message.lower().replace('–','-').replace('—','-');text=re.sub(r'\b(?:strengh|strenght)\b','strength',text);text=re.sub(r'\bbegginer\b','beginner',text);partial=state['partial'];answers=state['answers'];brief=state['brief']
     # Typed statements are validated before entering the candidate, and provenance points to user text.
     def put(field,value):
         previous=answers.get(field)
@@ -145,11 +146,17 @@ def _extract(state,message,today,week):
     if re.search(r'\b(?:cycling|bike|rides?)\b',text) and not re.search(r'\b(?:no|without) cycling\b',text):
         put('sports',list(dict.fromkeys(answers.get('sports',[])+['cycling'])))
     if re.search(r'\bstrength\b',text):put('sports',list(dict.fromkeys(answers.get('sports',[])+['strength'])))
-    for sport,pattern in [('cycling',r'\b(?:cycling|rides?|bike)\b'),('strength',r'\bstrength\b'),('running',r'\b(?:running|runs?)\b')]:
+    for sport,pattern in [('running',r'\brunn?(?:ing)?\b'),('hiking',r'\bhik(?:e|ing)\b')]:
+        if re.search(pattern,text):put('sports',list(dict.fromkeys(answers.get('sports',[])+[sport])))
+    for sport,pattern in [('cycling',r'\b(?:cycling|rides?|bike)\b'),('strength',r'\bstrength\b'),('running',r'\b(?:running|runs?)\b'),('hiking',r'\b(?:hiking|hike)\b')]:
         for clause in re.split(r'[;\n.]|,(?=\s*(?:strength|cycling|running)\b)',text):
             if re.search(pattern,clause):
                 days=[i for i,day in enumerate(DAYS) if re.search(r'\b'+day+r'\b',clause)]
-                if days:partial.setdefault('sport_days',{})[sport]=days;state['provenance']['sport_days']={'source':'user_message','text':message[:2000]}
+                if days:
+                    old_days=partial.setdefault('sport_days',{}).get(sport,[])
+                    if re.search(r'\b(?:only|instead|replace|change)\b',clause):partial['sport_days'][sport]=days
+                    else:partial['sport_days'][sport]=sorted(set(old_days)|set(days))
+                    state['provenance']['sport_days']={'source':'user_message','text':message[:2000]}
     exclusions=re.search(r'\b(?:ride|rides|cycling)\s+days?[^\n.;]*?\b(?:apart from|except|excluding)\b([^\n.;]*)',text)
     if exclusions:
         excluded=[i for i,day in enumerate(DAYS) if re.search(r'\b'+day+r'\b',exclusions[1])]
@@ -158,7 +165,14 @@ def _extract(state,message,today,week):
             if re.search(r'\bstrength\b',exclusions[1]):partial['sport_days']['strength']=excluded
             state['provenance']['sport_days']={'source':'user_message','text':message[:2000]}
     rest=[i for i,day in enumerate(DAYS) if re.search(day+r'[^.;]{0,20}\b(?:off|rest)\b',text)]
-    if rest:partial['rest_days']=rest
+    if rest:partial['rest_days']=sorted(set(partial.get('rest_days',[]))|set(rest))
+    for sport,days in partial.get('sport_days',{}).items():
+        if re.search(r'\b(?:change|instead|only|replace)\b',text) and sport in text:
+            corrected=[i for i,day in enumerate(DAYS) if day in text]
+            if corrected:
+                for other,other_days in partial['sport_days'].items():
+                    if other!=sport:partial['sport_days'][other]=[d for d in other_days if d not in corrected]
+                partial['rest_days']=[d for d in partial.get('rest_days',[]) if d not in corrected]
     range_match=re.search(r'(\d+)\s*-\s*(\d+)\s*(?:min|minutes)',text)
     if range_match:partial['weekday_minutes_range']=[int(range_match[1]),int(range_match[2])]
     fixed_minutes=re.search(r'\bweekdays?\s*(?:are|of|for|:)?\s*(\d+)\s*(?:min|minutes)',text)
@@ -167,19 +181,12 @@ def _extract(state,message,today,week):
     if not long:long=re.search(r'\bfriday\b[^.;\n]{0,70}?(?:up to\s*)?(\d+(?:\.\d+)?)\s*(hours?|hrs?|minutes?|mins?)',text)
     if long:partial['friday_minutes']=round(float(long[1])*(60 if long[2].startswith('h') else 1))
     if re.search(r'\b(?:five|5) hours?\b',text) and 'friday' in text:partial['friday_minutes']=300
-    clock=re.search(r'\b(?:at|start(?:ing)?(?: time)?(?: is)?|all(?: sessions)?)\s*(\d{1,2}:\d{2})\b',text)
-    if clock:partial['start_time']=clock[1].zfill(5)
     if state.get('awaiting')=='weekday_minutes' and re.fullmatch(r'\s*\d+\s*(?:minutes?|mins?)?[.! ]*',text):partial['weekday_minutes']=int(re.search(r'\d+',text)[0])
-    if state.get('awaiting')=='start_time' and re.fullmatch(r'\s*\d{1,2}:\d{2}[.! ]*',text):partial['start_time']=text.strip(' .!').zfill(5)
     choose=re.search(r'\b(?:use|choose|confirm|set)\s+(\d+)\s*(?:min|minutes)\b',text)
     if choose:partial['weekday_minutes']=int(choose[1])
-    weekday_limit=partial.get('weekday_minutes') or (partial.get('weekday_minutes_range') or [None])[-1]
-    if 'sport_days' in partial and weekday_limit:
-        days=sorted({day for days in partial['sport_days'].values() for day in days}-set(partial.get('rest_days',[])))
-        put('availability',[{'weekday':day,'start_time':partial.get('start_time'),'minutes':partial.get('friday_minutes',weekday_limit) if day==4 else weekday_limit} for day in days])
     experience=dict(answers.get('experience',{}))
     for sport in answers.get('sports',[]):
-        name='strength' if sport=='strength' else '(?:cycling|bike)' if sport=='cycling' else '(?:running|run)'
+        name='strength' if sport=='strength' else '(?:cycling|bike)' if sport=='cycling' else '(?:running|run)' if sport=='running' else '(?:hiking|hike)' if sport=='hiking' else re.escape(sport)
         found=re.search(r'(?:\b(beginner|new|regular|experienced)\b[^.;]{0,20}\b'+name+r'\b|\b'+name+r'\b[^.;]{0,20}\b(beginner|new|regular|experienced)\b)',text)
         if found:experience[sport]={'beginner':'new','new':'new','regular':'regular','experienced':'experienced'}[found[1] or found[2]]
     if experience:put('experience',experience)
@@ -196,18 +203,54 @@ def _extract(state,message,today,week):
         if 'indoor' in text and 'outdoor' in text or re.search(r'\bboth\b',text):brief['calibration']['power_access']='both'
         elif 'indoor' in text:brief['calibration']['power_access']='indoor'
         elif 'outdoor' in text:brief['calibration']['power_access']='outdoor'
-    budget=dict(answers.get('weekly_minutes',{}))
+    budget={}
     for sport,pattern in [('cycling','cycling'),('strength','strength'),('running','running')]:
         match=re.search(r'\b'+pattern+r'\s*(?:weekly(?: budget)?|budget)?\s*(?:is|of|:|=)?\s*(\d+)\s*(?:min|minutes)\s*(?:per week|weekly)?',text)
         if match and re.search(r'\b(?:weekly|per week|budget)\b',text):budget[sport]=int(match[1])
-    if budget:put('weekly_minutes',budget)
+    if budget:put('weekly_caps',{sport:{'max_minutes':minutes} for sport,minutes in budget.items()})
+    for sport in SPORT_CATALOG:
+        cap_match=re.search(r'\b'+sport+r'\b[^.;]{0,25}?(\d+)\s*(?:-|to)\s*(\d+)\s*(hours?|minutes?)[^.;]{0,15}\b(?:week|weekly)\b',text)
+        if cap_match:
+            factor=60 if cap_match[3].startswith('hour') else 1
+            lower,upper=int(cap_match[1])*factor,int(cap_match[2])*factor
+            state['answers']=merge_answers(state['answers'],{'weekly_caps':{sport:{'max_minutes':upper,'range_min_minutes':lower}}});answers=state['answers']
+        if re.search(r'\b(?:remove|clear|no)\s+(?:the\s+)?'+sport+r'\s+(?:weekly\s+)?cap\b',text):
+            state['answers']=merge_answers(state['answers'],{'weekly_caps':{sport:None}});answers=state['answers']
+
     for pattern,key in [(r'(\d+)\s*(?:comfortable\s+)?pull[ -]?ups?','pull_up_reps'),(r'(\d+)\s*(?:comfortable\s+)?dips?','dip_reps')]:
         match=re.search(pattern,text)
         if match:brief['strength_capacity'][key]=int(match[1])
+    for name,key in [(r'pull[ -]?ups?','pull_up_reps'),(r'dips?','dip_reps')]:
+        match=re.search(r'\b'+name+r'\s*(?:(?:i\s+)?(?:can\s+)?do\s*|:\s*|about\s*)?(\d+)\b',text)
+        if match:brief['strength_capacity'][key]=int(match[1])
+    for sport in answers.get('sports',[]):
+        match=re.search(r'\b'+re.escape(sport)+r'\s*(?:for|:)?\s*(\d+)\s*(?:minutes?|mins?)\b',text)
+        if match:partial.setdefault('sport_minutes',{})[sport]=int(match[1])
     if 'strength' in answers.get('sports',[]) and ('secondary strength' in text or 'strength secondary' in text or 'cycling support' in text or re.search(r'strength[^.;\n]{0,100}(?:cycling|core)',text)):brief['strength_role']='secondary';brief['strength_purpose']='cycling_support'
     if 'endurance' in text and 'priority' in text:put('priority','endurance')
     if partial.get('sport_days'):brief['sport_days']=partial['sport_days']
-    state['answers']=validate_answers(answers);state['brief']=validate_brief(brief)
+    state['answers']=validate_answers(answers);state['brief']=validate_brief(brief);_canonical_schedule(state)
+
+
+def _canonical_schedule(state):
+    """Translate retained user weekday facts without clocks or inventing rest."""
+    partial=state['partial'];limit=partial.get('weekday_minutes') or (partial.get('weekday_minutes_range') or [None])[-1]
+    if not limit or not partial.get('sport_days'):return
+    signature=encoded({key:partial.get(key) for key in ('sport_days','rest_days','weekday_minutes','weekday_minutes_range','friday_minutes','sport_minutes')})
+    if state.get('schedule_partial_signature')==signature:return
+    rows=[];rest=set(partial.get('rest_days',[]));days=sorted({day for values in partial['sport_days'].values() for day in values}|rest)
+    for day in days:
+        if day in rest:
+            rows.append({'weekday':day,'mode':'rest','activities':[],'total_limit_minutes':None});continue
+        slots=[]
+        for sport,values in partial['sport_days'].items():
+            if day not in values:continue
+            maximum=partial.get('sport_minutes',{}).get(sport,partial.get('friday_minutes',limit) if sport=='cycling' and day==4 else limit)
+            slots.append({'slot_id':f'user-{day}-{sport}','sport':sport,'min_minutes':(partial.get('weekday_minutes_range') or [None])[0] if maximum==limit else None,'max_minutes':maximum})
+        if slots:rows.append({'weekday':day,'mode':'training','activities':slots,'total_limit_minutes':None})
+    state['answers']=merge_answers(state['answers'],{'week_schedule':rows})
+    state['answers']['sports']=list(dict.fromkeys(state['answers'].get('sports',[])+[slot['sport'] for row in rows for slot in row['activities']]))
+    state['schedule_partial_signature']=signature
 
 
 def turn(message,history=None,tz='UTC',path=None,now=None,structured_facts=None):
@@ -229,11 +272,7 @@ def turn(message,history=None,tz='UTC',path=None,now=None,structured_facts=None)
         candidate_state=json.loads(encoded(state))
         try:
             merge_structured(candidate_state,structured_facts,message);state=candidate_state
-            partial=state['partial']
-            weekday_limit=partial.get('weekday_minutes') or (partial.get('weekday_minutes_range') or [None])[-1]
-            if partial.get('sport_days') and weekday_limit:
-                days=sorted({day for days in partial['sport_days'].values() for day in days}-set(partial.get('rest_days',[])))
-                state['answers']['availability']=validate_answers({'availability':[{'weekday':day,'start_time':partial.get('start_time'),'minutes':partial.get('friday_minutes',weekday_limit) if day==4 else weekday_limit} for day in days]})['availability']
+            _canonical_schedule(state)
         except ValueError as error:state['clarifications'].append(str(error))
     with connect(path) as c:
         context=_context(c,now,state['answers']);history_evidence=_history(c,today,context['answers'].get('sports',[]));ftp=resolve(c,today)
@@ -270,7 +309,7 @@ def turn(message,history=None,tz='UTC',path=None,now=None,structured_facts=None)
             field=effective_context['questions'][0]['field'];awaiting=field;question=effective_context['questions'][0]['question']
             missing_sport=next((sport for sport in effective_context['answers'].get('sports',[]) if sport not in effective_context['answers'].get(field,{})),None) if field in ('experience','weekly_minutes') else None
             if field=='experience' and missing_sport:awaiting='experience:'+missing_sport;question=f'Are you new to {missing_sport}, or do you practise it regularly?'
-            elif field=='weekly_minutes' and missing_sport:awaiting='weekly_minutes:'+missing_sport;question=f'How many hours per week for {missing_sport}? A range such as “6–7” is fine; you can also specify minutes.'
+            elif field=='weekly_minutes':question=None;awaiting=None
             elif field in ('blocked_sports','blocked_movements','restrictions_notes','pain_or_illness'):awaiting='restrictions';question='Any pain, illness, sports or movements to avoid, or other training restrictions? Say “none” if there are none.'
         elif candidate['questions']:question=candidate['questions'][0];awaiting='preferences'
     if question and awaiting==state.get('awaiting') and not state['clarifications']:
@@ -307,7 +346,18 @@ def merge_structured(state,facts,message):
             if old is not None and old!=patch[field]:state['changes'].append({'field':field,'previous':old,'value':patch[field]})
             if field in ('experience','weekly_minutes'):
                 patch[field]={**state['answers'].get(field,{}),**patch[field]}
-            state['answers'].update(patch)
+            state['answers']=merge_answers(state['answers'],patch)
+            if field=='week_schedule':
+                for row in value:
+                    day=row['weekday']
+                    if row.get('mode')=='rest':
+                        state['partial']['rest_days']=sorted(set(state['partial'].get('rest_days',[]))|{day})
+                        for sport,days in state['partial'].get('sport_days',{}).items():state['partial']['sport_days'][sport]=[d for d in days if d!=day]
+                    elif 'activities' in row:
+                        for slot in row['activities']:
+                            state['partial'].setdefault('sport_days',{}).setdefault(slot['sport'],[])
+                            if day not in state['partial']['sport_days'][slot['sport']]:state['partial']['sport_days'][slot['sport']].append(day)
+                state['schedule_partial_signature']=encoded({key:state['partial'].get(key) for key in ('sport_days','rest_days','weekday_minutes','weekday_minutes_range','friday_minutes','sport_minutes')})
         elif path.startswith('brief.'):
             field=path.split('.',1)[1]
             if field in ('ftp_watts','ftp_authorization','ftp_selection','program_start'):raise ValueError('FTP selection and authorization use their dedicated reviewed flow')
@@ -318,7 +368,7 @@ def merge_structured(state,facts,message):
             state['brief']=validate_brief({**state['brief'],field:value})
         elif path.startswith('partial.'):
             field=path.split('.',1)[1]
-            if field not in ('sport_days','rest_days','weekday_minutes_range','friday_minutes','weekday_minutes','start_time','start_date','time_preference'):raise ValueError('Unsupported partial training fact')
+            if field not in ('sport_days','rest_days','weekday_minutes_range','friday_minutes','weekday_minutes','start_date','time_preference'):raise ValueError('Unsupported partial training fact')
             if field=='sport_days':validate_brief({**DEFAULT,'sport_days':value})
             elif field=='rest_days':validate_brief({**DEFAULT,'sport_days':{'cycling':value}})
             elif field=='weekday_minutes_range':
@@ -330,7 +380,7 @@ def merge_structured(state,facts,message):
             elif field=='start_date':
                 if value not in ('today','tomorrow'):date.fromisoformat(value)
             elif not isinstance(value,str) or not re.fullmatch(r'\d{2}:\d{2}',value):raise ValueError('Invalid start time')
-            state['partial'][field]=value
+            state['partial'][field]={**state['partial'].get(field,{}),**value} if field=='sport_days' else value
         else:raise ValueError('Unsupported trainer fact path')
         state['provenance'][path]={'source':'user_message_structured','quote':quote}
 
@@ -338,9 +388,9 @@ def merge_structured(state,facts,message):
 def extract_structured(message,path=None):
     """Ask the selected model for typed facts; no proposed values become saved settings here."""
     from .ai_providers import active_provider
-    instructions='''Extract only explicit facts from this user message as JSON {"facts":[{"path":"answers.experience","value":{"strength":"new"},"quote":"exact user substring"}]}. Return facts:[] when there are no new facts. Each quote MUST be a verbatim nonempty substring of the user message. Do not infer absent times, manageable weekly volume, equipment, injury status, measurement dates or abilities. Allowed answers fields: sports (cycling,running,strength), priority (general,endurance,strength,mixed), experience (sport:new,regular,experienced), equipment (bike,trainer,bodyweight,dumbbells,bands,gym,barbell,mat,pull_up_bar,dip_bars), pain_or_illness boolean, blocked_sports,blocked_movements,restrictions_notes,weekly_minutes (sport:explicitly confirmed minutes). Allowed brief fields: goal (ftp,endurance,race,general),goal_sport,strength_role(primary,secondary),strength_purpose(general_fitness,cycling_support,strength_development),strength_capacity(pull_up_reps,dip_reps),calibration(power_access:unknown,none,indoor,outdoor,both;hr_sensor:boolean). Short replies answer the pending question; approximate counts such as about five are valid. Never request clock times for planning. Partial fields: time_preference (morning,afternoon,evening,anytime; optional, never infer an exact clock), sport_days (sport:list weekdays Monday0..Sunday6),rest_days,weekday_minutes_range [minimum,maximum],weekday_minutes,friday_minutes,start_time HH:MM,start_date (today,tomorrow,or explicit YYYY-MM-DD). Distinguish program start DATE from session start CLOCK time. Ranges remain ranges. An authorization to use a saved FTP is NOT a new FTP measurement and never changes calibration dates. Never extract assistant statements. Do not activate or save a plan.'''
+    instructions='''Extract only explicit facts from this user message as JSON {"facts":[{"path":"answers.experience","value":{"strength":"new"},"quote":"exact user substring"}]}. Return facts:[] when there are no new facts. Each quote MUST be a verbatim nonempty substring of the user message. Do not infer absent times, manageable weekly volume, equipment, injury status, measurement dates or abilities. Allowed answers fields: sports (cycling,running,strength,hiking,other), priority (general,endurance,strength,mixed), experience (sport:new,regular,experienced), equipment (bike,trainer,bodyweight,dumbbells,bands,gym,barbell,mat,pull_up_bar,dip_bars), pain_or_illness boolean, blocked_sports,blocked_movements,restrictions_notes,weekly_caps (optional sport:{max_minutes,range_min_minutes?}, null removes cap),week_schedule (partial weekday rows {weekday,mode:rest|training,total_limit_minutes:null|minutes,activities:[{slot_id,sport,label?,min_minutes:null|minutes,max_minutes}]} with up to3 stable slots; preserve siblings and explicit rest; no clocks). Weekly total is never required. Allowed brief fields: goal (ftp,endurance,race,general),goal_sport,strength_role(primary,secondary),strength_purpose(general_fitness,cycling_support,strength_development),strength_capacity(pull_up_reps,dip_reps),calibration(power_access:unknown,none,indoor,outdoor,both;hr_sensor:boolean). Short replies answer the pending question; approximate counts such as about five are valid. Never request clock times for planning. Partial fields: time_preference (morning,afternoon,evening,anytime; optional, never infer an exact clock), sport_days (sport:list weekdays Monday0..Sunday6),rest_days,weekday_minutes_range [minimum,maximum],weekday_minutes,friday_minutes,start_date (today,tomorrow,or explicit YYYY-MM-DD). Distinguish program start DATE from session start CLOCK time. Ranges remain ranges. An authorization to use a saved FTP is NOT a new FTP measurement and never changes calibration dates. Never extract assistant statements. Do not activate or save a plan.'''
     try:
-        text=active_provider(path).generate(message,instructions).strip()
+        text=active_provider(path).generate(message,instructions,timeout_seconds=15).strip()
         if text.startswith('```'):text=re.sub(r'^```(?:json)?\s*|\s*```$','',text)
         result=json.loads(text)
         return result.get('facts',[]) if isinstance(result,dict) else []

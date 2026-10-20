@@ -637,6 +637,9 @@ class ActiveTrainingRequest(BaseModel):
     timezone: str = "UTC"
     message: str | None = Field(default=None, max_length=1500)
     status: str | None = None
+    trigger: Literal['auto','manual'] = 'auto'
+    root_plan_id: str | None = None
+    expected_revision: int | None = None
 
 
 class TodayTrainingRequest(BaseModel):
@@ -644,6 +647,8 @@ class TodayTrainingRequest(BaseModel):
     minutes: int = Field(ge=10, le=360, strict=True)
     timezone: str = "UTC"
     sport: str | None = None
+    mode: Literal['independent','plan'] = 'independent'
+    workout_id: str | None = None
 
 
 class TrainingSetupRequest(BaseModel):
@@ -661,6 +666,18 @@ def store_training_setup(payload: TrainingSetupRequest):
     except ValueError as error:raise HTTPException(status_code=400,detail=str(error)) from error
 
 
+class TrainingPlanDeleteRequest(BaseModel):
+    expected_plan_revision: int
+    confirm: bool
+
+
+@app.delete('/api/training/plans/{plan_id}')
+def delete_training_plan(plan_id: str, payload: TrainingPlanDeleteRequest):
+    from .training_lifecycle import delete_plan
+    try:return delete_plan(plan_id,payload.expected_plan_revision,payload.confirm)
+    except ValueError as error:raise HTTPException(status_code=409,detail=str(error)) from error
+
+
 @app.post('/api/training/today')
 def today_training(payload: TodayTrainingRequest):
     from .active_training import suggest_today
@@ -670,11 +687,36 @@ def today_training(payload: TodayTrainingRequest):
         raise HTTPException(status_code=400,detail=str(error)) from error
 
 
+@app.get('/api/training/active')
+def read_active_training(timezone: str = 'UTC'):
+    from .active_training import active_view
+    try:return active_view(timezone_name=timezone)
+    except ValueError as error:raise HTTPException(400,str(error)) from error
+
+
+class TrainingEventRequest(BaseModel):
+    model_config={'extra':'forbid'}
+    root_plan_id: str
+    expected_revision: int
+    timezone: str = 'UTC'
+    operation: Literal['upsert','remove']
+    event: dict[str,object] | None = None
+    event_id: str | None = None
+    message: str | None = None
+
+
+@app.post('/api/training/active/events')
+def save_active_training_event(payload: TrainingEventRequest):
+    from .active_training import save_event
+    try:return save_event(payload.model_dump())
+    except ValueError as error:raise HTTPException(409,str(error)) from error
+
+
 @app.post('/api/training/active/review')
 def review_active_training(payload: ActiveTrainingRequest):
     from .active_training import review
     try:
-        return review(timezone_name=payload.timezone)
+        return review(timezone_name=payload.timezone,trigger=payload.trigger)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -684,8 +726,9 @@ def change_active_training(payload: ActiveTrainingRequest):
     from .active_training import request_change, set_status
     try:
         if payload.status:
-            set_status(payload.status)
-            return {'message':'Plan '+payload.status+'.'}
+            from .training_lifecycle import set_program_status
+            if not payload.root_plan_id or payload.expected_revision is None:raise ValueError('Select the root program and its current revision')
+            return set_program_status(payload.root_plan_id,payload.expected_revision,payload.status)
         return request_change(payload.message, payload.timezone)
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

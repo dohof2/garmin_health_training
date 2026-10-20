@@ -1,3 +1,4 @@
+import TrainingEventProposal,{type EventProposal} from './TrainingEventProposal';
 import TrainingSetupProposal, {type Setup} from './TrainingSetupProposal';
 import TrainingAdjustmentProposal, {type Adjustment} from './TrainingAdjustmentProposal';
 import FullActivityStats from './FullActivityStats';
@@ -286,6 +287,7 @@ function proposalRows(proposal: SettingsProposal) {
 }
 
 type ChatEvidence = {
+  training_event?:EventProposal;
   training_setup?: Setup;
   training_adjustment?: Adjustment;
   coaching?: {brief: import("./TrainingCoachPanel").CoachingBrief;week_start:string;timezone:string;status:string};
@@ -1141,6 +1143,8 @@ export default function App() {
 
     const controller = new AbortController();
     chatAbortController.current = controller;
+    let trainerTimedOut = false;
+    const trainerTimer = page === 'training' ? window.setTimeout(() => { trainerTimedOut = true; controller.abort(); }, 90_000) : undefined;
     const slowTimer = window.setTimeout(() => {
       setChatStatus((current) => current.kind === "streaming"
         ? { ...current, slow: true }
@@ -1226,7 +1230,7 @@ export default function App() {
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === "AbortError") {
         setChatMessages((current) => current.map((item) => item.id === assistantId
-          ? { ...item, content: item.content || "Response stopped." }
+          ? { ...item, content: item.content || (trainerTimedOut ? "The trainer took too long. Your saved answers are retained; retry your last reply." : "Response stopped.") }
           : item));
         setChatStatus({ kind: "idle" });
       } else {
@@ -1238,6 +1242,7 @@ export default function App() {
       }
     } finally {
       window.clearTimeout(slowTimer);
+      window.clearTimeout(trainerTimer);
       chatAbortController.current = null;
     }
   };
@@ -2223,7 +2228,7 @@ export default function App() {
                             {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
                             {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
                           </div>}
-                          {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}
+                          {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}{evidence.training_event&&<TrainingEventProposal proposal={evidence.training_event}/>}
                           {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
                           {evidence.proposal && (
                             <div className="settings-proposal">
@@ -2341,7 +2346,7 @@ export default function App() {
               <span>
                 {chatStatus.kind === "streaming"
                   ? chatStatus.slow
-                    ? "Still working—local models can take longer."
+                    ? "Still preparing your answer. You can stop and retry if needed."
                     : `Using ${chatStatus.model ?? "the selected model"}…`
                   : chatStatus.kind === "error"
                     ? chatStatus.message

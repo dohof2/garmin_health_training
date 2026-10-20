@@ -1,0 +1,6 @@
+import {useState} from 'react';
+import {api} from './GraphCanvas';
+export default function PlanDeleteButton({id,name,revision,onDeleted}:{id:string;name:string;revision:number|undefined;onDeleted:()=>void}){
+ const [confirm,setConfirm]=useState<{id:string;name:string;revision:number|undefined}|null>(null),[busy,setBusy]=useState(false),[error,setError]=useState('');
+ return <div><button type="button" disabled={busy} onClick={()=>setConfirm({id,name,revision})}>Delete plan</button>{confirm&&<div role="group" aria-label={`Confirm deletion of ${confirm.name}`}><p>Delete {confirm.name}? This removes the saved plan and its upcoming workouts. Completed activities remain.</p><button type="button" disabled={busy||confirm.revision==null} onClick={async()=>{setBusy(true);setError('');try{await api(`/api/training/plans/${encodeURIComponent(confirm.id)}`,{method:'DELETE',headers:{'Content-Type':'application/json'},body:JSON.stringify({expected_plan_revision:confirm.revision,confirm:true})});setConfirm(null);window.dispatchEvent(new Event('training-plan-changed'));onDeleted();}catch(e){setError(e instanceof Error?e.message:'Could not remove the saved plan.');}finally{setBusy(false);}}}>{busy?'Deleting…':'Confirm delete'}</button><button type="button" disabled={busy} onClick={()=>setConfirm(null)}>Keep plan</button></div>}{error&&<p role="alert">{error}</p>}</div>;
+}

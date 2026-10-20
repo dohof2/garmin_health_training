@@ -17,7 +17,7 @@ OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 
 class AIProvider(Protocol):
-    def generate(self, prompt: str, instructions: str) -> str: ...
+    def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str: ...
 
 
 def _model_name(value: object, field: str) -> str:
@@ -128,7 +128,7 @@ class OllamaProvider:
     def __init__(self, model: str) -> None:
         self.model = model
 
-    def generate(self, prompt: str, instructions: str) -> str:
+    def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str:
         body = json.dumps(
             {
                 "model": self.model,
@@ -145,7 +145,7 @@ class OllamaProvider:
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urlopen(request, timeout=120) as response:
+        with urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
         return str(payload["message"]["content"])
 
@@ -156,8 +156,8 @@ class OpenAIProvider:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         self.model = model
 
-    def generate(self, prompt: str, instructions: str) -> str:
-        response = OpenAI().responses.create(
+    def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str:
+        response = OpenAI(timeout=timeout_seconds, max_retries=0).responses.create(
             model=self.model,
             instructions=instructions,
             input=prompt,
@@ -177,10 +177,10 @@ def active_provider(path: Path | None = None) -> AIProvider:
 
 class ChatGPTProvider:
     def __init__(self,model,path=None):self.model=model;self.path=path
-    def generate(self,prompt,instructions):
+    def generate(self,prompt,instructions,*,timeout_seconds=120):
         from .chatgpt_auth import access_token
         if not self.model:raise RuntimeError('Select a ChatGPT model in Settings.')
-        client=OpenAI(api_key=access_token(self.path),base_url='https://api.openai.com/v1',max_retries=0)
+        client=OpenAI(api_key=access_token(self.path),base_url='https://api.openai.com/v1',timeout=timeout_seconds,max_retries=0)
         text=[];completed=False
         reasoning = {'reasoning': {'effort': 'low'}} if '-sol' in self.model else {}
         for event in client.responses.create(model=self.model,instructions=instructions,input=[{'role':'user','content':prompt}],store=False,stream=True,**reasoning):

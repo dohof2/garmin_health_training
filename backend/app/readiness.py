@@ -63,9 +63,11 @@ def _config(connection, values):
 
 def get_readiness_settings(path: Path | None = None):
     with connect(path) as c:
-        version = _config(c, {})
-        c.execute('INSERT OR IGNORE INTO readiness_settings(id,config_version) VALUES (1,?)', (version,))
         row = c.execute('SELECT r.* FROM readiness_configs r JOIN readiness_settings s ON s.config_version=r.version WHERE s.id=1').fetchone()
+        if row is None:
+            version = _config(c, {})
+            c.execute('INSERT OR IGNORE INTO readiness_settings(id,config_version) VALUES (1,?)', (version,))
+            row = c.execute('SELECT r.* FROM readiness_configs r JOIN readiness_settings s ON s.config_version=r.version WHERE s.id=1').fetchone()
         if row['formula_version'] != FORMULA_VERSION:
             version = _config(c, json.loads(row['parameters_json']))
             c.execute('UPDATE readiness_settings SET config_version=? WHERE id=1',(version,))
