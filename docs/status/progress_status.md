@@ -1,18 +1,22 @@
 # Garmin Health & Training App — Progress Status
 
-Last updated: 21 October 2026
+Last updated: 22 October 2026 (Asia/Jerusalem)
 
-## Current checkpoint — 21 October
+## Current checkpoint — 22 October
+
+Implementation is committed and pushed to `origin/main` as `a541875` (Garmin publishing, nutrition coaching, synchronization/performance improvements and the local launcher). The final combined focused run passed **197 backend tests**, the frontend production build, frontend request checks and whitespace validation. These results cover the selected changed areas, not every historical repository suite. Personal health screenshots and detailed JSON evidence remain local.
+
+**Local launch/quit is implemented:** double-click [`Open Garmin.command`](../../Open%20Garmin.command) in the project folder. It builds stale frontend sources, starts the API and interface together on `127.0.0.1:8765`, and opens the browser. Keep its Terminal window open; press Return there to quit. Closing the browser tab alone does not quit. No background service or automatic startup is installed. Isolated checks verified API/interface startup, duplicate-launch handling, owned-process cleanup and immediate restart with the same test database. Finder double-click/Dock use, sleep/wake and the normal-use trial remain to be observed. Stop the separate developer servers on 5173/8000 before switching to the managed daily-use session. See [launcher verification](../qa/2026-10-22-local-launcher.md).
 
 [Nutrition conversation and target planning](../qa/2026-10-21-nutrition-chat/REPORT.md) now puts the dedicated assistant first, retains meal/portion context, handles combined or separate meal descriptions, and proposes reviewed calorie/macronutrient targets from Garmin measurements, recent activity and the requested weight goal. 49 nutrition tests and the production build passed. No personal meal or target was saved during QC.
 
 The latest agreed order is focused essential QC → a week of normal use → detailed all-tab QC. [Focused QC](../qa/2026-10-21-focused-qc/REPORT.md) passed 146 tests but identified a persisted 54-minute Friday ride and a publication-aware replacement limitation. That finding remains open; do not treat the trial or daily-use release as fully signed off.
 
-[Sync freshness fix](../qa/2026-10-21-sync-freshness/REPORT.md): all seven live streams verified through 21 October with zero failures; today's sleep score and HRV are visible. Automatic open-app sync now rechecks hourly for late uploads instead of stopping after the first same-day check. Health views refresh on completion and partial failures are reported explicitly.
+[Sync freshness fix](../qa/2026-10-21-sync-freshness/REPORT.md): all seven live streams were verified through 21 October with zero failures; that night's sleep score and HRV were visible. This is the last recorded live verification, not a claim of coverage through 22 October. Automatic open-app sync now rechecks hourly for late uploads instead of stopping after the first same-day check. Health views refresh on completion and partial failures are reported explicitly.
 
 The detailed 10 October tracker below is historical where it conflicts with this checkpoint. Active multiweek training, rolling next-seven-day sessions, goal-specific cycling progression and casual daily/weekly adjustments are implemented; [50 casual requests were checked](../qa/2026-10-21-trainer-adjustments/REPORT.md). Cycling publication to Garmin Connect is implemented, read back, and confirmed working by the user; running/strength/device validation has the limits listed in [publication verification](../qa/2026-10-21-garmin-publication/REPORT.md). The readiness database-lock failure was fixed; missing measurements still do not become invented scores.
 
-The [measured performance pass](../qa/2026-10-21-performance/REPORT.md) reduces forecast and plot work, defers unseen-tab loading, shares simultaneous reads, reduces training payloads and repeated sync parsing/writes, and fixes the weekly-calorie card's old-export source selection. **Next: resolve the focused-QC Friday finding, then a week of normal use, then the user's detailed all-tab QC and daily-use lifecycle/packaging.** Phone access, messaging and closed-app background operation remain deferred. The selected ChatGPT account route is connected; a standalone OpenAI API key is not a prerequisite for that route. T8 is no longer wholly deferred; the older T8 rows below describe the original sequencing decision.
+The [measured performance pass](../qa/2026-10-21-performance/REPORT.md) reduces forecast and plot work, defers unseen-tab loading, shares simultaneous reads, reduces training payloads and repeated sync parsing/writes, and fixes the weekly-calorie card's old-export source selection. **Next: resolve the focused-QC Friday finding, then a week of normal use with the launcher, then the user's detailed all-tab QC.** Trial dates are not fixed and no completed week of observation is claimed. Phone access, messaging and closed-app background operation remain deferred. The selected ChatGPT account route is connected; a standalone OpenAI API key is not a prerequisite for that route. The milestone and T8/T10 rows below reflect the current state; older dated verification counts remain historical evidence.
 
 ## Historical baseline — 10 October
 
@@ -38,11 +42,11 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | M0 — Feasibility evidence | T1 | ✅ Complete | Hardware, runtime, archive, live Garmin coverage, workout surface, and local text/tool/basic-vision benchmarks are documented |
 | M1 — Local data foundation | T2–T4 | 🟡 Partial | Core import/export, settings, authentication, five-stream live catch-up, reconciliation, and scheduling are complete; natural token-expiry observation and optional importer UI conveniences remain |
 | M2 — First dashboard | T5 | 🟡 Partial | Technical implementation and timezone/DST verification are complete; gradual U5 usability feedback remains |
-| M3 — Historical AI assistant | T6 | 🟡 Partial | Implementation complete: grounded history, ride/course comparison, conditional ride assessment, reviewed profile/goal changes, and regression checks. Local Qwen verified; live OpenAI verification awaits a key |
+| M3 — Historical AI assistant | T6 | 🟡 Partial | Grounded history, ride/course comparison, reviewed settings and assistant plots implemented; local Qwen verified and selected ChatGPT account route connected. Detailed all-tab user QC remains |
 | M3A — Maintenance history | T11 | ✅ Complete | Local chat commands, history/edit/undo, revisions, reviewed CSV portability, JSON and full backup restoration verified |
-| M4 — Training | T7–T8, T12 | 🟡 Partial | T7 foundation planning and T12 advisory readiness implemented and verified; T8 Garmin publishing is deferred until after T9/T10 and local normal-use validation |
+| M4 — Training | T7–T8, T12 | 🟡 Partial | Active plans, rolling sessions, casual adjustments, readiness fixes and reviewed Garmin publishing implemented; live cycling push confirmed. Persisted Friday allocation, other sport/device validation and normal-use checks remain |
 | M5 — Food and nutrition | T9 | ✅ Complete | Local prototype: manual/recipe logging, offline USDA, reviewed photo candidates and targets; photo mass accuracy remains unvalidated |
-| M6 — Daily-use release | T10 | ⬜ Not started | Explicit launch/quit and open-session-only jobs remain required |
+| M6 — Daily-use release | T10 | 🟡 Partial | One-file foreground launcher and isolated launch/quit/restart checks complete; Friday finding, normal-use trial and detailed user QC remain before sign-off |
 
 ## Task and subtask tracker
 
@@ -88,7 +92,7 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 | T4.2 | Retrieve supported account-wide health/activity data | ✅ Complete | Independent live streams retrieve activities/FIT detail, expanded daily summaries, sleep, HRV, and weight/body composition; exact coverage and remaining epoch-level limits are documented in `live-data-coverage.md` |
 | T4.3 | Add Sync now, progress, counts, errors, and retry | ✅ Complete | Sync now/status UI, durable progress/results, last-success/error state, and retry-safe execution are operational; successful sync immediately refreshes dashboard values, activity rows, checkpoints, and plan |
 | T4.4 | Per-data-type checkpoints, full-gap catch-up, overlap, locking, and recovery | ✅ Complete | Independent daily checkpoints, atomic interval commits, configurable overlap/request pacing, single-job locking, and interrupted-job recovery are tested |
-| T4.5 | Open-session-only scheduling and catch-up after reopening | ✅ Complete | Daily sync is enabled only while the app is open; startup and 15-minute due checks skip an already-current day, run the shared catch-up pipeline for any missing date, and remain inactive while the app is closed |
+| T4.5 | Open-session-only scheduling and catch-up after reopening | ✅ Complete | Open-app startup/15-minute checks catch missing dates and recheck all supported streams after one hour for late same-day uploads; overlapping jobs are prevented. Managed-session Quit stops the server; no closed-app scheduler is installed |
 | T4.6 | Test duplicates, late data, corrections/deletions, expiry, and partial failures | 🟡 Partial | Tests cover all listed cases, FIT/live fingerprint reconciliation, token reuse, simulated expiry, sign-out/reconnect, and explicit deletion tombstones; natural Garmin token-expiry behavior remains to observe during use |
 | T4.7 | Seed catch-up from import coverage and track empty versus unchecked intervals | ✅ Complete | Real checkpoints seed from activity/daily-metric import bounds; successful empty daily intervals are stored explicitly and failed intervals remain pending |
 | T4.8 | Updated-since support or historical reconciliation | ✅ Complete | Three-day overlap plus selectable historical reconciliation is implemented; UI/API disclose that older corrections require recheck when updated-since is unavailable |
@@ -129,14 +133,14 @@ This is the quick status reference. Detailed requirements and acceptance criteri
 
 ### T8 — Publish and schedule Garmin workouts
 
-Deferred to the last implementation stage by user decision, after T9, T10 and local normal-use verification.
+Reviewed publication is implemented. The user confirmed the live cycling push works; remaining validation is sport/device-specific.
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T8.1 | Map sport sessions to supported Garmin fields | 🔒 Deferred | Unsupported representations must be visible; final stage after the local app works |
-| T8.2 | Preview, publish, schedule, and read-back verification | 🔒 Deferred | External write requires deliberate user action; final stage after the local app works |
-| T8.3 | Remote IDs, retry safety, edits, rescheduling, and removal | 🔒 Deferred | Retries must not create duplicates; final stage after the local app works |
-| T8.4 | Validate one workout per supported sport in Garmin/device | 🔒 Deferred | Requires U7 and U2 if disconnected; final stage after the local app works |
+| T8.1 | Map sport sessions to supported Garmin fields | 🟡 Partial | Cycling/running mappings tested; strength blocked until verified mappings exist |
+| T8.2 | Preview, publish, schedule, and read-back verification | ✅ Complete | Explicit reviewed send, optional scheduling and read-back; one live cycling workout confirmed by the user |
+| T8.3 | Remote IDs, retry safety, edits, rescheduling, and removal | 🟡 Partial | Durable receipts, reconciliation, conflicts and reviewed updates/calendar removals tested with isolated providers; live update/removal pilots remain |
+| T8.4 | Validate one workout per supported sport in Garmin/device | 🟡 Partial | Live cycling Connect publication verified; running, strength and compatible-device delivery/execution remain |
 
 ### T9 — Add food logging and nutrition status
 
@@ -153,12 +157,12 @@ Deferred to the last implementation stage by user decision, after T9, T10 and lo
 
 | ID | Assignment | Status | Evidence, dependency, or next action |
 |---|---|---|---|
-| T10.1 | Launcher/start-stop guidance, errors, and migration recovery | ⬜ Not started | No automatic startup |
-| T10.2 | Re-measure resources and optimize models/jobs | ⬜ Not started | Requires representative data and working AI integration |
-| T10.3 | Explicit launch/quit and owned-process shutdown | ⬜ Not started | Must save checkpoints and leave unrelated services alone |
-| T10.4 | Optional reminders only while the app is open | ⬜ Not started | Disabled unless selected |
-| T10.5 | Export/delete controls, secret exclusion, and full restore | ⬜ Not started | Revalidate across all completed modules |
-| T10.6 | Normal-use trial: sleep/wake, offline, expiry, interruption, settings | ⬜ Not started | Later usability feedback requested |
+| T10.1 | Launcher/start-stop guidance, errors, and migration recovery | 🟡 Partial | Open Garmin.command and README guidance added; stale build/startup errors handled; isolated database startup/restart checked. Finder use and real interruption/migration recovery observation remain |
+| T10.2 | Re-measure resources and optimize models/jobs | 🟡 Partial | Forecast/plot timings, payloads, retained tabs, shared reads and sync parsing/writes improved; normal-use resource observation remains |
+| T10.3 | Explicit launch/quit and owned-process shutdown | 🟡 Partial | Return/Terminal-session signals stop only owned server processes; duplicate launches and immediate restart verified in isolation. Browser close alone does not quit; real Finder/Terminal close observation remains |
+| T10.4 | Optional reminders only while the app is open | 🔒 Deferred | No reminder or background monitor created |
+| T10.5 | Export/delete controls, secret exclusion, and full restore | 🟡 Partial | Existing exports, backup previews and publication restore guards implemented; full cross-module restore validation remains |
+| T10.6 | Normal-use trial: sleep/wake, offline, expiry, interruption, settings | ⬜ Not started | Begin after Friday allocation finding is resolved; a week of normal use precedes detailed all-tab QC |
 
 ### T11 — Maintenance and accessory replacement log
 
@@ -194,7 +198,7 @@ Deferred to the last implementation stage by user decision, after T9, T10 and lo
 | U4 | Background-operation decision | 🔒 Deferred | Later edition only; first edition has none |
 | U5 | Dashboard usability feedback | ⏳ Ready when convenient | The first working desktop/mobile dashboard is available; feedback can be provided gradually |
 | U6 | Training availability/equipment/experience/restrictions | ⏳ Ready during use | Saved Training questions are available; no real answers invented |
-| U7 | Deliberate test-workout publication and device check | ⏳ Not needed yet | T8 validation, one test per supported sport |
+| U7 | Deliberate test-workout publication and device check | 🟡 Partial | Cycling push to Garmin Connect confirmed; other sport/device checks remain |
 | U8 | Nutrition inputs and optional known-portion meals | ⏳ Ready during use | Nutrition target/meal review is available; known-portion photo quality trials remain useful |
 | U9 | Free food-API key, only if required | 🔒 Not required | Bundled USDA download supports offline lookup without a key |
 | U10 | GitHub sign-in/publication | ✅ Complete | User authenticated independently and published the repository at `dohof2/garmin_health_training` |
@@ -213,7 +217,7 @@ Deferred to the last implementation stage by user decision, after T9, T10 and lo
 
 ## Immediate next action
 
-T7 foundation training planning is implemented and verified; see `t7-verification.md`. T9 local nutrition is implemented and verified; see `t9-verification.md`. Next is T10 daily-use lifecycle/recovery and normal-use validation. T8 Garmin workout publishing comes last. T12 readiness is implemented as a provisional advisory prototype; see `t12-verification.md`. T11 maintenance is complete; details are in `t11-verification.md`. Live OpenAI verification remains pending until `OPENAI_API_KEY` is supplied; local Qwen is verified and remains the no-fee default. MCP is not a prerequisite. Continue observing saved-session renewal/expiry during normal Garmin use and collect dashboard feedback gradually. General file selection and background import cancellation remain optional because the full archive is already imported and repeatable command-line import paths exist.
+Resolve the saved Friday long ride being shorter than weekday rides, preserving the already published session and requiring reviewed action for any Garmin update. Then begin a week of normal use with Open Garmin.command and record sleep/wake, offline, token expiry, interruption/reopening, synchronization freshness and settings behavior. Follow that with the user's detailed all-tab QC before final daily-use sign-off. Garmin cycling publication is already working; other sport/device validation and full cross-module restore checks remain. No standalone API key is required for the connected ChatGPT account route. General file selection/import cancellation, phone access, messaging and closed-app background operation remain outside this immediate work.
 
 ## Sync recovery verification — 10 October 2026
 
