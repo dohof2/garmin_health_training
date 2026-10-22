@@ -436,7 +436,8 @@ def reschedule(identifier,scheduled_for,expected_revision,path=None,now=None,sch
     with connect(path) as c:
         c.execute('BEGIN IMMEDIATE');row=_snapshot(c,identifier)
         if not row or row['revision']!=expected_revision:raise ValueError('Session changed; refresh first')
-        if row['completion_status']!='planned' or row['publish_status']!='local' or row['garmin_workout_id']:raise ValueError('Only planned local sessions can be moved')
+        managed=bool(c.execute('SELECT 1 FROM garmin_publication_links WHERE workout_id=? AND verified_hash IS NOT NULL',(identifier,)).fetchone())
+        if row['completion_status']!='planned' or row['publish_status'] not in ('local','published','update_needed') or (row['publish_status']!='local' or row['garmin_workout_id']) and not managed:raise ValueError('Only local sessions or verified app-managed Garmin sessions can be moved')
         program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
         if not program or identifier not in {w['id'] for w in _program_workouts(c,program['plan_id'])}:raise ValueError('Session does not belong to the active plan')
         state=json.loads(program['state_json']);tz=ZoneInfo(state['timezone'])
@@ -463,6 +464,7 @@ def reschedule(identifier,scheduled_for,expected_revision,path=None,now=None,sch
         definition['schedule_slot_id']=assigned['slot_id']
         if day_total>day_limit(constraints,day.weekday()):raise ValueError('The scheduled day exceeds confirmed availability')
         c.execute('UPDATE planned_workouts SET scheduled_for=?,definition_json=?,revision=revision+1 WHERE id=?',(local.isoformat(),encoded(definition),identifier));_revision(c,_snapshot(c,identifier))
+        if managed:c.execute("UPDATE planned_workouts SET publish_status='update_needed' WHERE id=?",(identifier,))
         c.execute('UPDATE active_training_program SET revision=revision+1 WHERE id=1')
         from .training_lifecycle import invalidate
         invalidate(c,program['plan_id'])
@@ -521,7 +523,8 @@ def propose_adjustment(arguments,path=None):
         allowed={'completion_status','effort','soreness','pain_or_illness','notes','activity_id','strength_sets'}
         if not isinstance(changes,dict) or not changes or set(changes)-allowed:raise ValueError('Provide explicit feedback/completion changes only')
         return {'tool':'propose_training_adjustment','workout_id':w['id'],'expected_revision':w['revision'],'changes':changes,'kind':'feedback','status':'proposal','message':'Review recorded feedback/completion for '+w['title']+'. Nothing is saved yet.'}
-    return {'tool':'propose_training_adjustment',**request_change(arguments.get('message'),arguments.get('timezone') or 'UTC',path,apply=False)}
+    from .training_adjustments import propose
+    return propose(arguments.get('message'),path)
 
 
 def suggest_today(arguments,path=None,now=None):

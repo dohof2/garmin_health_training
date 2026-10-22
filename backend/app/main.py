@@ -9,7 +9,7 @@ from typing import Literal
 from fastapi import FastAPI, HTTPException, Query, Request
 from pydantic import BaseModel, Field, SecretStr
 from starlette.background import BackgroundTask
-from starlette.responses import FileResponse, StreamingResponse, Response
+from starlette.responses import FileResponse, StreamingResponse, Response, JSONResponse
 
 from .ai_chat import chat_stream
 from .ai_providers import provider_status, save_ai_settings
@@ -87,6 +87,8 @@ async def lifespan(_: FastAPI):
     from .activity_metrics import backfill_fit_ascent
     backfill_fit_ascent()
     recover_interrupted_sync_jobs()
+    from .garmin_training_publish import recover
+    recover()
     yield
 
 
@@ -95,6 +97,63 @@ app = FastAPI(
     version="0.1.0",
     lifespan=lifespan,
 )
+
+
+class GarminPublicationPreview(BaseModel):
+    model_config={'extra':'forbid'}
+    workout_ids: list[str] = Field(default_factory=list,max_length=21)
+    definition: dict[str,object] | None = None
+    schedule: bool = True
+    scheduled_date: date | None = None
+    timezone: str = 'UTC'
+
+
+@app.get('/api/training/publication/capabilities')
+def garmin_publication_capabilities():
+    state=connection_state()
+    return {'provider':'garminconnect (unofficial)','connection_status':state['status'],'has_saved_session':state['has_saved_session'],'sports':['cycling','running'],'targets':['prescribed_watts','prescribed_bpm','effort_in_notes'],'scheduling':True,'device_delivery':'unverified','unsupported':{'strength':'Exercise mappings need validation before strength publication.','hiking':'No verified Garmin workout mapping in this release.'}}
+
+
+@app.post('/api/training/publication/preview')
+def preview_garmin_publication(payload: GarminPublicationPreview):
+    from .garmin_training_publish import preview
+    try:return preview(payload.model_dump(mode='json',exclude_none=True))
+    except Exception as error:
+        if isinstance(error,ValueError):raise HTTPException(400,str(error)) from error
+        raise HTTPException(400,'Could not verify the Garmin connection. Reconnect Garmin and try again.') from error
+
+
+@app.get('/api/training/publication/jobs')
+def list_garmin_publications():
+    from .garmin_training_publish import history
+    return history()
+
+
+@app.get('/api/training/publication/jobs/{job_id}')
+def read_garmin_publication(job_id: str):
+    from .garmin_training_publish import view
+    try:return view(job_id)
+    except ValueError as error:raise HTTPException(404,str(error)) from error
+
+
+@app.post('/api/training/publication/jobs/{job_id}/approve')
+def approve_garmin_publication(job_id: str):
+    from .garmin_training_publish import approve, run
+    try:
+        result=approve(job_id)
+        return JSONResponse(result,background=BackgroundTask(run,job_id))
+    except ValueError as error:raise HTTPException(409,str(error)) from error
+    except Exception as error:raise HTTPException(400,'Reconnect Garmin before sending this workout.') from error
+
+
+@app.post('/api/training/publication/jobs/{job_id}/retry')
+def retry_garmin_publication(job_id: str):
+    from .garmin_training_publish import retry, run
+    try:
+        result=retry(job_id)
+        return JSONResponse(result,background=BackgroundTask(run,job_id))
+    except ValueError as error:raise HTTPException(409,str(error)) from error
+    except Exception as error:raise HTTPException(400,'Reconnect Garmin before reconciliation.') from error
 
 
 class ChartRequest(BaseModel):
@@ -198,13 +257,32 @@ class FoodDescription(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+class NutritionConversation(FoodDescription):
+    day: date
+    timezone: str = Field(max_length=100)
+    history: list[dict[str, str]] = Field(default_factory=list, max_length=12)
+    draft_items: list[str] = Field(default_factory=list, max_length=30)
+    meal_type: str = Field(default='meal', max_length=30)
+    pending_target: dict | None = None
+    pending_foods: list[dict] = Field(default_factory=list, max_length=30)
+
+
+class NutritionSuggestedTargetSave(BaseModel):
+    model_config = {"extra": "forbid"}
+    request: dict
+    day: date
+    fingerprint: str = Field(min_length=64, max_length=64)
+    expected_revision: int = Field(strict=True, ge=0)
+    confirmed: bool
+
+
 class FoodPhoto(BaseModel):
     model_config = {"extra": "forbid"}
     image_base64: str = Field(min_length=1, max_length=8*1024*1024)
 
 
-def nutrition_call(function, *args):
-    try: return function(*args)
+def nutrition_call(function, *args, **kwargs):
+    try: return function(*args, **kwargs)
     except ValueError as error: raise HTTPException(status_code=400, detail=str(error)) from error
 
 
@@ -276,6 +354,20 @@ def nutrition_target_save(body: NutritionTargetSave):
 @app.post('/api/nutrition/assistant')
 def nutrition_assistant(body: FoodDescription):
     return nutrition_call(analyze_text,body.message)
+
+
+@app.post('/api/nutrition/chat')
+def nutrition_conversation(body: NutritionConversation):
+    from .nutrition_chat import chat
+    return nutrition_call(chat, body.message, body.day.isoformat(), body.timezone, body.history, body.draft_items, body.meal_type, pending_target=body.pending_target, pending_foods=body.pending_foods)
+
+
+@app.post('/api/nutrition/targets/suggestion/save')
+def nutrition_suggested_target_save(body: NutritionSuggestedTargetSave):
+    if not body.confirmed:
+        raise HTTPException(status_code=422, detail='Review and confirm the nutrition target before saving')
+    from .nutrition_targets import save
+    return nutrition_call(save, body.request, body.day.isoformat(), body.fingerprint, body.expected_revision)
 
 
 @app.post('/api/nutrition/photo')
@@ -601,8 +693,9 @@ def summary(timezone: str | None = None) -> dict[str, object]:
 
 
 @app.get("/api/history/weekly-calories")
-def weekly_calories() -> dict[str, object] | None:
-    return weekly_calories_summary()
+def weekly_calories(timezone: str = 'UTC') -> dict[str, object] | None:
+    try:return weekly_calories_summary(timezone_name=timezone)
+    except ValueError as error:raise HTTPException(400,str(error)) from error
 
 
 @app.get("/api/dashboard/cards")
@@ -721,6 +814,19 @@ def review_active_training(payload: ActiveTrainingRequest):
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+class TrainingAdaptationRequest(BaseModel):
+    model_config={'extra':'forbid'}
+    message: str
+    fingerprint: str
+
+
+@app.post('/api/training/active/adapt')
+def save_training_adaptation(payload: TrainingAdaptationRequest):
+    from .training_adjustments import save
+    try:return save(payload.model_dump())
+    except (ValueError,KeyError) as error:raise HTTPException(409,str(error)) from error
+
+
 @app.post('/api/training/active/change')
 def change_active_training(payload: ActiveTrainingRequest):
     from .active_training import request_change, set_status
@@ -805,8 +911,8 @@ def draft_coaching_plan(payload: CoachingRequest):
 
 
 @app.get("/api/training")
-def training_history():
-    return list_training()
+def training_history(compact: bool = False):
+    return list_training(compact=compact)
 
 
 @app.get("/api/training/progression")

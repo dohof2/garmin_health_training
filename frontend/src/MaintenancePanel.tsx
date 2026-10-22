@@ -1,3 +1,4 @@
+import {coalescedFetch} from './request';
 import { useEffect, useRef, useState } from "react";
 
 export type MaintenanceEvent = {
@@ -58,7 +59,7 @@ function EventDetails({ event }: { event: MaintenanceEvent }) {
     {event.deleted_at && <div><dt>Status</dt><dd>Removed (recoverable)</dd></div>}</dl>;
 }
 async function api(url: string, body?: unknown, method = "POST") {
-  const response = await fetch(url, body === undefined ? undefined : {
+  const response = await coalescedFetch(url, body === undefined ? undefined : {
     method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   });
   if (!response.ok) {

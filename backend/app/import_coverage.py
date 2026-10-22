@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from .read_cache import versioned_read
 from .database import connect
 from .garmin_import import GARMIN_SOURCE_NAME
 
@@ -16,6 +17,7 @@ def _range_row(connection, query: str, parameters: tuple[object, ...] = ()):
     return connection.execute(query, parameters).fetchone()
 
 
+@versioned_read
 def import_coverage(path: Path | None = None) -> dict[str, object]:
     """Summarize durable Garmin import coverage and checkpoint failures."""
     with connect(path) as connection:

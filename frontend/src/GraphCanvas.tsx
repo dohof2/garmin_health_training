@@ -1,5 +1,6 @@
+import {requestJson} from './request';
 import SleepCard from './SleepCard';
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import InteractivePlot from './InteractivePlot';
 import StatusDial, { fitnessBands } from './StatusDial';
 
@@ -14,12 +15,8 @@ const bands = {
   male: [[41.7,45.4,51.1,55.4],[40.5,44,48.3,54],[38.5,42.4,46.4,52.5],[35.6,39.2,43.4,48.9],[32.3,35.5,39.5,45.7],[29.4,32.3,36.7,42.1]],
   female: [[36.1,39.5,43.9,49.6],[34.4,37.8,42.4,47.4],[33,36.3,39.7,45.3],[30.1,33,36.7,41.1],[27.5,30,33,37.8],[25.9,28.1,30.9,36.7]],
 };
-export async function api<T>(url: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(url, options);
-  const result = await response.json();
-  if (!response.ok) throw new Error(typeof result.detail === 'string' ? result.detail : 'The request could not be completed.');
-  return result as T;
-}
+export const api=requestJson;
+
 const jsonRequest = (value: unknown, method = 'POST'): RequestInit => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
 const label = (id: string) => id === 'activity_elevation' ? 'Total climb' : id.replace('activity_', 'Activity ').replace('vo2_', 'VO₂ max · ').replaceAll('_', ' ');
 function localDate() { return new Intl.DateTimeFormat('en-CA', {year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date()); }
@@ -88,7 +85,7 @@ function StandardChartCard({ spec, initial, profile, refresh, actions }: {spec: 
   const [showVO2Trend,setShowVO2Trend]=useState(false);
   const [result,setResult]=useState<ChartResult | null>(initial ?? null);
   const [error,setError]=useState(''); const [expanded,setExpanded]=useState(false); const [loadRefresh,setLoadRefresh]=useState(0),[refreshingLoad,setRefreshingLoad]=useState(false),[loadNotice,setLoadNotice]=useState('');
-  useEffect(() => {const controller=new AbortController();setError(''); if(initial){setResult(initial);return;} setResult(null); api<ChartResult>('/api/charts/query',{...jsonRequest({spec:{...spec,timezone}}),signal:controller.signal}).then(setResult).catch(e=>{if(e.name!=='AbortError')setError(e.message);});return()=>controller.abort();},[JSON.stringify(spec),initial,refresh,loadRefresh]);
+  useEffect(() => {const controller=new AbortController();setError(''); if(initial){setResult(initial);return;} setResult(null); api<ChartResult>('/api/charts/query',{...jsonRequest({spec:{...spec,timezone}}),signal:controller.signal}).then(result=>{if(!controller.signal.aborted)setResult(result);}).catch(e=>{if(!controller.signal.aborted&&e.name!=='AbortError')setError(e.message);});return()=>controller.abort();},[JSON.stringify(spec),initial,refresh,loadRefresh]);
   return <article className={`graph-card ${spec.size==='full'||expanded?'graph-card--full':''}`}>
     <div className="graph-heading"><div><h3>{spec.title || label(spec.metric)}</h3><p>{spec.gps_reference_id ? 'GPS-matched rides · ' : ''}{spec.metric.startsWith('stream:') ? 'Recorded activity traces · aligned by elapsed time' : spec.window_days ? `Last ${spec.window_days} days` : `${spec.start||'All history'} → ${spec.end||'Latest'}`}{spec.sport && spec.sport!=='all'?` · ${spec.sport}`:''}</p></div><button type="button" onClick={()=>setExpanded(!expanded)} aria-expanded={expanded}>{expanded?'Collapse':'Expand'}</button></div>
     {result?.latest && spec.metric==='sleep_score' && <p className="health-score-summary"><strong>{result.latest.y.toLocaleString(undefined,{maximumFractionDigits:1})}<span> / 100</span></strong><span>Latest recorded sleep score · {result.latest.date}</span></p>}
@@ -103,16 +100,16 @@ export function ChartCard(props: React.ComponentProps<typeof StandardChartCard> 
   return <StandardChartCard {...props}/>;
 }
 
-export default function GraphCanvas({ mode='dashboard', profile, refresh=0 }: { mode?: 'dashboard'|'health'; profile?: Profile | null; refresh?: string | number }) {
+function GraphCanvas({ mode='dashboard', profile, refresh=0 }: { mode?: 'dashboard'|'health'; profile?: Profile | null; refresh?: string | number }) {
   const layoutUrl=mode==='health'?'/api/health/widgets':'/api/dashboard/widgets';
   const [catalog,setCatalog]=useState<Catalog|null>(null),[widgets,setWidgets]=useState<ChartSpec[]>([]),[ready,setReady]=useState(false);
   const [error,setError]=useState(''),[saving,setSaving]=useState(false),[editing,setEditing]=useState<ChartSpec|null>(null);
   const builderRef=useRef<HTMLFormElement>(null);
   useEffect(()=>{if(editing){builderRef.current?.scrollIntoView({behavior:'instant',block:'start'});builderRef.current?.querySelector<HTMLInputElement>('input')?.focus({preventScroll:true});}},[editing?.id]);
   const [dragId,setDragId]=useState<string|null>(null),[notice,setNotice]=useState('');
-  useEffect(()=>{let active=true; Promise.all([api<Catalog>('/api/charts/catalog'),api<{widgets:ChartSpec[]|null}>(layoutUrl)]).then(([c,w])=>{if(!active)return;setCatalog(c);setWidgets(w.widgets??(mode==='health'?healthDefaults:defaults));setReady(true);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[refresh,mode]);
+  useEffect(()=>{let active=true;setError('');void api<{widgets:ChartSpec[]|null}>(layoutUrl).then(w=>{if(active){setWidgets(w.widgets??(mode==='health'?healthDefaults:defaults));setReady(true);}}).catch(e=>{if(active)setError(e.message);});void api<Catalog>('/api/charts/catalog').then(c=>{if(active)setCatalog(c);}).catch(e=>{if(active)setError(e.message);});return()=>{active=false;};},[refresh,mode]);
   const save=async(next:ChartSpec[])=>{setSaving(true);setError('');try{const r=await api<{widgets:ChartSpec[]}>(layoutUrl,jsonRequest({widgets:next},'PUT'));setWidgets(r.widgets);setNotice(mode==='health'?'Health dashboard saved.':'Dashboard saved.');return true;}catch(e){setError(e instanceof Error?e.message:'Could not save layout');return false;}finally{setSaving(false);}};
-  useEffect(()=>{if(mode!=='dashboard')return;const pinned=(event:Event)=>{const spec=(event as CustomEvent<ChartSpec>).detail;setEditing({...spec,id:crypto.randomUUID()});};window.addEventListener('pin-chart',pinned);return()=>window.removeEventListener('pin-chart',pinned);},[mode]);
+  useEffect(()=>{if(mode!=='dashboard')return;const pinned=(event:Event)=>{const spec=(event as CustomEvent<ChartSpec>).detail;sessionStorage.removeItem('garmin-pending-pin');setEditing({...spec,id:crypto.randomUUID()});};const retained=sessionStorage.getItem('garmin-pending-pin');if(retained){try{pinned(new CustomEvent('pin-chart',{detail:JSON.parse(retained)}));}catch{sessionStorage.removeItem('garmin-pending-pin');}}window.addEventListener('pin-chart',pinned);return()=>window.removeEventListener('pin-chart',pinned);},[mode]);
   const items = catalog ? [...catalog.metrics,...catalog.activity_fields].map(item=>item.id==='activity_elevation'?{...item,label:'Total climb'}:item) : [];
   const visible=widgets;
   const move=(id:string,target:number)=>{const next=[...widgets];const index=next.findIndex(w=>w.id===id);if(index<0)return;const [item]=next.splice(index,1);next.splice(target,0,item);void save(next);};
@@ -134,10 +131,12 @@ export function AssistantPlots({ plots, profile }: {plots:ChartResult[];profile?
   const total=Math.ceil(plots.length/4);
   useEffect(()=>setPage(Math.max(0,total-1)),[plots.length]);
   if(!plots.length)return null;
-  return <section id="assistant-plots" className="assistant-plots" aria-label="Assistant plot workspace"><div className="section-heading"><div><p>Assistant plot workspace</p><h2>Explore the evidence</h2></div>{total>1&&<div><button disabled={!page} onClick={()=>setPage(page-1)}>Previous plots</button><span> {page+1} / {total} </span><button disabled={page>=total-1} onClick={()=>setPage(page+1)}>Next plots</button></div>}</div><div className="graph-grid">{plots.slice(page*4,page*4+4).map((result,i)=><ChartCard key={`${page}-${i}`} spec={result.spec} initial={result} profile={profile} actions={<button type="button" onClick={()=>{window.dispatchEvent(new CustomEvent('pin-chart',{detail:result.spec}));window.location.hash='dashboard';setNotice('Review the graph in the dashboard builder and save it.');}}>Pin to dashboard</button>}/>)}</div><p role="status">{notice}</p></section>;
+  return <section id="assistant-plots" className="assistant-plots" aria-label="Assistant plot workspace"><div className="section-heading"><div><p>Assistant plot workspace</p><h2>Explore the evidence</h2></div>{total>1&&<div><button disabled={!page} onClick={()=>setPage(page-1)}>Previous plots</button><span> {page+1} / {total} </span><button disabled={page>=total-1} onClick={()=>setPage(page+1)}>Next plots</button></div>}</div><div className="graph-grid">{plots.slice(page*4,page*4+4).map((result,i)=><ChartCard key={`${page}-${i}`} spec={result.spec} initial={result} profile={profile} actions={<button type="button" onClick={()=>{sessionStorage.setItem('garmin-pending-pin',JSON.stringify(result.spec));window.dispatchEvent(new CustomEvent('pin-chart',{detail:result.spec}));window.location.hash='dashboard';setNotice('Review the graph in the dashboard builder and save it.');}}>Pin to dashboard</button>}/>)}</div><p role="status">{notice}</p></section>;
 }
 
 export function WeightEntry({ onSaved, unit='kg' }: {onSaved:()=>void;unit?:'kg'|'lb'}) {
   const [day,setDay]=useState(localDate()),[value,setValue]=useState(''),[message,setMessage]=useState(''),[busy,setBusy]=useState(false);
   return <form id="weight-entry" className="weight-entry" onSubmit={async e=>{e.preventDefault();setBusy(true);try{await api('/api/weight',jsonRequest({date:day,value:Number(value),unit}));setValue('');setMessage('Weight measurement saved.');onSaved();}catch(error){setMessage(error instanceof Error?error.message:'Could not save weight');}finally{setBusy(false);}}}><h3>Log a weight measurement</h3><p>Dated entries appear alongside Garmin measurements in your graphs.</p><div className="builder-fields"><label>Date<input type="date" required value={day} max={localDate()} onChange={e=>setDay(e.target.value)}/></label><label>Weight ({unit})<input type="number" required step="0.1" min="1" value={value} onChange={e=>setValue(e.target.value)}/></label></div><button className="primary-button" disabled={busy}>{busy?'Saving…':'Save measurement'}</button><p role="status">{message}</p></form>;
 }
+
+export default memo(GraphCanvas);

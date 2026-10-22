@@ -1,9 +1,11 @@
+import {coalescedFetch} from './request';
+import RetainedPage from './RetainedPage';
 import TrainingEventProposal,{type EventProposal} from './TrainingEventProposal';
 import TrainingSetupProposal, {type Setup} from './TrainingSetupProposal';
 import TrainingAdjustmentProposal, {type Adjustment} from './TrainingAdjustmentProposal';
 import FullActivityStats from './FullActivityStats';
 import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
-import GraphCanvas, { AssistantPlots, WeightEntry, type ChartResult, type ChartSpec } from "./GraphCanvas";
+import GraphCanvas, { api, AssistantPlots, WeightEntry, type ChartResult, type ChartSpec } from "./GraphCanvas";
 import TrainingPanel from "./TrainingPanel";
 import NutritionPanel from "./NutritionPanel";
 import { ReadinessCard } from "./ReadinessCard";
@@ -93,13 +95,16 @@ type WeeklyCalories = {
   week_start: string;
   week_end: string;
   days_expected: number;
+  days_elapsed: number;
+  period_status: 'complete'|'partial'|'week_to_date';
+  today_in_progress: boolean;
   days_with_data: number;
   missing_dates: string[];
   is_complete: boolean;
   total_kcal: number;
   active_kcal: number;
   resting_kcal: number;
-  source_name: "garmin_export";
+  source_name: string;
 };
 
 type DashboardCardId = "latest_steps" | "last_activity" | "weekly_calories" | "training_readiness";
@@ -388,10 +393,10 @@ type ConnectionState =
       summary: HistorySummary;
       weeklyCalories: WeeklyCalories | null;
       dashboardCards: DashboardCardLayout[];
-      coverage: ImportCoverage;
-      originalActivities: OriginalActivityInventory;
+      coverage: ImportCoverage|null;
+      originalActivities: OriginalActivityInventory|null;
       syncStatus: SyncStatus;
-      syncPlan: SyncPlan;
+      syncPlan: SyncPlan|null;
       garminConnection: GarminConnection;
       settings: AppSettings;
       aiProviderStatus: AiProviderStatus;
@@ -730,9 +735,11 @@ export default function App() {
   const [connection, setConnection] = useState<ConnectionState>({
     kind: "checking",
   });
+  const [dataLoadError,setDataLoadError]=useState(''),[dataLoading,setDataLoading]=useState(false),[dataLoadRevision,setDataLoadRevision]=useState(0);
   const [importState, setImportState] = useState<ImportState>({ kind: "idle" });
   const [activityRange, setActivityRange] = useState({ start: "", end: "" });
   const [activityOffset, setActivityOffset] = useState(0);
+  const lastActivityQuery=useRef('');
   const [activityRevision,setActivityRevision]=useState(0);
   const [activityNotice,setActivityNotice]=useState('');
   const [activityHasMore, setActivityHasMore] = useState(false);
@@ -787,49 +794,41 @@ export default function App() {
   const [maintenanceActionError, setMaintenanceActionError] = useState<string | null>(null);
   const chatAbortController = useRef<AbortController | null>(null);
   const scheduledSyncInFlight = useRef(false);
+  const [scheduledSyncBusy,setScheduledSyncBusy]=useState(false);
 
   useEffect(() => {
     const controller = new AbortController();
 
     Promise.all([
-      fetch("/api/health", { signal: controller.signal }),
-      fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`, {
+      coalescedFetch("/api/health", { signal: controller.signal }),
+      coalescedFetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`, {
         signal: controller.signal,
       }),
-      fetch("/api/history/weekly-calories", { signal: controller.signal }),
-      fetch("/api/dashboard/cards", { signal: controller.signal }),
-      fetch("/api/imports/coverage", { signal: controller.signal }),
-      fetch("/api/exports/original-activities", { signal: controller.signal }),
-      fetch("/api/sync/status", { signal: controller.signal }),
-      fetch("/api/sync/plan", { signal: controller.signal }),
-      fetch("/api/garmin/connection", { signal: controller.signal }),
-      fetch("/api/settings", { signal: controller.signal }),
-      fetch("/api/ai/providers/status", { signal: controller.signal }),
+      coalescedFetch(`/api/history/weekly-calories?timezone=${encodeURIComponent(browserTimeZone)}`, { signal: controller.signal }),
+      coalescedFetch("/api/dashboard/cards", { signal: controller.signal }),
+      coalescedFetch("/api/sync/status", { signal: controller.signal }),
+      coalescedFetch("/api/garmin/connection", { signal: controller.signal }),
+      coalescedFetch("/api/settings", { signal: controller.signal }),
+      coalescedFetch("/api/ai/providers/status", { signal: controller.signal }),
     ])
-      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, coverageResponse, originalsResponse, syncStatusResponse, syncPlanResponse, garminConnectionResponse, settingsResponse, aiStatusResponse]) => {
+      .then(async ([healthResponse, summaryResponse, weeklyResponse, cardsResponse, syncStatusResponse, garminConnectionResponse, settingsResponse, aiStatusResponse]) => {
         if (
           !healthResponse.ok ||
           !summaryResponse.ok ||
           !weeklyResponse.ok ||
           !cardsResponse.ok ||
-          !coverageResponse.ok ||
-          !originalsResponse.ok ||
           !syncStatusResponse.ok ||
-          !syncPlanResponse.ok ||
           !settingsResponse.ok ||
           !aiStatusResponse.ok
         ) {
           throw new Error(healthResponse.ok ? "The backend is running, but a workspace service failed to load. Reload to retry." : "Backend is unavailable");
         }
-        const [health, summary, weeklyCalories, dashboardCards, coverage, originalActivities, syncStatus, syncPlan, garminConnection, settings, aiProviderStatus] = await Promise.all([
+        const [health, summary, weeklyCalories, dashboardCards, syncStatus, garminConnection, settings, aiProviderStatus] = await Promise.all([
           healthResponse.json() as Promise<HealthResponse>,
           summaryResponse.json() as Promise<HistorySummary>,
           weeklyResponse.json() as Promise<WeeklyCalories | null>,
           cardsResponse.json() as Promise<DashboardCardLayout[]>,
-          coverageResponse.json() as Promise<ImportCoverage>,
-          originalsResponse.json() as Promise<OriginalActivityInventory>,
           syncStatusResponse.json() as Promise<SyncStatus>,
-          syncPlanResponse.json() as Promise<SyncPlan>,
           garminConnectionResponse.ok ? garminConnectionResponse.json() as Promise<GarminConnection> : Promise.resolve({status: "unavailable", has_saved_session: false, mfa_pending: false, token_storage: "local_private_file", updated_at: ""} as GarminConnection),
           settingsResponse.json() as Promise<AppSettings>,
           aiStatusResponse.json() as Promise<AiProviderStatus>,
@@ -840,10 +839,10 @@ export default function App() {
           summary,
           weeklyCalories,
           dashboardCards,
-          coverage,
-          originalActivities,
+          coverage:null,
+          originalActivities:null,
           syncStatus,
-          syncPlan,
+          syncPlan:null,
           garminConnection,
           settings,
           aiProviderStatus,
@@ -869,7 +868,10 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (!activityRange.start || !activityRange.end) return;
+    if (page!=='activities' || !activityRange.start || !activityRange.end) return;
+    const queryKey=JSON.stringify([activityRange.start,activityRange.end,activityOffset,activityRevision]);
+    if(lastActivityQuery.current===queryKey&&activityState.kind==='ready')return;
+    const queryChanged=lastActivityQuery.current!==queryKey;lastActivityQuery.current=queryKey;
     if (activityRange.start > activityRange.end) {
       setActivityState({
         kind: "error",
@@ -888,9 +890,9 @@ export default function App() {
       timezone: browserTimeZone,
     });
     setActivityState((current) => ({ kind: "loading", items: current.items }));
-    setActivityDetail({ kind: "closed" });
+    if(queryChanged)setActivityDetail({ kind: "closed" });
 
-    fetch(`/api/activities?${parameters.toString()}`, {
+    coalescedFetch(`/api/activities?${parameters.toString()}`, {
       signal: controller.signal,
     })
       .then(async (response) => {
@@ -911,7 +913,7 @@ export default function App() {
       });
 
     return () => controller.abort();
-  }, [activityRange.start, activityRange.end, activityOffset, activityRevision]);
+  }, [page, activityRange.start, activityRange.end, activityOffset, activityRevision]);
 
   const statusText =
     connection.kind === "ready"
@@ -946,13 +948,30 @@ export default function App() {
           ? "Garmin data"
           : null;
 
+  useEffect(()=>{
+    if(page!=='data'||connection.kind!=='ready')return;
+    const controller=new AbortController();setDataLoading(true);setDataLoadError('');
+    Promise.all([api<ImportCoverage>('/api/imports/coverage',{signal:controller.signal}),api<OriginalActivityInventory>('/api/exports/original-activities',{signal:controller.signal}),api<SyncPlan>('/api/sync/plan',{signal:controller.signal})])
+      .then(([coverage,originalActivities,syncPlan])=>setConnection(current=>current.kind==='ready'?{...current,coverage,originalActivities,syncPlan}:current))
+      .catch(error=>{if(error.name!=='AbortError')setDataLoadError(error.message);})
+      .finally(()=>{if(!controller.signal.aborted)setDataLoading(false);});
+    return()=>controller.abort();
+  },[page,connection.kind,dataLoadRevision]);
+
+  useEffect(()=>{
+    if(!isSyncing&&!scheduledSyncBusy&&syncStatusValue?.last_job?.status!=='running')return;
+    let cancelled=false,timer:number|undefined;
+    const poll=async()=>{try{const status=await api<SyncStatus>('/api/sync/status');if(!cancelled){setConnection(current=>current.kind==='ready'?{...current,syncStatus:status}:current);if(status.last_job?.status!=='running'&&!isSyncing&&!scheduledSyncBusy)await refreshSyncedData();}}catch{/* The original sync request reports failures. */}finally{if(!cancelled)timer=window.setTimeout(()=>void poll(),2000);}};
+    void poll();return()=>{cancelled=true;if(timer)window.clearTimeout(timer);};
+  },[isSyncing,scheduledSyncBusy,syncStatusValue?.last_job?.status]);
+
   const activityRemovalChanged=()=>{
     setActivityOffset(0);setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);
     setActivityNotice('Activity history updated. Removed activities can be restored below.');
     setChatMessages(messages=>messages.map(message=>({...message,evidence:message.evidence.map(e=>({...e,plots:undefined}))})));
     delete chatContext.current.plots;delete chatContext.current.ride;
     sessionStorage.setItem('garmin-assistant-query-context',JSON.stringify(chatContext.current));
-    fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`).then(r=>r.json()).then((summary:HistorySummary)=>setConnection(current=>current.kind==='ready'?{...current,summary}:current)).catch(()=>{});
+    coalescedFetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`).then(r=>r.json()).then((summary:HistorySummary)=>setConnection(current=>current.kind==='ready'?{...current,summary}:current)).catch(()=>{});
   };
 
   const toggleActivityDetail = async (activityId: string) => {
@@ -966,7 +985,7 @@ export default function App() {
 
     setActivityDetail({ kind: "loading", activityId });
     try {
-      const response = await fetch(
+      const response = await coalescedFetch(
         `/api/activities/${encodeURIComponent(activityId)}?timezone=${encodeURIComponent(browserTimeZone)}`,
       );
       if (!response.ok) throw new Error("Activity details could not be loaded.");
@@ -995,7 +1014,7 @@ export default function App() {
     setIsSavingSettings(true);
     setSettingsMessage(null);
     try {
-      const response = await fetch("/api/settings/profile", {
+      const response = await coalescedFetch("/api/settings/profile", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settingsDraft.profile),
@@ -1019,7 +1038,7 @@ export default function App() {
     setIsSavingSettings(true);
     setSettingsMessage(null);
     try {
-      const response = await fetch("/api/settings/goals", {
+      const response = await coalescedFetch("/api/settings/goals", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ goals: settingsDraft.goals }),
@@ -1044,12 +1063,12 @@ export default function App() {
   const refreshChatGPT = async () => {
     setChatgptBusy(true);
     try {
-      const statusResponse=await fetch('/api/ai/providers/status');
+      const statusResponse=await coalescedFetch('/api/ai/providers/status');
       if (!statusResponse.ok) throw new Error(await readError(statusResponse));
       const status=await statusResponse.json() as AiProviderStatus;
       setConnection(current=>current.kind==='ready'?{...current,aiProviderStatus:status}:current);
       if (status.chatgpt?.connected) {
-        const response=await fetch('/api/ai/chatgpt/models');
+        const response=await coalescedFetch('/api/ai/chatgpt/models');
         if (!response.ok) throw new Error(await readError(response));
         const models=await response.json() as Array<{id:string;name:string}>;
         setChatgptModels(models);
@@ -1063,7 +1082,7 @@ export default function App() {
   const connectChatGPT = async (account?: string, copyForChrome = false) => {
     setChatgptBusy(true);
     try {
-      const response=await fetch('/api/ai/chatgpt/connect'+(account?'?account='+encodeURIComponent(account):''),{method:'POST'});
+      const response=await coalescedFetch('/api/ai/chatgpt/connect'+(account?'?account='+encodeURIComponent(account):''),{method:'POST'});
       if (!response.ok) throw new Error(await readError(response));
       const result=await response.json() as {authorization_url:string};
       setChatgptSignInUrl(result.authorization_url);
@@ -1078,7 +1097,7 @@ export default function App() {
     finally {setChatgptBusy(false);}
   };
   const disconnectChatGPT = async () => {
-    const response=await fetch('/api/ai/chatgpt/disconnect',{method:'POST'});
+    const response=await coalescedFetch('/api/ai/chatgpt/disconnect',{method:'POST'});
     if (!response.ok) {setSettingsMessage(await readError(response));return;}
     const result=await response.json() as {remote_revocation_confirmed:boolean};
     setChatgptModels([]);await refreshChatGPT();
@@ -1090,14 +1109,14 @@ export default function App() {
     setIsSavingSettings(true);
     setSettingsMessage(null);
     try {
-      const response = await fetch("/api/settings/ai", {
+      const response = await coalescedFetch("/api/settings/ai", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(settingsDraft.ai),
       });
       if (!response.ok) throw new Error(await readError(response));
       const ai = (await response.json()) as AiSettings;
-      const statusResponse = await fetch("/api/ai/providers/status");
+      const statusResponse = await coalescedFetch("/api/ai/providers/status");
       if (!statusResponse.ok) throw new Error(await readError(statusResponse));
       const aiProviderStatus = (await statusResponse.json()) as AiProviderStatus;
       setSettingsDraft((current) => current ? { ...current, ai } : current);
@@ -1197,7 +1216,7 @@ export default function App() {
     };
 
     try {
-      const response = await fetch("/api/ai/chat", {
+      const response = await coalescedFetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message, history, coaching_context: chatContext.current.coaching,
@@ -1253,7 +1272,7 @@ export default function App() {
     setSavingProposal(proposal.id);
     setProposalError(null);
     try {
-      const response = await fetch(`/api/ai/settings-changes/${encodeURIComponent(proposal.id)}/confirm`, { method: "POST" });
+      const response = await coalescedFetch(`/api/ai/settings-changes/${encodeURIComponent(proposal.id)}/confirm`, { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
       const settings = await response.json() as AppSettings;
       setSettingsDraft(settings);
@@ -1275,7 +1294,7 @@ export default function App() {
     if (!result.operation_id) return;
     setMaintenanceActionError(null);
     try {
-      const response = await fetch(`/api/maintenance/operations/${encodeURIComponent(result.operation_id)}/undo`, {
+      const response = await coalescedFetch(`/api/maintenance/operations/${encodeURIComponent(result.operation_id)}/undo`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operation_id: `undo-${result.operation_id}` }),
       });
       if (!response.ok) throw new Error(await readError(response));
@@ -1336,7 +1355,7 @@ export default function App() {
     setIsSavingCards(true);
     setCardLayoutError(null);
     try {
-      const response = await fetch("/api/dashboard/cards", {
+      const response = await coalescedFetch("/api/dashboard/cards", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -1389,7 +1408,7 @@ export default function App() {
   const previewGarmin = async () => {
     setImportState({ kind: "loading" });
     try {
-      const response = await fetch("/api/imports/garmin/preview");
+      const response = await coalescedFetch("/api/imports/garmin/preview");
       if (!response.ok) throw new Error(await readError(response));
       const preview = (await response.json()) as GarminPreview;
       setImportState({ kind: "preview", preview });
@@ -1404,17 +1423,18 @@ export default function App() {
   const importGarmin = async (preview: GarminPreview) => {
     setImportState({ kind: "importing", preview });
     try {
-      const response = await fetch("/api/imports/garmin?confirm=true", {
+      const response = await coalescedFetch("/api/imports/garmin?confirm=true", {
         method: "POST",
       });
       if (!response.ok) throw new Error(await readError(response));
       const result = (await response.json()) as GarminImportResult;
       setImportState({ kind: "complete", preview, result });
+      setActivityOffset(0);setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);
 
       const [summaryResponse, weeklyResponse, coverageResponse] = await Promise.all([
-        fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
-        fetch("/api/history/weekly-calories"),
-        fetch("/api/imports/coverage"),
+        coalescedFetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
+        coalescedFetch(`/api/history/weekly-calories?timezone=${encodeURIComponent(browserTimeZone)}`),
+        coalescedFetch("/api/imports/coverage"),
       ]);
       if (summaryResponse.ok && weeklyResponse.ok && coverageResponse.ok) {
         const [refreshedSummary, refreshedWeeklyCalories, refreshedCoverage] = await Promise.all([
@@ -1450,7 +1470,7 @@ export default function App() {
     if (!file) return;
     setRestoreState({ kind: "loading", filename: file.name });
     try {
-      const response = await fetch("/api/restores/preview", {
+      const response = await coalescedFetch("/api/restores/preview", {
         method: "POST",
         headers: { "Content-Type": file.type || "application/zip" },
         body: file,
@@ -1468,9 +1488,9 @@ export default function App() {
 
   const refreshGarminConnection = async () => {
     const [connectionResponse, statusResponse, planResponse] = await Promise.all([
-      fetch("/api/garmin/connection"),
-      fetch("/api/sync/status"),
-      fetch("/api/sync/plan"),
+      coalescedFetch("/api/garmin/connection"),
+      coalescedFetch("/api/sync/status"),
+      coalescedFetch("/api/sync/plan"),
     ]);
     if (!connectionResponse.ok || !statusResponse.ok || !planResponse.ok) return;
     const [garminConnection, refreshedStatus, refreshedPlan] = await Promise.all([
@@ -1493,11 +1513,11 @@ export default function App() {
   const refreshSyncedData = async () => {
     const [summaryResponse, weeklyResponse, statusResponse, planResponse, connectionResponse] =
       await Promise.all([
-        fetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
-        fetch("/api/history/weekly-calories"),
-        fetch("/api/sync/status"),
-        fetch("/api/sync/plan"),
-        fetch("/api/garmin/connection"),
+        coalescedFetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
+        coalescedFetch(`/api/history/weekly-calories?timezone=${encodeURIComponent(browserTimeZone)}`),
+        coalescedFetch("/api/sync/status"),
+        coalescedFetch("/api/sync/plan"),
+        coalescedFetch("/api/garmin/connection"),
       ]);
     if (
       !summaryResponse.ok ||
@@ -1529,28 +1549,14 @@ export default function App() {
         : current,
     );
 
-    if (activityRange.start && activityRange.end && activityRange.start <= activityRange.end) {
-      const parameters = new URLSearchParams({
-        limit: "50",
-        start_date: activityRange.start,
-        end_date: activityRange.end,
-        timezone: browserTimeZone,
-      });
-      const activitiesResponse = await fetch(`/api/activities?${parameters.toString()}`);
-      if (activitiesResponse.ok) {
-        setActivityState({
-          kind: "ready",
-          items: (await activitiesResponse.json()) as Activity[],
-        });
-      }
-    }
+    setActivityOffset(0);setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);
   };
 
   const connectGarmin = async () => {
     setIsConnectingGarmin(true);
     setConnectionMessage(null);
     try {
-      const response = await fetch("/api/garmin/connection/login", {
+      const response = await coalescedFetch("/api/garmin/connection/login", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: garminEmail, password: garminPassword }),
@@ -1574,7 +1580,7 @@ export default function App() {
     setIsConnectingGarmin(true);
     setConnectionMessage(null);
     try {
-      const response = await fetch("/api/garmin/connection/mfa", {
+      const response = await coalescedFetch("/api/garmin/connection/mfa", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ code: garminMfaCode }),
@@ -1598,7 +1604,7 @@ export default function App() {
     setIsConnectingGarmin(true);
     setConnectionMessage(null);
     try {
-      const response = await fetch("/api/garmin/connection/probe", { method: "POST" });
+      const response = await coalescedFetch("/api/garmin/connection/probe", { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
       const result = (await response.json()) as {
         summary_available: boolean;
@@ -1622,7 +1628,7 @@ export default function App() {
   const disconnectGarmin = async () => {
     setIsConnectingGarmin(true);
     try {
-      const response = await fetch("/api/garmin/connection", { method: "DELETE" });
+      const response = await coalescedFetch("/api/garmin/connection", { method: "DELETE" });
       if (!response.ok) throw new Error(await readError(response));
       setConnectionMessage("Saved Garmin session removed.");
       await refreshGarminConnection();
@@ -1639,7 +1645,7 @@ export default function App() {
     setIsSyncing(true);
     setSyncMessage(null);
     try {
-      const response = await fetch("/api/sync/schedule", {
+      const response = await coalescedFetch("/api/sync/schedule", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ enabled }),
@@ -1653,8 +1659,8 @@ export default function App() {
       );
       setSyncMessage(
         enabled
-          ? "Daily catch-up is enabled while this app is open."
-          : "Daily catch-up is paused; Sync now remains available.",
+          ? "Hourly catch-up is enabled while this app is open, including late overnight uploads."
+          : "Automatic catch-up is paused; Sync now remains available.",
       );
     } catch (error: unknown) {
       setSyncMessage(
@@ -1669,12 +1675,15 @@ export default function App() {
     setIsSyncing(true);
     setSyncMessage(null);
     try {
-      const response = await fetch("/api/sync/run", { method: "POST" });
+      const response = await coalescedFetch(`/api/sync/run?through_date=${todayInBrowserTimeZone()}`, { method: "POST" });
       if (!response.ok) throw new Error(await readError(response));
       const result = (await response.json()) as {
+        status: "completed" | "failed";
+        failures?: Array<{data_type: string; error: string}>;
         totals: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
       };
       await refreshSyncedData();
+      if(result.status!=="completed")throw new Error(`Sync needs attention: ${result.failures?.map(f=>`${f.data_type.replaceAll('_',' ')}: ${f.error}`).join('; ')||'Some data could not be refreshed. Retry sync.'}`);
       setSyncMessage(
         `Synchronization completed: ${result.totals.created.toLocaleString()} new, ${result.totals.updated.toLocaleString()} updated, ${result.totals.unchanged.toLocaleString()} unchanged, and ${(result.totals.detail_samples ?? 0).toLocaleString()} sensor samples imported.`,
       );
@@ -1697,22 +1706,24 @@ export default function App() {
     let cancelled = false;
     const checkScheduledSync = async () => {
       if (scheduledSyncInFlight.current) return;
-      scheduledSyncInFlight.current = true;
+      scheduledSyncInFlight.current = true;setScheduledSyncBusy(true);
       try {
-        const response = await fetch(
+        const response = await coalescedFetch(
           `/api/sync/scheduled?through_date=${todayInBrowserTimeZone()}`,
           { method: "POST" },
         );
         if (!response.ok) throw new Error(await readError(response));
         const result = (await response.json()) as {
-          status: "completed" | "skipped";
+          status: "completed" | "skipped" | "failed";
+          failures?: Array<{data_type: string; error: string}>;
           reason?: string;
           totals?: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
         };
-        if (!cancelled && result.status === "completed") {
+        if (!cancelled && result.status !== "skipped") {
           await refreshSyncedData();
+          if(result.status==='failed')throw new Error(`Automatic sync needs attention: ${result.failures?.map(f=>`${f.data_type.replaceAll('_',' ')}: ${f.error}`).join('; ')||'Some data remains pending.'}`);
           setSyncMessage(
-            `Daily catch-up completed: ${result.totals?.created ?? 0} new, ${result.totals?.updated ?? 0} updated, and ${result.totals?.detail_samples ?? 0} sensor samples imported.`,
+            `Automatic catch-up completed: ${result.totals?.created ?? 0} new, ${result.totals?.updated ?? 0} updated, and ${result.totals?.detail_samples ?? 0} sensor samples imported.`,
           );
         }
       } catch (error: unknown) {
@@ -1723,7 +1734,7 @@ export default function App() {
           await refreshGarminConnection();
         }
       } finally {
-        scheduledSyncInFlight.current = false;
+        scheduledSyncInFlight.current = false;setScheduledSyncBusy(false);
       }
     };
     const initialCheck = window.setTimeout(() => void checkScheduledSync(), 0);
@@ -1771,7 +1782,7 @@ export default function App() {
         ? `${Math.round(weeklyCalories.active_kcal).toLocaleString()} active · ${Math.round(weeklyCalories.resting_kcal).toLocaleString()} resting`
         : "No Garmin calorie data loaded",
       subdetail: weeklyCalories
-        ? `${sourceLabel(weeklyCalories.source_name)} · ${formatShortDate(weeklyCalories.week_start)}–${formatShortDate(weeklyCalories.week_end)} · ${weeklyCalories.is_complete ? "complete week" : `partial week (${weeklyCalories.days_with_data}/${weeklyCalories.days_expected} days)`}`
+        ? `${sourceLabel(weeklyCalories.source_name)} · ${formatShortDate(weeklyCalories.week_start)}–${formatShortDate(weeklyCalories.week_end)} · ${weeklyCalories.period_status==='week_to_date' ? `week to date (${weeklyCalories.days_with_data}/${weeklyCalories.days_elapsed} days) · today ongoing` : weeklyCalories.is_complete ? "complete week" : `partial week (${weeklyCalories.days_with_data}/${weeklyCalories.days_elapsed??weeklyCalories.days_expected} elapsed days)`}`
         : undefined,
       tooltip: weeklyCalories?.missing_dates.length
         ? `Missing daily totals: ${weeklyCalories.missing_dates.map(formatLongDate).join(", ")}. Missing days are not counted as zero.`
@@ -1797,10 +1808,10 @@ export default function App() {
         <p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p>
       </header>
       <div hidden={!['dashboard', 'health', 'profile'].includes(page)}><WeightEntry unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} /></div>
-      <div hidden={page !== 'dashboard'}><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></div>
-      {page === 'health' && <GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={graphVersion} />}
+      <RetainedPage active={page === 'dashboard'}><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
+      <RetainedPage active={page === 'health'}><GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
 
-      <section hidden={page !== "data"} className="sync" id="sync" aria-labelledby="sync-title">
+      <section hidden={page !== "data"} className="sync" id="sync" aria-labelledby="sync-title">{dataLoading&&<p role="status">Loading data and sync details…</p>}{dataLoadError&&<p role="alert">{dataLoadError} <button type="button" onClick={()=>setDataLoadRevision(v=>v+1)}>Retry loading</button></p>}
         <div className="section-heading sync-heading">
           <div>
             <p>Garmin synchronization</p>
@@ -1811,7 +1822,7 @@ export default function App() {
             onClick={() => void runSyncNow()}
             disabled={isSyncing || garminConnectionValue?.status !== "connected"}
           >
-            {isSyncing ? "Starting…" : "Sync now"}
+            {isSyncing ? "Syncing…" : "Sync now"}
           </button>
         </div>
         <div className="sync-status-grid">
@@ -1842,7 +1853,7 @@ export default function App() {
           <div>
             <span>Schedule</span>
             <strong>
-              {syncStatusValue?.schedule_enabled ? "Daily · app open" : "Off · app open only"}
+              {syncStatusValue?.schedule_enabled ? "Hourly · app open" : "Off · app open only"}
             </strong>
           </div>
         </div>
@@ -1924,7 +1935,7 @@ export default function App() {
               onClick={() => void setDailySync(!syncStatusValue?.schedule_enabled)}
               disabled={isSyncing}
             >
-              {syncStatusValue?.schedule_enabled ? "Pause daily sync" : "Enable daily sync"}
+              {syncStatusValue?.schedule_enabled ? "Pause automatic sync" : "Enable automatic sync"}
             </button>
             <button className="secondary-action" type="button" onClick={() => void disconnectGarmin()} disabled={isConnectingGarmin}>
               Sign out
@@ -1969,7 +1980,7 @@ export default function App() {
         )}
         <p className="sync-note">
           {garminConnectionValue?.status === "connected"
-            ? `Every run catches up all missing dates and rechecks the latest ${syncStatusValue?.overlap_days ?? 3} days. Daily sync runs only while this app is open.`
+            ? `Every run catches up all missing dates and rechecks the latest ${syncStatusValue?.overlap_days ?? 3} days. Automatic sync rechecks hourly while this app is open, including late overnight uploads.`
             : "Private Garmin sign-in is required before synchronization can run."}
         </p>
         {syncMessage && <p className="sync-message" role="status">{syncMessage}</p>}
@@ -2051,7 +2062,7 @@ export default function App() {
         <div className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
             <article className={`data-card ${card.id === "training_readiness" ? "readiness-dashboard-card" : ""}`} key={card.id}>
-              {card.id === "training_readiness" ? <ReadinessCard timezone={browserTimeZone} refreshToken={`${activityRevision}:${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /> : <>
+              {card.id === "training_readiness" ? <RetainedPage active={page==='dashboard'}><ReadinessCard timezone={browserTimeZone} refreshToken={`${activityRevision}:${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /></RetainedPage> : <>
               <p>
                 {card.label}{" "}
                 <abbr className="info-tip" title={card.tooltip} aria-label={card.tooltip}>i</abbr>
@@ -2152,7 +2163,7 @@ export default function App() {
             {activityHasMore && <button type="button" disabled={activityState.kind === "loading"} onClick={() => setActivityOffset(current => current + 50)}>{activityState.kind === "loading" ? "Loading…" : "Load more activities"}</button>}
           </div>
         )}
-      <RemovedActivities revision={activityRevision} onChanged={activityRemovalChanged}/>
+      <RetainedPage active={page==='activities'}><RemovedActivities revision={activityRevision} onChanged={activityRemovalChanged}/></RetainedPage>
         </section>
 
       <section hidden={page !== "assistant" && page !== "training"} className="assistant" id="assistant" aria-labelledby="assistant-title">
@@ -2362,10 +2373,10 @@ export default function App() {
         </div>
       </section>
 
-      <div hidden={page !== "training"}><TrainingPanel timezone={browserTimeZone} /></div>
-      <div hidden={page !== "nutrition"}><NutritionPanel timezone={browserTimeZone} /></div>
+      <RetainedPage active={page === "training"}><TrainingPanel timezone={browserTimeZone} /></RetainedPage>
+      <RetainedPage active={page === "nutrition"}><NutritionPanel timezone={browserTimeZone} /></RetainedPage>
 
-      <div hidden={page !== "maintenance"}><MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} /></div>
+      <RetainedPage active={page === "maintenance"}><MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} /></RetainedPage>
 
       <section hidden={page !== "data"} className="coverage" id="data" aria-labelledby="coverage-title">
         <div className="section-heading">

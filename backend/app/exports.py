@@ -68,6 +68,9 @@ CSV_DATASETS: dict[str, tuple[str, str]] = {
 }
 
 PORTABLE_TABLES = (
+    'garmin_publication_jobs',
+    'garmin_publication_items',
+    'garmin_publication_links',
     "training_questionnaire",
     "training_coach_brief",
     "training_coach_brief_revisions",
@@ -544,6 +547,10 @@ def restore_backup(backup_path: Path, target_path: Path) -> dict[str, object]:
                 output.write(block)
         _database_snapshot(restored, target_path)
     migrate(target_path)
+    # A restored approval is historical evidence, not permission to resume writes.
+    with connect(target_path) as c:
+        c.execute("UPDATE garmin_publication_jobs SET status='restored_review',error='Restored backup: review and reconcile Garmin before any further send.' WHERE status IN ('queued','running','attention')")
+        c.execute("UPDATE garmin_publication_items SET state='unknown' WHERE state IN ('queued','creating','updating','scheduling')")
     return {**preview, "restored_to": str(target_path)}
 
 

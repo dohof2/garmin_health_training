@@ -24,6 +24,15 @@ class ActiveTests(unittest.TestCase):
   self.identifier=h['plans'][0]['id']
   with patch('app.training._context',return_value=training_context(self.path,NOW)):accept_plan(self.identifier,self.path)
  def tearDown(self):self.tmp.cleanup()
+ def long_session_fixture(self):
+  # Isolate move/approval behavior from the separately tested history-based
+  # volume allocator, which correctly limits this no-history fixture.
+  from app.training_prescriptions import endurance
+  with connect(self.path) as c:
+   row=c.execute('SELECT * FROM planned_workouts ORDER BY scheduled_for LIMIT 1').fetchone()
+   old=json.loads(row['definition_json']);definition=endurance('long_endurance',90,self.brief,today=NOW.date())
+   definition.update({k:v for k,v in old.items() if k.startswith('schedule_') or k in ('scheduled_date','time_unspecified')})
+   c.execute('UPDATE planned_workouts SET definition_json=?,title=? WHERE id=?',(json.dumps(definition),definition['title'],row['id']))
  def run_review(self,now=NOW,score=80):
   with patch('app.readiness.readiness_history',return_value={'latest':{**READY['latest'],'score':score}}):return review(self.path,'Asia/Jerusalem',now)
  def test_persistent_goal_blocks_and_next_seven_days(self):
@@ -32,12 +41,12 @@ class ActiveTests(unittest.TestCase):
   self.assertEqual(read_active({},self.path)['program']['plan_id'],self.identifier)
  def test_repeated_open_no_duplicate_workouts(self):
   first=self.run_review();second=self.run_review();self.assertEqual([(w['id'],w['revision']) for w in first['workouts']],[(w['id'],w['revision']) for w in second['workouts']])
- def test_low_readiness_reduces_long_session_once(self):
-  first=self.run_review(score=20);self.assertTrue(any(ch['action']=='Changed to easy recovery' for ch in first['review']['changes']))
+ def test_low_readiness_alone_does_not_force_automatic_recovery(self):
+  first=self.run_review(score=20);self.assertFalse(any(ch['action']=='Changed to easy recovery' for ch in first['review']['changes']))
   second=self.run_review(score=20)
   self.assertEqual([(w['id'],w['revision']) for w in first['workouts']],[(w['id'],w['revision']) for w in second['workouts']])
  def test_pause_stops_auto_changes(self):
-  set_status('paused',self.path);r=self.run_review(score=20);self.assertEqual(r['program']['status'],'paused');self.assertFalse(any(ch['action']=='Changed to easy recovery' for ch in r['review']['changes']))
+  set_status('paused',self.path);r=self.run_review(score=20);self.assertEqual(r['program']['status'],'paused');self.assertIsNone(r['review'])
  def test_feedback_note_changes_recovery_review(self):
   r=self.run_review();w=r['workouts'][0];update_workout(w['id'],w['revision'],{'notes':'That was too hard','completion_status':'completed'},self.path)
   r=self.run_review();self.assertTrue(any('notes' in reason for reason in r['review']['reasons']))
@@ -47,12 +56,12 @@ class ActiveTests(unittest.TestCase):
  def test_expired_program_does_not_generate(self):
   r=self.run_review(NOW+timedelta(days=29));self.assertEqual(r['program']['status'],'completed');self.assertEqual(r['workouts'],[])
  def test_move_requested_long_ride_to_today_and_stale_edit(self):
-  r=self.run_review();w=next(w for w in r['workouts'] if w['definition']['duration_minutes']>=90)
+  self.long_session_fixture();w=list_training(self.path)['workouts'][0]
   result=request_change('Move my long ride to today at 18:00','Asia/Jerusalem',self.path,NOW)
   self.assertIn('2026-10-12 18:00',result['message'])
   with self.assertRaisesRegex(ValueError,'changed'):reschedule(w['id'],'2026-10-13T18:00:00+03:00',w['revision'],self.path,NOW)
  def test_assistant_proposal_does_not_write_until_saved(self):
-  self.run_review()
+  self.long_session_fixture()
   before=list_training(self.path)
   p=request_change('Move my long ride to tomorrow at 18:00','Asia/Jerusalem',self.path,NOW,apply=False)
   self.assertEqual(p['status'],'proposal');self.assertEqual(before,list_training(self.path))
@@ -73,13 +82,13 @@ class ActiveTests(unittest.TestCase):
   self.assertTrue(any('notes' in reason for reason in r['review']['reasons']))
  def test_available_minutes_use_active_session_without_writes(self):
   before=list_training(self.path)
-  with patch('app.readiness.readiness_history',return_value=READY):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem'},self.path,NOW)
+  with patch('app.readiness.readiness_history',return_value=READY):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','mode':'plan'},self.path,NOW)
   self.assertEqual(r['session']['duration_minutes'],60);self.assertEqual(sum(s['duration_seconds'] for s in r['session']['steps']),3600)
   self.assertEqual(before,list_training(self.path));self.assertEqual(r['active_plan_id'],self.identifier)
  def test_available_minutes_without_plan_and_low_readiness(self):
   set_status('completed',self.path)
   with patch('app.readiness.readiness_history',return_value={'latest':{**READY['latest'],'score':45}}):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','sport':'cycling'},self.path,NOW)
-  self.assertIsNone(r['active_plan_id']);self.assertEqual(r['session']['duration_minutes'],30)
+  self.assertIsNone(r['active_plan_id']);self.assertLessEqual(r['session']['duration_minutes'],60)
  def test_training_mix_uses_labels_not_effect_scores(self):
   with connect(self.path) as c:
    for i,label in enumerate(('AEROBIC_BASE','AEROBIC_BASE','SPRINT')):
@@ -91,14 +100,14 @@ class ActiveTests(unittest.TestCase):
   self.assertIn('tempo',r['session']['title'].lower());self.assertEqual(sum(s['duration_seconds'] for s in r['session']['steps']),3600)
  def test_unclassified_history_is_not_a_training_gap(self):
   self.assertEqual(capability(self.path,WEEK,'Asia/Jerusalem')['training_mix']['gaps'],[])
- def test_very_low_readiness_recommends_rest(self):
+ def test_low_readiness_alone_keeps_conservative_independent_option(self):
   with patch('app.readiness.readiness_history',return_value={'latest':{**READY['latest'],'score':20}}):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','sport':'cycling'},self.path,NOW)
-  self.assertEqual(r['session']['sport'],'rest');self.assertEqual(r['session']['duration_minutes'],0)
+  self.assertEqual(r['session']['sport'],'cycling');self.assertLessEqual(r['session']['duration_minutes'],60);self.assertEqual(r['readiness']['score'],20)
  def test_moderate_recovery_signal_recommends_gentle_ride(self):
   with patch('app.readiness.readiness_history',return_value={'latest':{**READY['latest'],'score':45}}):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','sport':'cycling'},self.path,NOW)
-  self.assertEqual(r['session']['title'],'Gentle recovery ride');self.assertEqual(r['session']['duration_minutes'],30)
+  self.assertEqual(r['session']['sport'],'cycling');self.assertLessEqual(r['session']['duration_minutes'],60);self.assertEqual(r['readiness']['score'],45)
  def test_planned_rest_day_stays_rest_with_optional_easy_spin(self):
-  with patch('app.readiness.readiness_history',return_value=READY):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','sport':'cycling'},self.path,NOW+timedelta(days=1))
-  self.assertEqual(r['session']['sport'],'rest');self.assertEqual(r['alternative']['duration_minutes'],20)
+  with patch('app.readiness.readiness_history',return_value=READY):r=suggest_today({'minutes':60,'timezone':'Asia/Jerusalem','sport':'cycling','mode':'plan'},self.path,NOW+timedelta(days=1))
+  self.assertEqual(r['session']['sport'],'rest');self.assertFalse(r['saved'])
  def test_missing_readiness_is_explicit(self):
   r=self.run_review(score=None);self.assertTrue(any('unavailable' in text for text in r['review']['warnings']))

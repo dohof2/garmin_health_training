@@ -244,6 +244,24 @@ class ReadinessPersistenceTests(unittest.TestCase):
             old=json.loads(c.execute('SELECT result_json FROM readiness_calculations WHERE id=?',(first['latest']['calculation_id'],)).fetchone()[0])
         self.assertEqual(old['score'],100)
 
+    def test_writer_lock_does_not_hide_fresh_readiness_and_cache_saves_later(self):
+        get_readiness_settings(self.path)
+        with connect(self.path) as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            fresh=self.history()['latest']
+            self.assertEqual(fresh['score'],100)
+            self.assertEqual(fresh['cache_status'],'deferred')
+            self.assertIsNone(fresh['calculation_id'])
+        saved=self.history()['latest']
+        self.assertEqual(saved['score'],fresh['score'])
+        self.assertEqual(saved['cache_status'],'stored')
+        self.assertIsNotNone(saved['calculation_id'])
+        with connect(self.path) as writer:
+            writer.execute('BEGIN IMMEDIATE')
+            cached=self.history()['latest']
+            self.assertEqual(cached['calculation_id'],saved['calculation_id'])
+            self.assertEqual(cached['cache_status'],'stored')
+
     def test_current_rhr_correction_creates_new_snapshot_without_overwriting_history(self):
         first=self.history()['latest']
         with connect(self.path) as c:c.execute("UPDATE metric_readings SET value=64 WHERE id=?",('resting_heart_rate:'+DAY.isoformat(),))

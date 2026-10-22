@@ -445,6 +445,9 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                 if protected_day:minutes=min(minutes,30)
                 if reduced:minutes=min(minutes,30) if sport=='cycling' else round(minutes*.7)
                 if adverse_feedback: minutes=min(minutes,45)
+                # History-derived ceilings may contain fractional minutes. The
+                # template contract uses whole minutes; floor within that cap.
+                minutes=int(minutes)
                 if minutes<(15 if sport=='running' else 10 if sport in ('hiking','other') else 20): continue
                 definition=workout_definition(template,minutes,answers)
                 from .training_prescriptions import endurance, strength

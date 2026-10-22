@@ -1706,7 +1706,7 @@ TOOL_DEFINITIONS.append({'name':'get_active_training_plan','description':'Read t
 
 from .active_training import propose_adjustment
 TOOL_HANDLERS['propose_training_adjustment'] = propose_adjustment
-TOOL_DEFINITIONS.append({'name':'propose_training_adjustment','description':'Preview a requested active-plan schedule change or record feedback such as too hard. Supply the user request verbatim. No writes; the visible Save button applies the change with stale-revision protection.', 'input_schema':{'type':'object','properties':{'message':{'type':'string','maxLength':1500},'timezone':{'type':'string'},'workout_id':{'type':'string'},'changes':{'type':'object','description':'Explicit feedback/completion/actual strength_sets only; use an exact saved workout ID.'}},'required':['message'],'additionalProperties':False}})
+TOOL_DEFINITIONS.append({'name':'propose_training_adjustment','description':'Preview casual daily or weekly duration, intensity, rest changes or explicit session feedback. Supply the request verbatim. May decline with recovery reasons or ask a focused clarification. No writes; Save rechecks recovery and revisions.', 'input_schema':{'type':'object','properties':{'message':{'type':'string','maxLength':1500},'timezone':{'type':'string'},'workout_id':{'type':'string'},'changes':{'type':'object','description':'Explicit feedback/completion/actual strength_sets only; use an exact saved workout ID.'}},'required':['message'],'additionalProperties':False}})
 
 from .active_training import suggest_today
 TOOL_HANDLERS['suggest_today_workout'] = suggest_today

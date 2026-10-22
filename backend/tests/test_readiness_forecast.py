@@ -20,6 +20,15 @@ class ForecastTests(unittest.TestCase):
    for row in self.rows:c.execute('INSERT INTO metric_readings(id,source_name,metric_type,recorded_at,value,unit,period_start,period_end) VALUES (:id,:source_name,:metric_type,:recorded_at,:value,:unit,:period_start,:period_end)',row)
    c.execute("INSERT INTO sync_checkpoints(data_type,provider_name,coverage_start,coverage_end,status) VALUES ('activities','garmin_connect','2026-01-01','2026-10-10','synced')")
  def tearDown(self):self.temp.cleanup()
+ def test_preparation_once_preserves_full_forecast_against_unprepared_reference(self):
+  from app.readiness_forecast import _sessions
+  original=project
+  def reference(*args,**kwargs):
+   kwargs.pop('prepared_sessions',None)
+   return original(*args,**kwargs)
+  with patch('app.readiness_forecast.project',side_effect=reference):expected=forecast('UTC',self.path,NOW)
+  with patch('app.readiness_forecast._sessions',wraps=_sessions) as sessions:actual=forecast('UTC',self.path,NOW)
+  self.assertEqual(actual,expected);self.assertEqual(sessions.call_count,1)
  def test_regularized_fit_learns_residuals_and_stays_bounded(self):
   examples=[{'features':[i/100],'baseline':40,'actual':40+20*i/100} for i in range(80)]
   predicted=fit_predict(examples,[.8],40)

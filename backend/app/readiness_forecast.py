@@ -10,7 +10,7 @@ VERSION='readiness-forecast-v4'
 KINDS=('hrv_last_night_average','sleep_duration','sleep_score','resting_heart_rate')
 
 
-def project(as_of, zone_name, rows, activities, coverage, config):
+def project(as_of, zone_name, rows, activities, coverage, config, *, prepared_sessions=None):
     zone=ZoneInfo(zone_name);day=as_of.astimezone(zone).date();target=day+timedelta(days=1)
     # Whole-day resting HR is incomplete during the forecast day. Never use it as an observed completed day.
     available=[]
@@ -34,7 +34,8 @@ def project(as_of, zone_name, rows, activities, coverage, config):
         inputs.append({'metric':kind,'predicted_value':predicted,'unit':history[-1]['unit'],'observations':len(history),'latest_date':history[-1]['wake_date'],'latest_value':history[-1]['value'],'recent_change':history[-1]['value']-history[0]['value']})
     if missing:return None,inputs,missing
     known_activities=[]
-    ends={s['id']:s['end'] for s in _sessions(activities)}
+    sessions=_sessions(activities) if prepared_sessions is None else prepared_sessions
+    ends={s['id']:s['end'] for s in sessions}
     for row in activities:
         if stamp(row['started_at']) and stamp(row['started_at'])<=as_of:
             # End and load are only known after a recorded workout has finished.
@@ -43,7 +44,9 @@ def project(as_of, zone_name, rows, activities, coverage, config):
             known_activities.append(row)
     projected_coverage=dict(coverage)
     if coverage.get('coverage_end','')>=day.isoformat():projected_coverage['coverage_end']=target.isoformat()
-    result=calculate(target,zone_name,available+synthetic,known_activities,projected_coverage,config,now=wake.astimezone(timezone.utc))
+    known_ids={row['id'] for row in known_activities}
+    prepared=(_series(available+synthetic,zone),[s for s in sessions if s['id'] in known_ids])
+    result=calculate(target,zone_name,available+synthetic,known_activities,projected_coverage,config,now=wake.astimezone(timezone.utc),prepared=prepared)
     return result,inputs,[]
 
 
@@ -80,7 +83,8 @@ def forecast(timezone_name='UTC',path=None,now=None):
     timezone_info(timezone_name);now=now or datetime.now(timezone.utc);zone=ZoneInfo(timezone_name);today=now.astimezone(zone).date()
     settings=get_readiness_settings(path);config=settings['parameters'];lookback=max(config['baseline_days']+7,config['load_reference_days']+7)+101
     with connect(path) as c:rows,activities,coverage=_load(c,today-timedelta(days=lookback),today)
-    prediction,inputs,missing=project(now,timezone_name,rows,activities,coverage,config)
+    sessions=_sessions(activities);prepared=(_series(rows,zone),sessions)
+    prediction,inputs,missing=project(now,timezone_name,rows,activities,coverage,config,prepared_sessions=sessions)
     response={'date':(today+timedelta(days=1)).isoformat(),'as_of':now.isoformat(),'timezone':timezone_name,'model_version':VERSION,'config_version':settings['config_version'],
               'status':'insufficient_data','score':None,'range':None,'inputs':inputs,'missing_metrics':missing,'validation':None,
               'assumptions':['No additional workouts before tomorrow morning; only recorded completed workouts are included.','Tonight’s HRV uses the mean of the latest three available nights; readiness evaluates six recorded nights plus that projection as a seven-day average. Sleep duration and score use recent seven-observation medians.','Tomorrow’s resting heart rate is a projection from earlier completed days; today’s provisional RHR is excluded from forecast training inputs.'],
@@ -90,7 +94,7 @@ def forecast(timezone_name='UTC',path=None,now=None):
         if prediction:response['missing_reasons']=prediction['warnings']
         return response
     response['hrv_7day']=prediction['inputs']['hrv_7day']
-    measured=calculate(today,timezone_name,rows,activities,coverage,config,now=now)
+    measured=calculate(today,timezone_name,rows,activities,coverage,config,now=now,prepared=prepared)
     names={'autonomic':'HRV and resting heart rate','sleep':'Sleep','workload':'Workout load'}
     response['comparison']={
         'today_score':measured['score'],
@@ -108,9 +112,9 @@ def forecast(timezone_name='UTC',path=None,now=None):
     for offset in range(99,-1,-1):
         target=today-timedelta(days=offset)
         evening=datetime.combine(target-timedelta(days=1),time(23,59),zone).astimezone(timezone.utc)
-        actual=calculate(target,timezone_name,rows,activities,coverage,config,now=now)
+        actual=calculate(target,timezone_name,rows,activities,coverage,config,now=now,prepared=prepared)
         if actual['score'] is None:continue
-        historical,h_inputs,_=project(evening,timezone_name,rows,activities,coverage,config)
+        historical,h_inputs,_=project(evening,timezone_name,rows,activities,coverage,config,prepared_sessions=sessions)
         if historical and historical['score'] is not None:
             examples.append({'date':target.isoformat(),'baseline':historical['score'],'actual':actual['score'],'features':features(historical,h_inputs)})
     checks=[]

@@ -258,6 +258,11 @@ def target_preview(payload):
 
 def save_target(payload,expected_revision,path=None):
     preview=target_preview(payload)
+    return persist_target(preview,expected_revision,path)
+
+
+def persist_target(preview,expected_revision,path=None):
+    """Persist a server-validated manual or computed target, with revision guard."""
     with connect(path) as c:
         c.execute('BEGIN IMMEDIATE');revision=c.execute('SELECT COALESCE(MAX(revision),0) FROM nutrition_targets').fetchone()[0]
         if type(expected_revision) is not int or revision!=expected_revision:raise ValueError('Nutrition targets changed; reload before saving')

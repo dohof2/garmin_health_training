@@ -8,6 +8,7 @@ from functools import lru_cache
 from pathlib import Path
 from datetime import date
 from garmin_fit_sdk import Profile
+from .read_cache import versioned_read
 from .database import connect
 from .activity_metrics import source_payload
 from .history import get_activity
@@ -103,6 +104,7 @@ def inspect(arguments,path=None):
         'note':'All selected-message records contribute to field statistics; returned raw rows are explicitly paginated. Units come from the installed Garmin FIT profile; unknown/developer units are not invented. Values describe recorded fields, not inferred jumps or grit.'}
 
 
+@versioned_read
 def catalog(path=None):
     fields=set()
     with connect(path) as c:

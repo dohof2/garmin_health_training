@@ -85,12 +85,28 @@ snapshot. JSON exports include event revisions, and full backups preserve the
 entire maintenance module. See [CSV columns and import behavior](docs/maintenance-csv.md)
 and [T11 verification](docs/status/t11-verification.md).
 
+## Open the app for everyday use
+
+Double-click **Open Garmin.command** in this project folder. It builds the interface
+when necessary, starts the local API and interface together, and opens
+`http://127.0.0.1:8765/#dashboard`. No two-terminal setup is needed. You can drag
+the file into the right-hand side of the Dock, or make a Finder alias for your Desktop.
+
+Keep its Terminal window open while using the app. **Press Return in that window
+to quit**; closing that Terminal session also stops its server. Closing only the
+browser tab does not stop the session. Double-click the shortcut again to reopen.
+Nothing is installed as a background service or login item. Your existing local
+database and Garmin connection are reused. The first launch needs the existing
+Python environment and installed frontend dependencies (`make setup` for a fresh checkout).
+Developer servers on ports 5173/8000 are separate; quit those when switching to
+daily use so there is only one app session running against your data.
+
 ## Next steps
 
 1. Use Training to save preferences and review T7 foundation plans; T12 readiness remains advisory.
-2. Live-verify the OpenAI path after `OPENAI_API_KEY` is supplied; Qwen is verified locally.
-3. Use Nutrition for local meal/recipe logging and reviewed targets, then implement T10 daily-use launch/quit, recovery and normal-use checks.
-4. Add T8 Garmin workout publishing last, once the local app works without it.
+2. Finish the remaining Friday allocation check before signing off the training week.
+3. Use the local launcher for the daily-use trial, then perform the detailed all-tab QC.
+4. Continue validating synchronization, nutrition and reviewed Garmin publishing during normal use.
 
 ## Local development
 

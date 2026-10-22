@@ -1,7 +1,8 @@
 # Personal Health & Training App — Review Plan
 
-Date: 19 September 2026  
-Status: Revised with your review decisions. Application implementation has not started.
+Created: 19 September 2026 · Updated: 21 October 2026
+
+Status: Core application implemented; focused QC and nutrition improvements verified. The saved-Friday allocation finding and daily-use lifecycle/release sign-off remain open.
 
 **Goal:** Build a local application personalized to your health, training, nutrition, schedule, and goals. It should combine Garmin history, useful graphs, an AI assistant, training planning, and food tracking with a complete local, zero-recurring-fee path. OpenAI is an optional manually selected provider, not a required service or automatic paid fallback.
 
@@ -268,6 +269,8 @@ Maintenance application tools: `log_maintenance`, `list_maintenance`, `update_ma
 | 7 — Garmin workout publishing, last | Preview, publish, schedule, retry and read-back verification | Local app already passes normal-use checks; supported sports pass publication tests without duplicate sessions |
 
 ### Phase 6 step — Code efficiency and smooth day-to-day use
+
+**Order updated with the user 21 October 2026:** performance pass → focused essential QC → one week of normal use → detailed functional QC across all tabs → resolve findings and finish daily-use packaging/lifecycle. The proposed observation week is 21–27 October, with detailed review from 28 October (Asia/Jerusalem). [Focused QC](../qa/2026-10-21-focused-qc/REPORT.md) records 146 passing tests and an open saved-Friday allocation finding; the trial is not fully signed off until that finding is addressed. The first measured performance pass and its remaining cold-load limits are recorded in [the verification report](../qa/2026-10-21-performance/REPORT.md).
 
 Added 13 October 2026. Review frontend and backend code using measured everyday workflows: opening the app, refreshing today/tomorrow readiness, syncing Garmin data, viewing activities and graphs, chatting with the coach, and reviewing the active training plan.
 

@@ -2,6 +2,7 @@
 import json
 import math
 from datetime import datetime, timedelta
+from .read_cache import versioned_read
 from .database import connect
 from .time_utils import timezone_info
 
@@ -10,6 +11,7 @@ def finite(value):
     return type(value) in (int, float) and math.isfinite(value) and value >= 0
 
 
+@versioned_read
 def daily_rows(path=None):
     days = {}
     def accept(day, dto, source, identifier):
@@ -28,9 +30,11 @@ def daily_rows(path=None):
         if isinstance(value,dict):
             dto=value.get('acuteTrainingLoadDTO')
             if isinstance(dto,dict): accept(value.get('calendarDate'),dto,'garmin_connect',identifier)
-            for child in value.values(): walk(child,identifier)
+            for child in value.values():
+                if isinstance(child,(dict,list)):walk(child,identifier)
         elif isinstance(value,list):
-            for child in value: walk(child,identifier)
+            for child in value:
+                if isinstance(child,(dict,list)):walk(child,identifier)
     with connect(path) as c:
         for r in c.execute("SELECT id,record_date,source_name,payload_json FROM garmin_archive_records WHERE category='acute_training_load' AND source_name!='synthetic_fixture' ORDER BY record_date,id"):
             dto=json.loads(r['payload_json'])

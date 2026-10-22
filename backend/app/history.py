@@ -104,68 +104,42 @@ def history_summary(
     }
 
 
-def weekly_calories_summary(path: Path | None = None) -> dict[str, object] | None:
-    """Summarize the Monday-Sunday week containing the latest Garmin calorie day."""
+def weekly_calories_summary(path: Path | None = None, timezone_name='UTC', now=None) -> dict[str, object] | None:
+    """Latest Garmin week, one corrected daily observation per metric/source day."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+    timezone_info(timezone_name)
+    today=(now or datetime.now(timezone.utc)).astimezone(ZoneInfo(timezone_name)).date()
     with connect(path) as connection:
-        latest_recorded_at = connection.execute(
-            """
-            SELECT MAX(recorded_at)
-            FROM metric_readings
-            WHERE source_name = ? AND metric_type = 'total_calories'
-            """,
-            (GARMIN_SOURCE_NAME,),
-        ).fetchone()[0]
-
-        if latest_recorded_at is None:
-            return None
-
-        latest_date = date.fromisoformat(str(latest_recorded_at)[:10])
-        week_start, week_end = monday_sunday_week(latest_date)
-        rows = connection.execute(
-            """
-            SELECT metric_type, substr(recorded_at, 1, 10) AS recorded_date,
-                   SUM(value) AS value
-            FROM metric_readings
-            WHERE source_name = ?
-              AND metric_type IN (
-                  'total_calories', 'active_calories', 'resting_calories'
-              )
-              AND substr(recorded_at, 1, 10) BETWEEN ? AND ?
-            GROUP BY metric_type, substr(recorded_at, 1, 10)
-            ORDER BY recorded_date, metric_type
-            """,
-            (GARMIN_SOURCE_NAME, week_start.isoformat(), week_end.isoformat()),
-        ).fetchall()
-
-    totals = {
-        "total_calories": 0.0,
-        "active_calories": 0.0,
-        "resting_calories": 0.0,
-    }
-    total_dates: set[str] = set()
+        latest=connection.execute("""SELECT MAX(substr(recorded_at,1,10)) FROM metric_readings
+            WHERE source_name IN ('garmin_export','garmin_connect') AND metric_type='total_calories'
+            AND unit='kcal' AND value>=0 AND value<1e308 AND substr(recorded_at,1,10)<=?""",(today.isoformat(),)).fetchone()[0]
+        if latest is None:return None
+        week_start,week_end=monday_sunday_week(date.fromisoformat(latest))
+        rows=connection.execute("""SELECT * FROM (
+            SELECT metric_type,substr(recorded_at,1,10) AS recorded_date,value,source_name,
+                ROW_NUMBER() OVER (PARTITION BY metric_type,substr(recorded_at,1,10)
+                    ORDER BY (source_name='garmin_connect') DESC,COALESCE(source_updated_at,'') DESC,recorded_at DESC,id DESC) AS rank
+            FROM metric_readings WHERE source_name IN ('garmin_export','garmin_connect')
+                AND metric_type IN ('total_calories','active_calories','resting_calories')
+                AND unit='kcal' AND value>=0 AND value<1e308
+                AND substr(recorded_at,1,10) BETWEEN ? AND ?
+            ) WHERE rank=1 ORDER BY recorded_date,metric_type""",(week_start.isoformat(),min(week_end,today).isoformat())).fetchall()
+    totals={key:0.0 for key in ('total_calories','active_calories','resting_calories')}
+    dates={key:set() for key in totals};sources=set()
     for row in rows:
-        totals[row["metric_type"]] += float(row["value"])
-        if row["metric_type"] == "total_calories":
-            total_dates.add(row["recorded_date"])
-
-    expected_dates = [
-        (week_start + timedelta(days=offset)).isoformat() for offset in range(7)
-    ]
-    missing_dates = [item for item in expected_dates if item not in total_dates]
-
-    return {
-        "basis": "latest_available_garmin_week",
-        "week_start": week_start.isoformat(),
-        "week_end": week_end.isoformat(),
-        "days_expected": 7,
-        "days_with_data": len(total_dates),
-        "missing_dates": missing_dates,
-        "is_complete": not missing_dates,
-        "total_kcal": totals["total_calories"],
-        "active_kcal": totals["active_calories"],
-        "resting_kcal": totals["resting_calories"],
-        "source_name": GARMIN_SOURCE_NAME,
-    }
+        totals[row['metric_type']]+=float(row['value']);dates[row['metric_type']].add(row['recorded_date']);sources.add(row['source_name'])
+    expected=[(week_start+timedelta(days=i)).isoformat() for i in range(7) if week_start+timedelta(days=i)<=today]
+    missing=[day for day in expected if day not in dates['total_calories']]
+    ongoing=week_start<=today<=week_end
+    return {'basis':'latest_available_garmin_week','week_start':week_start.isoformat(),'week_end':week_end.isoformat(),
+        'days_expected':7,'days_elapsed':len(expected),'days_with_data':len(dates['total_calories']),
+        'missing_dates':missing,'is_complete':len(dates['total_calories'])==7,
+        'period_status':'week_to_date' if ongoing and not missing else 'partial' if missing else 'complete',
+        'today_in_progress':ongoing and today.isoformat() in dates['total_calories'],
+        'missing_by_metric':{key:[day for day in expected if day not in observed] for key,observed in dates.items()},
+        'total_kcal':totals['total_calories'],'active_kcal':totals['active_calories'],'resting_kcal':totals['resting_calories'],
+        'source_name':next(iter(sources)) if len(sources)==1 else 'Garmin Connect + export','sources':sorted(sources)}
 
 
 def list_activities(

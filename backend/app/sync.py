@@ -265,7 +265,7 @@ def sync_plan(
 
 
 def set_sync_schedule(enabled: bool, path: Path | None = None) -> dict[str, object]:
-    """Enable or disable daily synchronization while the app is open."""
+    """Enable or disable periodic synchronization while the app is open."""
     migrate(path)
     with connect(path) as connection:
         connection.execute(
@@ -280,9 +280,9 @@ def set_sync_schedule(enabled: bool, path: Path | None = None) -> dict[str, obje
 
 
 def scheduled_sync_decision(
-    through_date: date, path: Path | None = None
+    through_date: date, path: Path | None = None, *, now: datetime | None = None
 ) -> dict[str, object]:
-    """Return whether the open app should run its at-most-daily catch-up."""
+    """Recheck all streams hourly, including dates previously returned empty."""
     status = sync_status(path)
     if not status["schedule_enabled"]:
         return {"due": False, "reason": "disabled", "through_date": through_date.isoformat()}
@@ -292,6 +292,8 @@ def scheduled_sync_decision(
             "reason": "connection_required",
             "through_date": through_date.isoformat(),
         }
+    if status['last_job'] and status['last_job']['status'] == 'running':
+        return {'due': False, 'reason': 'already_running', 'through_date': through_date.isoformat()}
     checkpoints = status["checkpoints"]
     up_to_date = all(
         checkpoint["status"] == "synced"
@@ -300,9 +302,19 @@ def scheduled_sync_decision(
         and date.fromisoformat(str(checkpoint["coverage_end"])) >= through_date
         for checkpoint in checkpoints
     )
+    current = now or datetime.now(timezone.utc)
+    def fresh(checkpoint: dict[str, object]) -> bool:
+        try:
+            checked = datetime.fromisoformat(str(checkpoint['last_success_at']).replace('Z', '+00:00'))
+            if checked.tzinfo is None:
+                checked = checked.replace(tzinfo=timezone.utc)
+            return timedelta(0) <= current - checked < timedelta(hours=1)
+        except (ValueError, TypeError):
+            return False
+    refresh_due = up_to_date and not all(fresh(checkpoint) for checkpoint in checkpoints)
     return {
-        "due": not up_to_date,
-        "reason": "catch_up_required" if not up_to_date else "up_to_date",
+        "due": not up_to_date or refresh_due,
+        "reason": "catch_up_required" if not up_to_date else "refresh_required" if refresh_due else "up_to_date",
         "through_date": through_date.isoformat(),
     }
 
@@ -492,6 +504,7 @@ def _upsert_activity_detail(
 
 def _upsert_activity(connection: object, record: dict[str, object]) -> str:
     values = _activity_values(record)
+    values['sync_summary_hash']=hashlib.sha256(values['raw_json'].encode()).hexdigest()
     existing = connection.execute(
         """
         SELECT * FROM activities
@@ -505,10 +518,13 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
         existing = _activity_fingerprint_match(connection, values)
     if existing is not None:
         # Summary refreshes must not erase richer archive/FIT fields absent from the new response.
-        old = json.loads(existing['raw_json'] or '{}')
-        incoming = json.loads(values['raw_json'])
-        old.update(incoming)
-        values['raw_json'] = encoded(old)
+        if existing['sync_summary_hash']==values['sync_summary_hash']:
+            values['raw_json']=existing['raw_json']
+        else:
+            old = json.loads(existing['raw_json'] or '{}')
+            incoming = json.loads(values['raw_json'])
+            old.update(incoming)
+            values['raw_json'] = encoded(old)
         if values['elevation_gain_meters'] is None: values['elevation_gain_meters'] = existing['elevation_gain_meters']
     if record.get("deleted") and existing is None:
         return "unchanged"
@@ -524,8 +540,8 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
                 id, source_name, source_record_id, activity_type, name,
                 started_at, ended_at, timezone, duration_seconds,
                 distance_meters, calories_kcal, elevation_gain_meters,
-                source_updated_at, deleted_at, raw_json
-            ) VALUES (?, 'garmin_connect', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                source_updated_at, deleted_at, raw_json, sync_summary_hash
+            ) VALUES (?, 'garmin_connect', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 identifier,
@@ -542,6 +558,7 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
                 values["source_updated_at"],
                 values["deleted_at"],
                 values["raw_json"],
+                values['sync_summary_hash'],
             ),
         )
         return "created"
@@ -559,6 +576,7 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
         "source_updated_at",
         "deleted_at",
         "raw_json",
+        'sync_summary_hash',
     )
     if existing["source_record_id"] == values["source_record_id"] and all(
         existing[key] == values[key] for key in compared
@@ -571,7 +589,7 @@ def _upsert_activity(connection: object, record: dict[str, object]) -> str:
             activity_type = ?, name = ?, started_at = ?, ended_at = ?, timezone = ?,
             duration_seconds = ?, distance_meters = ?, calories_kcal = ?,
             elevation_gain_meters = ?, source_updated_at = ?, deleted_at = ?,
-            raw_json = ?, updated_at = CURRENT_TIMESTAMP
+            raw_json = ?, sync_summary_hash = ?, updated_at = CURRENT_TIMESTAMP
         WHERE id = ?
         """,
         (values["source_record_id"],)
@@ -705,7 +723,8 @@ def _commit_interval(
             counts[result] += 1
             if data_type == 'activities' and not record.get('deleted'):
                 activity = connection.execute('SELECT id, raw_json FROM activities WHERE source_record_id=? LIMIT 1', (str(record['source_record_id']),)).fetchone()
-                normalize_activity_metrics(connection, activity['id'], json.loads(activity['raw_json']))
+                if result!='unchanged' or not connection.execute('SELECT 1 FROM activity_metrics WHERE activity_id=? LIMIT 1',(activity['id'],)).fetchone():
+                    normalize_activity_metrics(connection, activity['id'], json.loads(activity['raw_json']))
             detail = record.get("_detail_fit")
             if data_type == "activities" and isinstance(detail, bytes):
                 counts["detail_samples"] += _upsert_activity_detail(
@@ -718,7 +737,8 @@ def _commit_interval(
         if source_response is not None:
             connection.execute('''INSERT INTO garmin_sync_payloads(data_type, calendar_date, payload_json)
                 VALUES (?, ?, ?) ON CONFLICT(data_type, calendar_date) DO UPDATE SET
-                payload_json=excluded.payload_json, updated_at=CURRENT_TIMESTAMP''', (data_type, day, encoded(source_response)))
+                payload_json=excluded.payload_json, updated_at=CURRENT_TIMESTAMP
+                WHERE garmin_sync_payloads.payload_json IS NOT excluded.payload_json''', (data_type, day, encoded(source_response)))
         connection.execute(
             """
             INSERT INTO sync_intervals(
@@ -1010,9 +1030,9 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
     elif any(item["status"] == "failed" for item in _checkpoint_rows(path)):
         next_action = "Retry synchronization; one or more data types remain pending"
     elif settings["schedule_enabled"]:
-        next_action = "Daily catch-up is enabled while the app is open"
+        next_action = "Hourly catch-up is enabled while the app is open; recent days are rechecked for late uploads"
     else:
-        next_action = "Synchronization is ready; daily open-session sync is off"
+        next_action = "Synchronization is ready; automatic open-session sync is off"
     return {
         "provider": settings["provider_name"],
         "connection_status": settings["connection_status"],

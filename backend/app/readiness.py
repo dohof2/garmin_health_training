@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sqlite3
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from statistics import median
@@ -384,16 +385,31 @@ def readiness_history(end_date=None, days=14, timezone_name='UTC', path: Path | 
             if result['sensitivity']['band_changes']:
                 result['warnings'].append('band_sensitive_to_provisional_parameters')
         results.append(result)
-    # Persist only after calculation; do not hold a write lock during sensitivity checks.
+    # The calculation is valid independently of its audit cache. Reuse existing
+    # rows without taking a writer lock; never fail the display because sync or
+    # plan review currently owns SQLite's sole writer.
+    pending=[]
     with connect(path) as c:
-        c.execute('BEGIN IMMEDIATE')
         for result in results:
             digest=hashlib.sha256(canonical(result).encode()).hexdigest()
-            c.execute('''INSERT OR IGNORE INTO readiness_calculations(calendar_date,timezone,config_version,input_hash,result_json)
-                VALUES (?,?,?,?,?)''',(result['date'],timezone_name,version,digest,canonical(result)))
-            saved=c.execute('SELECT id,calculated_at FROM readiness_calculations WHERE calendar_date=? AND timezone=? AND config_version=? AND input_hash=?',
-                            (result['date'],timezone_name,version,digest)).fetchone()
-            result.update(calculation_id=saved['id'],calculated_at=saved['calculated_at'])
+            saved=c.execute('SELECT id,calculated_at FROM readiness_calculations WHERE calendar_date=? AND timezone=? AND config_version=? AND input_hash=?',(result['date'],timezone_name,version,digest)).fetchone()
+            if saved:result.update(calculation_id=saved['id'],calculated_at=saved['calculated_at'],cache_status='stored')
+            else:pending.append((result,digest,canonical(result)))
+    if pending:
+        try:
+            with connect(path) as c:
+                c.execute('PRAGMA busy_timeout=50')
+                c.execute('BEGIN IMMEDIATE')
+                stored=[]
+                for result,digest,payload in pending:
+                    c.execute('''INSERT OR IGNORE INTO readiness_calculations(calendar_date,timezone,config_version,input_hash,result_json)
+                        VALUES (?,?,?,?,?)''',(result['date'],timezone_name,version,digest,payload))
+                    saved=c.execute('SELECT id,calculated_at FROM readiness_calculations WHERE calendar_date=? AND timezone=? AND config_version=? AND input_hash=?',(result['date'],timezone_name,version,digest)).fetchone()
+                    stored.append((result,saved['id'],saved['calculated_at']))
+            for result,identifier,calculated_at in stored:result.update(calculation_id=identifier,calculated_at=calculated_at,cache_status='stored')
+        except sqlite3.OperationalError as error:
+            if (getattr(error,'sqlite_errorcode',0)&255) not in (sqlite3.SQLITE_BUSY,sqlite3.SQLITE_LOCKED):raise
+            for result,_,_ in pending:result.update(calculation_id=None,calculated_at=now.isoformat(),cache_status='deferred')
     return {'latest':results[-1], 'trend':results,'settings':settings,'reconstruction':'Past-only references using currently stored corrected observations; not a record of what was available at that time.'}
 
 

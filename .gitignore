@@ -29,6 +29,7 @@ photos/
 
 # Detailed local QC evidence may contain personal health records or account IDs.
 docs/qa/**/*.json
+docs/qa/**/*.png
 
 # Python
 __pycache__/

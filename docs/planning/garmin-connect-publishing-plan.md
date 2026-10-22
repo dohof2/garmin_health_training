@@ -1,6 +1,22 @@
 # Garmin Connect workout publishing — execution plan
 
-Status: planning only, 16 October 2026. The user replaced the FIT-download implementation request with this plan. No Garmin writes, device transfers or publishing tests have run. Implementation requires a subsequent instruction.
+Status: first personal-client release implemented 21 October 2026 following the user's instruction to start execution. The installed client remains `garminconnect==0.3.17`. One saved 60-minute cycling workout was deliberately published and scheduled for 21 October through the browser approval flow; remote workout instructions and calendar entry were read back and verified. Device delivery is unverified. Running conversion, batching, updates, rescheduling and unscheduling have isolated-provider coverage; strength is blocked pending exercise mappings. See [execution verification](../qa/2026-10-21-garmin-publication/REPORT.md). The remaining sections retain the broader rollout plan; official-partner access, native full-plan publication and device-specific validation are not complete.
+
+## Recommended first delivery
+
+For this personal application, propose the already installed private-client connection as the first adapter, with its unofficial status visible. Official enterprise Training API access is a separate approved integration, not a prerequisite we can assume the user has. Do not upgrade the library as part of feasibility work. Keep the provider boundary so an official adapter can replace it later.
+
+Deliver in this order:
+
+1. Inspect the pinned client's actual payload models and validate pure mappings for cycling warm-up, steady base, recovery, tempo/threshold/VO₂, sprint and anaerobic sessions. Preserve interval order, recovery, repetitions, total duration and calibrated targets. Preserve effort-based guidance honestly when exact watt targets are absent. Block a workout if the adapter cannot faithfully represent it.
+2. Add durable publication jobs, immutable approved session revisions, Garmin workout/calendar IDs, account binding and recovery from partial success. Test mapping and retries against a fake provider before exposing real writes.
+3. Add **Send to Garmin** to the selected active-plan session and today's workout preview. Show the workout and calendar date, then offer **Send workout only** or **Send and schedule**. Rest days are not workouts to upload. A saved active plan is not required for a standalone suggestion; store an immutable publication snapshot.
+4. Run one deliberately selected cycling pilot after a publishing instruction. Read the workout back from Connect, verify its steps/targets, and verify the calendar date if selected. Confirm delivery separately on the user's actual compatible cycling computer/watch; obtain the device model before promising support. Never equate a successful API response with successful device execution.
+5. Add **Send next 7 days** to the active-plan card once the single-session pilot passes. Preview concrete selected sessions, omit rest/completed/skipped sessions and show unsupported sports individually. Publish the materialized week, not speculative sessions for the entire multiweek roadmap.
+6. Integrate conversational adjustments: saving a daily/weekly change updates local sessions and the **Next 7 days** card. If a session was already published, show **Garmin update needed** and offer a reviewed remote update/reschedule/unschedule. Do not label the revised week synced until the remote change is read back. Reuse the existing Garmin identity instead of creating a duplicate. Extend the current published-edit guards only through this explicit workflow; they presently block ordinary edits, including casual adaptations.
+7. Add running and then strength after sport-specific contract and device checks. Strength needs exact exercise mapping, sets, reps, rests and load units; never silently convert an unsupported exercise to a different movement.
+
+Completion criteria: exact workout step/duration/target parity; correct local calendar date; retry and double-click without duplicates; created-but-not-scheduled recovery; expired authentication and unknown-timeout handling; stale local/remote revision protection; saved trainer changes reflected in the local seven-day card; separately verified remote updates; clear Connect-versus-device status. The 50 casual-adjustment checks validate local behavior only and are not evidence of Garmin publishing readiness.
 
 ## Feasibility and integration choice
 

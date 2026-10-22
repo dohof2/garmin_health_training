@@ -18,7 +18,7 @@ type Result = {
   inputs: { hrv: Reading; rhr_previous_day: Reading; rhr?:Reading; rhr_selection?:{kind:"same_day"|"previous_day_fallback"|"projected"|"missing";date:string|null;provisional:boolean;description:string}; sleep: Reading; sleep_score: Reading; hrv_7day?:{average:number|null;nights:number} };
   groups: Group[]; config_version: string; formula_version: string; caution: string;
   sensitivity?: { low: number; high: number; band_changes: boolean };
-  calculation_id: number; calculated_at: string;
+  calculation_id: number|null; calculated_at: string;cache_status?:'stored'|'deferred';
 };
 type Forecast = {hrv_7day?:{average:number|null;nights:number};comparison?:{today_score:number|null;baseline_score:number;contributors:Array<{name:string;today_penalty:number;projected_penalty:number;score_change:number}>;explanation:string};date:string;as_of:string;status:string;score:number|null;range:{low:number;high:number}|null;reason?:string;model?:{lookback_days:number;usable_mornings:number;selected:string;baseline_mae:number|null;regression_mae:number|null;evaluation_mornings:number};assumptions:string[];limitations:string[];validation:{mornings:number;mean_absolute_error:number|null;range_method?:string}|null};
 type Response = {
@@ -190,7 +190,7 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
             <button disabled={saving} type="submit">{saving ? "Saving…" : "Save readiness parameters"}</button>
           </form>
         </details>
-        <small>{result.formula_version} · calculation {result.calculation_id} · {result.config_version}</small>
+        <small>{result.formula_version} · {result.calculation_id!=null?`calculation ${result.calculation_id}`:'Calculated from current data · history save pending'} · {result.config_version}</small>
       </>}
     </details>
   </>;

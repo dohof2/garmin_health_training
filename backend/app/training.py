@@ -240,7 +240,7 @@ def draft_week(week_start,timezone_name,expected_preference_revision,path:Path|N
     return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
 
 
-def list_training(path:Path|None=None):
+def list_training(path:Path|None=None, *, compact=False):
     with connect(path) as c:
         plans=[{**dict(r),'context':json.loads(r['context_json'])} for r in c.execute('SELECT * FROM training_plans WHERE deleted_at IS NULL ORDER BY starts_on DESC,created_at DESC')]
         for plan in plans:plan['status']=plan['context'].get('lifecycle_status',plan['status'])
@@ -256,6 +256,13 @@ def list_training(path:Path|None=None):
             item['strength_performance']=[dict(r) for r in c.execute('SELECT * FROM training_strength_performance WHERE workout_id=? ORDER BY exercise_id,set_index',(row['id'],))]
             item['suggested_revision']='Review a reduction or rest; no schedule changed.' if feedback and (feedback['pain_or_illness'] or (feedback['soreness'] or 0)>=5 or (feedback['effort'] or 0)>=8) else 'Review the missed session; do not stack catch-up workouts.' if row['completion_status']=='skipped' else None
             workouts.append(item)
+        if compact:
+            for plan in plans:
+                plan.pop('context_json',None)
+                context=plan['context']
+                plan['context']={key:context[key] for key in ('program_id','rationale','readiness_context','recorded_history') if key in context}
+                plan['context']['preferences']={'goals':context.get('preferences',{}).get('goals',[])}
+            for workout in workouts:workout.pop('definition_json',None)
         return {'plans':plans,'workouts':workouts}
 
 

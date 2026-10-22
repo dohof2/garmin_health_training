@@ -8,6 +8,7 @@ import uuid
 from datetime import date
 from pathlib import Path
 
+from .read_cache import versioned_read
 from .database import connect
 from .time_utils import calendar_date, timezone_info
 
@@ -24,6 +25,7 @@ from .activity_stream_charts import STREAM_FIELDS
 KINDS = {'line', 'bar', 'scatter', 'dial'}
 
 
+@versioned_read
 def catalog(path: Path | None = None):
     with connect(path) as c:
         rows = c.execute("SELECT metric_type, unit, COUNT(*) AS count FROM metric_readings WHERE source_name != 'synthetic_fixture' GROUP BY metric_type, unit ORDER BY metric_type").fetchall()
@@ -56,8 +58,13 @@ def validate_spec(spec, path=None):
             raise ValueError('Invalid load window')
         if any(k in spec and type(spec[k]) is not bool for k in ('show_chronic','show_optimal_range')):
             raise ValueError('Load overlay toggles must be boolean')
-    known = {m['id'] for m in catalog(path)['metrics']} | {'activity_' + f for f in ACTIVITY_FIELDS} | {'activity_sprint_power'}
-    if spec.get('metric') not in known or (spec.get('x_metric') and spec['x_metric'] not in known | {'date', 'elapsed_time'}):
+    builtins={'activity_'+f for f in ACTIVITY_FIELDS}|{'activity_sprint_power','vo2_cycling','vo2_running','weight','hydration','acute_training_load',*STREAM_FIELDS}
+    def supported(metric):
+        if not isinstance(metric,str):return False
+        if metric in builtins:return True
+        if metric.startswith(('fit:','archive:')):return metric in {m['id'] for m in catalog(path)['metrics']}
+        with connect(path) as c:return bool(c.execute("SELECT 1 FROM metric_readings WHERE metric_type=? AND source_name!='synthetic_fixture' LIMIT 1",(metric,)).fetchone())
+    if not supported(spec.get('metric')) or (spec.get('x_metric') and spec['x_metric'] not in {'date','elapsed_time'} and not supported(spec['x_metric'])):
         raise ValueError('Choose a supported metric')
     if spec.get('kind') not in KINDS or spec.get('size', 'half') not in {'half', 'full'}:
         raise ValueError('Unsupported chart type or size')
@@ -168,7 +175,14 @@ def _observations(metric, spec, path=None, activity_ids=None):
             unit = 'mL/kg/min'
         elif metric.startswith('activity_'):
             field, unit, multiplier = ACTIVITY_FIELDS[metric[9:]]
-            rows = c.execute('''SELECT a.*, p.value AS average_power, h.value AS average_heart_rate, cad.value AS average_cadence
+            speed_columns="""CASE WHEN json_type(a.raw_json,'$.summaryDTO')='object'
+                THEN json_extract(a.raw_json,'$.summaryDTO.averageSpeed') ELSE json_extract(a.raw_json,'$.averageSpeed') END AS recorded_speed,
+                CASE WHEN json_array_length(a.raw_json,'$.fit_sessions')=1 THEN
+                    CASE WHEN json_type(a.raw_json,'$.fit_sessions[0].enhanced_avg_speed') IS NULL
+                        THEN json_extract(a.raw_json,'$.fit_sessions[0].avg_speed')
+                        ELSE json_extract(a.raw_json,'$.fit_sessions[0].enhanced_avg_speed') END END AS fit_speed""" if field=='speed' else 'NULL AS recorded_speed,NULL AS fit_speed'
+            rows = c.execute('''SELECT a.id,a.activity_type,a.started_at,a.source_name,a.distance_meters,a.duration_seconds,a.calories_kcal,a.elevation_gain_meters,
+                '''+speed_columns+''',p.value AS average_power, h.value AS average_heart_rate, cad.value AS average_cadence
                 FROM activities a
                 LEFT JOIN activity_metrics p ON p.activity_id=a.id AND p.metric_type='average_power'
                 LEFT JOIN activity_metrics h ON h.activity_id=a.id AND h.metric_type='average_heart_rate'
@@ -190,13 +204,8 @@ def _observations(metric, spec, path=None, activity_ids=None):
                     continue
                 value = row[field] if field != 'speed' else None
                 if field == 'speed':
-                    raw = json.loads(row['raw_json'] or '{}')
-                    if isinstance(raw, dict):
-                        summary = raw.get('summaryDTO') if isinstance(raw.get('summaryDTO'), dict) else raw
-                        value = summary.get('averageSpeed')
-                        sessions = raw.get('fit_sessions') or []
-                        if not _valid(value) and len(sessions) == 1:
-                            value = sessions[0].get('enhanced_avg_speed', sessions[0].get('avg_speed'))
+                    value=row['recorded_speed']
+                    if not _valid(value):value=row['fit_speed']
                 if field == 'average_cadence' and not _valid(value):
                     sample = c.execute('SELECT AVG(cadence_rpm) FROM activity_samples WHERE activity_id=? AND cadence_rpm IS NOT NULL',(row['id'],)).fetchone()
                     value = sample[0]

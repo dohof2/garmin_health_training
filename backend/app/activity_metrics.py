@@ -74,7 +74,9 @@ def normalize_activity_metrics(connection, activity_id: str, payload: dict, meth
             VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(activity_id, metric_type) DO UPDATE SET
             value=excluded.value, unit=excluded.unit, source_method=excluded.source_method,
             source_field=excluded.source_field, updated_at=CURRENT_TIMESTAMP
-            WHERE activity_metrics.source_method='fit_session' OR excluded.source_method!='fit_session' ''',
+            WHERE (activity_metrics.source_method='fit_session' OR excluded.source_method!='fit_session')
+              AND (activity_metrics.value IS NOT excluded.value OR activity_metrics.unit IS NOT excluded.unit
+                   OR activity_metrics.source_method IS NOT excluded.source_method OR activity_metrics.source_field IS NOT excluded.source_field) ''',
             (activity_id, metric, value, unit, method, field))
         saved += 1
     return saved

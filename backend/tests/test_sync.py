@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import tempfile
 import unittest
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -441,6 +441,55 @@ class SyncTests(unittest.TestCase):
                 scheduled_sync_decision(date(2026, 1, 9), database)["reason"],
                 "disabled",
             )
+
+    def test_same_day_refresh_rechecks_every_stream_and_recovers_late_sleep(self):
+        from app.sync import SYNC_DATA_TYPES
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / 'sync.sqlite3'
+            _seed(database)
+            set_sync_schedule(True, database)
+            through = date(2026, 1, 2)
+            checked = datetime(2026, 1, 2, 5, tzinfo=timezone.utc)
+            provider = SimulatedGarminProvider(records={})
+            with patch('app.sync._now', return_value=checked.isoformat()):
+                run_sync(provider, through, database)
+            self.assertFalse(scheduled_sync_decision(through, database, now=checked+timedelta(minutes=59))['due'])
+            decision = scheduled_sync_decision(through, database, now=checked+timedelta(hours=1))
+            self.assertEqual(decision['reason'], 'refresh_required')
+            self.assertTrue(decision['due'])
+            provider.records['sleep_metrics'] = [{
+                'source_record_id': 'sleep:2026-01-02', 'metric_type': 'sleep_score',
+                'recorded_at': '2026-01-02', 'value': 61, 'unit': 'score',
+            }]
+            calls = []
+            original = provider.fetch
+            def fetch(kind, start, end):
+                calls.append(kind)
+                return original(kind, start, end)
+            provider.fetch = fetch
+            result = run_sync(provider, through, database, trigger='scheduled')
+            self.assertEqual(result['status'], 'completed')
+            self.assertEqual(set(calls), set(SYNC_DATA_TYPES))
+            with connect(database) as connection:
+                score = connection.execute("SELECT value FROM metric_readings WHERE metric_type='sleep_score'").fetchone()[0]
+            self.assertEqual(score, 61)
+            provider.records['sleep_metrics'][0]['value'] = 70
+            run_sync(provider, through, database)
+            with connect(database) as connection:
+                rows = connection.execute("SELECT value FROM metric_readings WHERE metric_type='sleep_score'").fetchall()
+            self.assertEqual([row[0] for row in rows], [70])
+
+    def test_automatic_refresh_does_not_overlap_running_sync(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            database = Path(temporary) / 'sync.sqlite3'
+            _seed(database)
+            set_sync_schedule(True, database)
+            run_sync(SimulatedGarminProvider(records={}), date(2026, 1, 2), database)
+            with connect(database) as connection:
+                connection.execute("UPDATE jobs SET status='running' WHERE job_type='garmin_sync'")
+            decision = scheduled_sync_decision(date(2026, 1, 3), database)
+            self.assertFalse(decision['due'])
+            self.assertEqual(decision['reason'], 'already_running')
 
 
 if __name__ == "__main__":

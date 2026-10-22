@@ -1572,6 +1572,7 @@ article span {
 .training-panel summary { cursor: pointer; font-weight: 600; margin: 1rem 0; }
 .training-panel button { width: fit-content; }
 .nutrition-panel { margin-top: 4rem; }
+.nutrition-chat [role="log"] { max-height: 20rem; overflow-y: auto; overflow-wrap: anywhere; overscroll-behavior: contain; }
 .nutrition-panel p { line-height: 1.6; color: #1e293b; }
 .nutrition-panel form { display: grid; gap: .8rem; margin: 1rem 0; }
 .nutrition-panel label { display: inline-flex; gap: .5rem; align-items: center; flex-wrap: wrap; margin: .3rem .8rem .3rem 0; }
