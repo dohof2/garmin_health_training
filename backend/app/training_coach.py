@@ -234,6 +234,8 @@ def _cycling_allocations(caps,budget,long_slot_id=None):
     caps={key:int(value) for key,value in caps.items() if value>=20}
     selected=list(caps);budget=max(0,int(budget))
     minimum={key:min(60,value) for key,value in caps.items()}
+    if long_slot_id in minimum and caps[long_slot_id]>60:
+        minimum[long_slot_id]=61
     while selected and sum(minimum[key] for key in selected)>budget:
         removable=[key for key in selected if key!=long_slot_id]
         selected.remove(removable[-1] if removable else selected[-1])

@@ -1,10 +1,20 @@
 # Personal Health & Training App — Review Plan
 
-Created: 19 September 2026 · Updated: 21 October 2026
+Created: 19 September 2026 · Updated: 24 October 2026
 
-Status: Core application implemented; focused QC and nutrition improvements verified. The saved-Friday allocation finding and daily-use lifecycle/release sign-off remain open.
+**24 October readiness update:** [Readiness v5 and forecast v5](../qa/2026-10-24-readiness/REPORT.md) implement six-factor estimates, a current-time recovery countdown with bounded sleep corrections, the accepted load-ratio approach and a longer personal-reference forecast. Health has a recovery dial; compact readiness cards provide popup explanations. Estimates remain provisional. Other trainer/Garmin QC requests retain their explicit open status in the linked checklist.
+
+Status: Core application implemented; focused QC, nutrition improvements and the foreground local launcher verified. The saved-Friday allocation logic is corrected, with current recovery limits explained separately. Normal-use lifecycle observation, legacy regression cleanup and detailed all-tab QC remain before release sign-off.
 
 **Goal:** Build a local application personalized to your health, training, nutrition, schedule, and goals. It should combine Garmin history, useful graphs, an AI assistant, training planning, and food tracking with a complete local, zero-recurring-fee path. OpenAI is an optional manually selected provider, not a required service or automatic paid fallback.
+
+### Planned extension — Telegram phone access and complete assistant data coverage
+
+The user's 23 October request adds a detailed [Telegram integration plan](telegram-coach-integration-plan.md), with a block diagram, service boundaries, persistence, routing, photo/voice flows, implementation blocks B0–B5 and acceptance tests. One private bot will route text, pictures and recorded voice messages to the existing nutrition/trainer services and return their answers. Both assistants should retrieve relevant data through shared tools; the trainer must support questions about every user-facing dataset in the app, with explicit missing-data and freshness reporting. A dataset-to-tool coverage audit is required.
+
+Start locally using outbound polling while the computer/app worker is running; preserve the existing foreground lifecycle unless a separate background mode is chosen later. Design the transport, conversation, action, model and storage boundaries now so the same implementation can later move to a server, optionally using an authenticated webhook. The detailed plan covers durable context, owner pairing, no duplicate meal/plan writes, local voice transcription, provider/media capability checks, backup/restore and migration/rollback. Telegram messaging alone does not make hosting or model inference free; preserve a local no-recurring-fee path and no automatic paid fallback.
+
+This extension is **planned for later implementation**, superseding the blanket deferral of phone messaging below for this selected Telegram workstream. Current functionality and daily-use QC priorities are unchanged. No bot, connection or background service has been created by the planning task.
 
 ## 1. Proposed experience
 
@@ -311,3 +321,12 @@ Counts, coverage, and importer implications are recorded in
 [`../status/garmin-export-inventory.md`](../status/garmin-export-inventory.md).
 
 **Next step after review:** Begin feasibility work when requested. The repository and planning documents are prepared locally; application implementation and Garmin account connection have not started. GitHub publication is deferred.
+
+
+### QC note — Activity plots (24 October 2026; later implementation)
+Status: recorded, not implemented by this UI pass.
+- Add a **Plots** button beside **More details** in Activities.
+- Open the activity's main recorded plots, appropriate to its sport and available data: speed, elevation, power and cadence versus time.
+- Under each plot, offer overlays of the other main recorded metrics, e.g. speed + power + elevation. Distinguish series and units clearly; missing data must remain explicit.
+- Each plot can switch its horizontal axis between elapsed time and recorded distance; keep overlay samples aligned to the same activity position.
+- Preserve mouse selection zoom, reset, and the chosen overlays when switching the horizontal axis.

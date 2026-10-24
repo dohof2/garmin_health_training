@@ -1346,6 +1346,21 @@ article span {
   min-height: 190px;
 }
 
+.recovery-slot { align-self: start; }
+.health-recovery-card { margin: 0; }
+.preview-data-banner { padding: 16px; border: 2px solid #b55c00; border-radius: 10px; background: #fff3dc; color: #633300; }
+.readiness-deduction-summary { margin: 12px 0; padding-left: 1.2rem; font-size: .9rem; line-height: 1.6; }
+.readiness-card-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
+.readiness-info-button { flex:0 0 30px; width:30px; height:30px; min-height:30px; padding:0; border:1px solid #9aacc1; border-radius:50%; background:#f4f7fc; color:#315779; font-weight:700; font-size:18px; cursor:pointer; }
+.readiness-info-button:hover { background:#e3edf9; }
+.readiness-info-button:focus-visible { outline:3px solid #477bb0; outline-offset:3px; }
+.readiness-compact-meta { margin:4px 0 10px; color:#65758a; font-size:.85rem; }
+.readiness-modal { width:min(720px, calc(100vw - 32px)); max-height:85vh; box-sizing:border-box; padding:24px; border:1px solid #dce4ef; border-radius:16px; background:white; color:#1e293b; overflow:auto; box-shadow:0 16px 64px #0b1d3440; }
+.readiness-modal::backdrop { background:#15253c80; }
+.readiness-modal-heading { display:flex; align-items:center; justify-content:space-between; gap:16px; margin-bottom:16px; }
+.readiness-modal-heading h3 { margin:0; font-size:1.15rem; }
+.readiness-modal p, .readiness-modal li { font-size:.9rem; line-height:1.6; }
+.health-recovery-card h3 { display: flex; align-items: center; gap: .5rem; }
 .data-card h3 {
   font-size: clamp(1.6rem, 3vw, 2.5rem);
   letter-spacing: -0.045em;
@@ -1884,3 +1899,43 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 #selected-workout-detail { scroll-margin-top: 110px; }
 #selected-workout-detail:focus { outline: none; }
 .training-plan-name {display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.75rem;width:100%;text-align:left;padding:1rem;margin:1rem 0;font-size:1.1rem;}.training-plan-name span{font-size:.9rem;}.training-day-editor{margin:1rem 0;padding:1rem;}.training-day-editor .builder-fields{padding:.75rem 0;border-bottom:1px solid #dce3ec;}.workout-day.hiking{border-left-color:#718341}.workout-day.other{border-left-color:#6f7086}.training-volume-estimates{margin:1rem 0;}
+
+/* Pair weight and sleep; keep the compact recovery card underneath. */
+.health-graph-grid { grid-template-columns: repeat(12, minmax(0, 1fr)); align-items: start; }
+.health-graph-grid > .graph-slot { grid-column: span 6; }
+.health-graph-grid > .recovery-slot { grid-column: span 6; }
+.health-graph-grid > .health-sleep-slot { grid-column: span 6; }
+.health-graph-grid > .graph-slot--full,
+.health-graph-grid > .graph-slot:has(.graph-card--full) { grid-column: 1 / -1; }
+.health-weight-entry { margin: 24px 0; border-top: 1px solid #dce4ef; padding-top: 20px; }
+.health-weight-entry > summary { cursor: pointer; color: #365272; font-size: .9rem; font-weight: 600; }
+.health-weight-entry .weight-entry { margin-top: 16px; }
+@media(max-width: 900px) {
+  .health-graph-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .health-graph-grid > .graph-slot { grid-column: span 1; }
+  .health-graph-grid > .graph-slot--full { grid-column: 1 / -1; }
+}
+@media(max-width: 700px) {
+  .health-graph-grid { grid-template-columns: minmax(0, 1fr); }
+  .health-graph-grid > .graph-slot { grid-column: 1 / -1; }
+}
+
+.weight-publish-toggle { display: flex; align-items: center; gap: 8px; margin: 0 0 18px; color: #52647b; font-size: .85rem; }
+
+.weight-entry-launch { margin-bottom: 20px; border: 1px solid #d7e1ee; border-radius: 7px; background: white; padding: 10px 16px; color: #365272; cursor: pointer; }
+.weight-entry-dialog { width: min(640px, calc(100vw - 32px)); max-height: 90vh; overflow: auto; border: 1px solid #d7e1ee; border-radius: 14px; padding: 28px; margin: auto; box-shadow: 0 20px 70px #142a4f40; }
+.weight-entry-dialog::backdrop { background: #142a4f70; }
+.weight-entry-dialog .weight-entry { border: 0; padding: 0; margin: 0; }
+.weight-dialog-close { display: block; margin-left: auto; border: 0; background: transparent; font-size: 26px; color: #52647b; cursor: pointer; }
+.weight-range-controls { display: flex; flex-wrap: wrap; gap: 12px; margin: 12px 0; }
+.weight-range-controls label { display: grid; gap: 5px; color: #52647b; font-size: .78rem; }
+.weight-range-controls input,.weight-range-controls select { border: 1px solid #d7e1ee; border-radius: 6px; padding: 8px; background: white; color: #253951; }
+.sortable-card { position: relative; }
+.card-drag-handle { position: absolute; top: 5px; left: 5px; z-index: 2; cursor: grab; border: 0!important; background: #f0f4f8!important; color: #718197!important; border-radius: 5px; padding: 2px 7px!important; font-size: 20px!important; line-height: 1; touch-action: none; }
+.card-drag-handle:active { cursor: grabbing; }
+.card-drag-handle:focus-visible { outline: 2px solid #477bb0; }
+.sortable-card--target { outline: 2px dashed #477bb0; outline-offset: 3px; }
+.graph-slot > .card-drag-handle { top: 5px; left: 5px; }
+
+.sortable-card > .section-heading { padding-left: 24px; }
+.card-drag-handle svg { display: block; }

@@ -3,6 +3,7 @@ from __future__ import annotations
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
+import os
 from .time_utils import timezone_info
 from typing import Literal
 
@@ -215,6 +216,19 @@ def save_health_widgets(request: WidgetLayoutRequest):
     try:
         return {'widgets': save_layout(request.widgets, scope='health')}
     except (ValueError, TypeError) as error:
+        raise HTTPException(400, str(error)) from error
+
+
+class WeightPublicationRequest(BaseModel):
+    timezone: str
+
+
+@app.post('/api/weight/{reading_id}/garmin')
+def publish_weight(reading_id: str, request: WeightPublicationRequest):
+    from .weight_publish import publish
+    try:
+        return publish(reading_id, request.timezone)
+    except ValueError as error:
         raise HTTPException(400, str(error)) from error
 
 
@@ -540,6 +554,7 @@ def health() -> dict[str, object]:
         "database": "ready",
         "schema": schema_status(),
         "version": app.version,
+        "preview": os.getenv('HT_APP_PREVIEW') == '1',
     }
 
 

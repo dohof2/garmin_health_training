@@ -244,7 +244,61 @@ def _reconcile_events(c,program,state,today,now):
     return changes,list(dict.fromkeys(notes))
 
 
-REVIEW_POLICY='training-review-v4-advanced-cycling'
+def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=()):
+    """Reallocate local generated rides without replacing a plan or published rows."""
+    from .training_constraints import slots_for,day_limit
+    from .training_coach import _cycling_allocations
+    days=answers.get('week_schedule',[])
+    primary=[slot for day in days if day['mode']=='training' and day['activities']
+             for slot in day['activities'][:1] if slot['sport']=='cycling' and slot['max_minutes']>=90]
+    longest=max((slot['max_minutes'] for slot in primary),default=0)
+    preferred=[slot['slot_id'] for slot in primary if slot['max_minutes']==longest]
+    long_slot=preferred[0] if len(preferred)==1 else None
+    candidates=[];assigned={};caps={};long_id=None;used_slots=set()
+    for row in rows:
+        definition=json.loads(row['definition_json'])
+        day=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()
+        if row['completion_status']!='planned' or day<today or row['publish_status']!='local' or row['garmin_workout_id'] or definition.get('fixed_commitment') or definition.get('user_adjusted'):
+            continue
+        slots=slots_for(days,day.weekday(),'cycling')
+        slot=next((slot for slot in slots if slot['slot_id']==definition.get('schedule_slot_id')),None)
+        if slot is None and len(slots)==1:slot=slots[0]
+        if slot is None:continue  # Ambiguous/moved sessions need explicit slot review.
+        if (day,slot['slot_id']) in used_slots:continue
+        used_slots.add((day,slot['slot_id']))
+        candidates.append(row);assigned[row['id']]=slot
+        current=definition['duration_minutes']
+        automatic=bool(definition.get('planning_policy_version') or definition.get('workout_kind') in ('long_endurance','climbing_endurance','long_tempo'))
+        desired=estimate.get('long_session_minutes',current) if automatic and slot['slot_id']==long_slot else max(60,current) if automatic else current
+        if slot['slot_id']==long_slot:long_id=row['id']
+        # Preserve recovery sessions, novice limits, and recovery/taper weeks.
+        if definition.get('workout_kind')=='recovery' or answers.get('experience',{}).get('cycling')=='new' or estimate.get('progression',{}).get('recovery_week'):
+            desired=min(current,30)
+        if definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic'):
+            desired=min(desired,60)
+        other_minutes=sum(json.loads(peer['definition_json'])['duration_minutes'] for peer in other_rows
+                          if peer['completion_status'] in ('planned','completed') and datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date()==day)
+        caps[row['id']]=min(desired,slot['max_minutes'],estimate.get('long_session_minutes',desired),max(0,day_limit(days,day.weekday())-other_minutes))
+    candidate_ids={row['id'] for row in candidates}
+    daily_remaining={}
+    for row in sorted(candidates,key=lambda row:(assigned[row['id']]['slot_id']!=long_slot,row['scheduled_for'],row['id'])):
+        day=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()
+        if day not in daily_remaining:
+            peers=[peer for peer in rows if peer['id'] not in candidate_ids]+list(other_rows)
+            committed=sum(json.loads(peer['definition_json'])['duration_minutes'] for peer in peers
+                          if peer['completion_status'] in ('planned','completed') and datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date()==day)
+            daily_remaining[day]=max(0,day_limit(days,day.weekday())-committed)
+        caps[row['id']]=min(caps[row['id']],daily_remaining[day]);daily_remaining[day]-=caps[row['id']]
+    # Past plans and all publication states reserve their dose too. Never spend
+    # their minutes twice just because a published ride is before today.
+    reserved=sum(json.loads(row['definition_json'])['duration_minutes'] for row in rows
+                 if row['id'] not in candidate_ids and row['completion_status'] in ('planned','completed'))
+    ceiling=min(answers.get('weekly_minutes',{}).get('cycling',0),estimate.get('effective_ceiling_minutes',0))
+    targets=_cycling_allocations(caps,max(0,ceiling-reserved),long_id)
+    return {row['id']:targets.get(row['id'],0) for row in candidates},long_id,assigned
+
+
+REVIEW_POLICY='training-review-v5-long-ride-allocation'
 
 def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
     timezone_info(timezone_name);now=now or datetime.now(timezone.utc)
@@ -305,7 +359,7 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
         if pain:adaptation['level']='hold'
         workouts=_program_workouts(c,program['plan_id'])
         upcoming=[w for w in workouts if w['completion_status']=='planned' and today<=datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()<=today+timedelta(days=6)]
-        state_key={'planning_policy_version':'cycling-dose-v1','recovery_policy_version':'recovery-context-v1','date':today.isoformat(),'program_revision':program['revision'],'readiness':readiness.get('score'),'load':load,'feedback':feedback,'capabilities':capabilities,'workouts':[(w['id'],w['revision']) for w in upcoming]}
+        state_key={'review_policy_version':REVIEW_POLICY,'planning_policy_version':'cycling-dose-v1','recovery_policy_version':'recovery-context-v1','date':today.isoformat(),'program_revision':program['revision'],'readiness':readiness.get('score'),'load':load,'feedback':feedback,'capabilities':capabilities,'workouts':[(w['id'],w['revision']) for w in upcoming]}
         fingerprint=hashlib.sha256(encoded(state_key).encode()).hexdigest()
         old=c.execute('SELECT review_json FROM training_program_reviews WHERE plan_id=? AND fingerprint=?',(program['plan_id'],fingerprint)).fetchone()
         report=json.loads(old[0]) if old else {'date':today.isoformat(),'commitment_revision':state.get('commitment_revision',0),'reasons':reasons,'changes':event_changes,'warnings':warnings,'capabilities':capabilities,'readiness':{'date':readiness['date'],'score':readiness['score'],'status':readiness['status']},'load':load}
@@ -320,10 +374,19 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
             review_context=_context(c,now,brief=state['brief'],timezone_name=tz)
             answers=review_context['answers']
             # Compute the whole week's targets together; a long outlier cannot consume every other day's dose.
-            weekly_targets={};anchor=date.fromisoformat(state['starts_on']);all_program=_program_workouts(c,program['plan_id'])
+            weekly_targets={};long_rides=set();cycling_slots={};week_estimates={};anchor=date.fromisoformat(state['starts_on']);all_program=_program_workouts(c,program['plan_id'])
             windows={anchor+timedelta(weeks=(datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()-anchor).days//7) for row in upcoming}
             for window,sport in [(window,sport) for window in windows for sport in answers.get('sports',[])]:
                 rows=[row for row in all_program if row['sport']==sport and window<=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()<window+timedelta(days=7)]
+                if sport=='cycling':
+                    week_context=_context(c,now,brief={**state['brief'],'_planning_day':window.isoformat()},timezone_name=tz)
+                    estimate=week_context['volume_estimates'].get('cycling',{})
+                    other_rows=[row for row in all_program if row['sport']!='cycling' and window<=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()<window+timedelta(days=7)]
+                    targets,long_id,assigned=_cycling_review_targets(rows,week_context['answers'],estimate,today,tz,other_rows)
+                    weekly_targets.update(targets);cycling_slots.update(assigned)
+                    if long_id:long_rides.add(long_id)
+                    week_estimates.update({row['id']:estimate for row in rows})
+                    continue
                 generated=[row for row in rows if row['completion_status']=='planned' and datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()>=today and row['publish_status']=='local' and not json.loads(row['definition_json']).get('fixed_commitment')]
                 reserved=sum(json.loads(row['definition_json'])['duration_minutes'] for row in rows if row['completion_status']=='completed' or row['completion_status']=='planned' and row not in generated and datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()>=today)
                 sport_estimate=review_context['volume_estimates'].get(sport,{})
@@ -343,31 +406,41 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
                 day=datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()
                 demanding=definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals' or definition.get('duration_minutes',0)>=90
                 action='Kept';why='Consistent with the active block and recent recorded tolerance.'
-                protected=definition.get('fixed_commitment') or w['publish_status']!='local'
+                protected=definition.get('fixed_commitment') or w['publish_status']!='local' or w['garmin_workout_id']
                 minutes=definition['duration_minutes'];kind=definition.get('workout_kind')
                 if program['status']=='active' and pain:
                     definition['review_hold']={'date':today.isoformat(),'reason':'; '.join(reasons)};action='Review required';why='; '.join(reasons)
                 elif program['status']=='active' and not protected:
                     if w['sport']=='cycling':
                         slot=next((slot for slot in answers.get('availability',[]) if slot['weekday']==day.weekday()),None)
-                        guidance={**cycling_dose(slot['minutes'] if slot else minutes,capabilities,feedback,today),'weekly_cap_minutes':review_context['volume_estimates'].get('cycling',{}).get('effective_ceiling_minutes',0),'weekly_budget_policy':review_context['volume_estimates'].get('cycling',{}).get('policy_version')}
+                        estimate=week_estimates.get(w['id'],review_context['volume_estimates'].get('cycling',{}))
+                        guidance={**cycling_dose(slot['minutes'] if slot else minutes,capabilities,feedback,today),'weekly_cap_minutes':estimate.get('effective_ceiling_minutes',0),'weekly_budget_policy':estimate.get('policy_version'),'weekly_reference':estimate.get('weekly_reference'),'weekly_reference_minutes':estimate.get('baseline_minutes')}
                         if minutes>=90 and minutes>guidance['minutes']:
                             minutes=guidance['minutes'];action='Reduced oversized long ride';why=guidance['reason']
                         weekly_target=weekly_targets.get(w['id'],minutes)
                         if weekly_target==0:
                             c.execute("UPDATE planned_workouts SET completion_status='cancelled',revision=revision+1 WHERE id=?",(w['id'],));_revision(c,_snapshot(c,w['id']))
                             report['changes'].append({'workout_id':w['id'],'title':definition['title'],'action':'Rest within recent volume budget','reason':'No supported minimum training dose remains within the recent completed-volume reference.'});continue
-                        if weekly_target<minutes:minutes=weekly_target;action='Reduced to recent weekly volume';why+=' Generated cycling volume is distributed within recent completed weekly volume.'
+                        if weekly_target!=minutes:
+                            minutes=weekly_target;action='Reallocated cycling week';why='The longest available cycling slot receives the remaining sport-specific budget after purposeful weekday rides and reserved sessions.'
+                        if w['id'] in long_rides and minutes>60 and kind in ('endurance','long_endurance'):
+                            kind='long_endurance';action='Restored long-ride priority'
+                        guidance['allocated_minutes']=minutes
+                        assigned=cycling_slots.get(w['id'])
+                        if assigned:
+                            schedule_metadata.update(schedule_slot_id=assigned['slot_id'],schedule_slot_label=assigned.get('label','Cycling'))
+                        if definition.get('user_adjusted'):schedule_metadata['user_adjusted']=True
                         if day<=today+timedelta(days=1) and adaptation['level'] in ('easy','recovery'):
                             minutes=min(minutes,30 if adaptation['level']=='recovery' else 60);kind='recovery' if adaptation['level']=='recovery' else 'endurance'
                             action='Adapted intensity and duration';why='; '.join(adaptation['reasons'])
+                            guidance['recovery_adjustment']={'level':adaptation['level'],'allocated_minutes':guidance['allocated_minutes'],'effective_minutes':minutes,'reasons':adaptation['reasons']}
                         from .training_prescriptions import endurance,KINDS,advanced_cycling_eligible
                         if kind in ('sprint','anaerobic'):
                             planned_block=next((block for block in state['blocks'] if date.fromisoformat(block['starts_on'])<=day<date.fromisoformat(block['starts_on'])+timedelta(days=7)),{})
                             stage=max(0,(day-date.fromisoformat(state['starts_on'])).days//7)
                             if not advanced_cycling_eligible(c,now,answers.get('experience',{}).get('cycling'),stage,planned_block.get('phase'),adaptation['quality_allowed']):
                                 kind='endurance';action='Deferred advanced intensity';why='Sprint/anaerobic work needs a build phase, experienced cycling, tolerated completed quality sessions and current recovery clearance.'
-                        if kind in KINDS and (minutes!=original['duration_minutes'] or kind!=original.get('workout_kind') or original.get('planning_policy_version')!='cycling-dose-v1' or not original.get('reference_ftp') or any('power_reference_fractions' not in step for step in original.get('steps',[]))):
+                        if kind in KINDS and (minutes!=original['duration_minutes'] or kind!=original.get('workout_kind') or original.get('duration_guidance')!=guidance or original.get('planning_policy_version')!='cycling-dose-v1' or not original.get('reference_ftp') or any('power_reference_fractions' not in step for step in original.get('steps',[]))):
                             definition=endurance(kind,minutes,state['brief'],'cycling',today=today)
                             definition.update(schedule_metadata);definition['duration_guidance']=guidance;definition['planning_policy_version']='cycling-dose-v1'
                             definition['rationale'].append(why)

@@ -1,3 +1,4 @@
+import SortableCards from './SortableCards';
 import {coalescedFetch} from './request';
 import { useEffect, useRef, useState } from "react";
 
@@ -131,7 +132,7 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
     setDecisions(Object.fromEntries(result.rows.map((row) => [String(row.row), row.status === "new" ? "create" : "skip"])));
   };
 
-  return <section id="maintenance" className="maintenance" aria-labelledby="maintenance-title">
+  return <SortableCards id="maintenance:cards" className="maintenance" pageSections>
     <div className="section-heading"><div><p>Maintenance and replacements</p><h2 id="maintenance-title">Keep your equipment history</h2></div>
       <a className="export-link" href="/api/maintenance/export.csv">Export current history CSV</a></div>
     <p>Log completed work here or in chat. Equipment labels are created as needed. Costs and manual usage are optional.</p>
@@ -222,5 +223,5 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
         })}>Import reviewed rows</button>
       </>}
     </div>
-  </section>;
+  </SortableCards>;
 }

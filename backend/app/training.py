@@ -332,6 +332,7 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
                 definition=endurance(definition['workout_kind'],minutes,read_brief(path)['brief'],definition['sport'])
             else:definition=workout_definition(template,minutes,context['answers'])
             definition.update(schedule_metadata)
+            definition['user_adjusted']=True
             local=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(definition.get('schedule_timezone') or 'UTC'))
             from .training_constraints import assign_slot
             assigned=assign_slot(context['answers']['week_schedule'],local.weekday(),definition['sport'],minutes,definition.get('schedule_slot_id'))

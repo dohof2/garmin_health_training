@@ -1,6 +1,7 @@
 """Additional read-only Garmin data. Retain full payloads even before normalization."""
 from __future__ import annotations
 import math
+from datetime import date, datetime, timezone
 from .sync import SyncError
 
 DAILY_METHODS = (
@@ -186,4 +187,58 @@ def normalized_metrics(payload, day):
         if isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value):
             metrics.append(dict(source_record_id='hydration:'+day, metric_type='hydration', recorded_at=day,
                                 value=value, unit='mL', period_start=day, period_end=day))
+    metrics.extend(recovery_metrics(payload, day))
     return metrics
+
+
+def recovery_metrics(payload, day):
+    """Latest dated Garmin recovery snapshot, in minutes; never infer from age.
+
+    The client schema documents REACHED_ZERO as fully recovered even when
+    recoveryTime retains an earlier assigned value. Keep that source evidence.
+    This is an observed snapshot, not a live countdown or app readiness score.
+    """
+    date.fromisoformat(day)
+    endpoints = payload.get('endpoints', {})
+    source = 'get_training_readiness'
+    records = endpoints.get(source)
+    if not records:
+        source = 'get_morning_training_readiness'
+        records = endpoints.get(source)
+    if isinstance(records, dict):
+        records = [records]
+    if not isinstance(records, list):
+        return []
+    candidates = []
+    for row in records:
+        if not isinstance(row, dict) or row.get('calendarDate') != day:
+            continue
+        stamp = row.get('timestamp')
+        if not isinstance(stamp, str):
+            continue
+        try:
+            observed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+        except ValueError:
+            continue
+        if observed.tzinfo is None:
+            continue
+        value = row.get('recoveryTime')
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                  or not math.isfinite(value) or value < 0):
+            continue
+        reached_zero = row.get('recoveryTimeChangePhrase') == 'REACHED_ZERO'
+        if reached_zero:
+            value = 0
+        if value is None:
+            continue
+        candidates.append((observed, value, row))
+    if not candidates:
+        return []
+    observed, value, row = max(candidates, key=lambda item: item[0])
+    stamp = observed.astimezone(timezone.utc).isoformat()
+    return [dict(source_record_id='recovery:'+day, metric_type='recovery_time',
+                 recorded_at=stamp, value=value, unit='min',
+                 source_updated_at=stamp, source_endpoint=source,
+                 calendar_date=day, source_recovery_time_minutes=row.get('recoveryTime'),
+                 recovery_time_change_phrase=row.get('recoveryTimeChangePhrase'),
+                 observation_kind='Garmin snapshot; not a live countdown')]

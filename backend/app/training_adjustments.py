@@ -18,6 +18,7 @@ def normalized(message):
 
 def is_adjustment(message):
     text=normalized(message)
+    if re.search(r'\bdoes (it|that|this) make sense\b|\bwhat do you think\b',text) and not re.search(r'\b(change|replace|remove|save|apply)\b',text):return False
     if re.search(r'\b(how|what|show|graph|plot|compare)\b',text) and not re.search(r'\b(make|give|change|reduce|cut|can we|should i|could we|would you)\b',text):return False
     if re.search(r'\b(make|change|set)\b.{0,35}\b\d+\s*(minutes?|mins?|hours?)\b|\b(add more time|turn it up|dial it back|take it easy|less intensity|more intensity)\b',text):return True
     return bool(re.search(r'\b(harder|easier|shorter|longer|tougher|lighter|hard|easy|reduce|cut|skip|cancel|rest|sprint|sprints|anaerobic|tempo|intervals|intensity|exhausted|tired|sore|soreness|fever|sick|pain|injured|sleep|slept|feeling good|feel great|feel good|fresh|busy|only have|only got|have only|can only|back off|dial|ramp|double|halve|increase|decrease|move|reschedule|swap)\b',text)) and not bool(re.search(r'\b(new plan|build a plan|create a plan|what is|what are|explain|difference between)\b',text))
@@ -124,6 +125,7 @@ def propose(message, path=None, now=None):
                 kind='anaerobic' if 'anaerobic' in text else 'sprint' if 'sprint' in text else 'tempo'
             replacement=endurance(kind,duration,program['state']['brief'],w['sport'],today=today)
             replacement.update({k:v for k,v in definition.items() if k.startswith('schedule_') or k in ('scheduled_date','time_unspecified')})
+            replacement['user_adjusted']=True
             delta={'definition':replacement}
         changes.append({'workout_id':w['id'],'expected_revision':w['revision'],'title':w['title'],'date':w.get('scheduled_date',w['scheduled_for'][:10]),'changes':delta})
     remote_note=' Some sessions were already sent to Garmin. Saving changes this local plan; review Send to Garmin afterward to update their remote instructions or remove skipped calendar entries.' if any(w['publish_status']!='local' for w in rows) else ''

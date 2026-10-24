@@ -104,7 +104,7 @@ daily use so there is only one app session running against your data.
 ## Next steps
 
 1. Use Training to save preferences and review T7 foundation plans; T12 readiness remains advisory.
-2. Finish the remaining Friday allocation check before signing off the training week.
+2. Observe the corrected long-ride allocation and its separate recovery adjustments during normal use.
 3. Use the local launcher for the daily-use trial, then perform the detailed all-tab QC.
 4. Continue validating synchronization, nutrition and reviewed Garmin publishing during normal use.
 

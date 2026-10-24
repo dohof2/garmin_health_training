@@ -1,11 +1,13 @@
 import {coalescedFetch} from './request';
 import RetainedPage from './RetainedPage';
+import SortableCards from './SortableCards';
+import WeightEntryDialog from './WeightEntryDialog';
 import TrainingEventProposal,{type EventProposal} from './TrainingEventProposal';
 import TrainingSetupProposal, {type Setup} from './TrainingSetupProposal';
 import TrainingAdjustmentProposal, {type Adjustment} from './TrainingAdjustmentProposal';
 import FullActivityStats from './FullActivityStats';
 import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
-import GraphCanvas, { api, AssistantPlots, WeightEntry, type ChartResult, type ChartSpec } from "./GraphCanvas";
+import GraphCanvas, { api, AssistantPlots, type ChartResult, type ChartSpec } from "./GraphCanvas";
 import TrainingPanel from "./TrainingPanel";
 import NutritionPanel from "./NutritionPanel";
 import { ReadinessCard } from "./ReadinessCard";
@@ -20,6 +22,7 @@ type HealthResponse = {
     tables: number;
   };
   version: string;
+  preview?: boolean;
 };
 
 type HistorySummary = {
@@ -1794,7 +1797,7 @@ export default function App() {
     .map((card) => cardRegistry[card.id]);
 
   return (
-    <main className="app-shell">
+    <SortableCards id={`page:${page}`} as="main" className="app-shell" pageSections>
       <header className="app-topbar">
         <a className="app-brand" href="#dashboard" aria-label="Dotan's training and health space"><span className="brand-mark" aria-hidden="true">D</span><span>Dotan's<span className="brand-subtitle">Training and health space</span></span></a>
         <div className={`connection connection--${connection.kind}`}><span aria-hidden="true" />{statusText}</div>
@@ -1802,12 +1805,13 @@ export default function App() {
       <nav className="app-navigation" aria-label="Main navigation">
         {appPages.map(([id, title]) => <a key={id} href={`#${id}`} aria-current={page === id ? 'page' : undefined}>{title}</a>)}
       </nav>
+      {connection.kind==='ready'&&connection.health.preview&&<p role="status" className="preview-data-banner"><strong>TEST PREVIEW — FICTIONAL DATA</strong> · These scores do not describe your Garmin history. Your normal app is on port 8765.</p>}
       <header className="page-heading">
         <p className="eyebrow">Personal health workspace</p>
         <h1>{appPages.find(([id]) => id === page)?.[1]}</h1>
         <p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p>
       </header>
-      <div hidden={!['dashboard', 'health', 'profile'].includes(page)}><WeightEntry unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} /></div>
+      <WeightEntryDialog showButton={['dashboard','health','profile'].includes(page)} unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} />
       <RetainedPage active={page === 'dashboard'}><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
       <RetainedPage active={page === 'health'}><GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
 
@@ -2059,7 +2063,7 @@ export default function App() {
         {connection.kind === "ready" && previewCards.length === 0 && (
           <p className="empty-cards">No cards are visible. Use Customize cards to add one.</p>
         )}
-        <div className={`preview-grid preview-grid--${previewCards.length}`}>
+        <SortableCards id="dashboard:summary" className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
             <article className={`data-card ${card.id === "training_readiness" ? "readiness-dashboard-card" : ""}`} key={card.id}>
               {card.id === "training_readiness" ? <RetainedPage active={page==='dashboard'}><ReadinessCard timezone={browserTimeZone} refreshToken={`${activityRevision}:${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /></RetainedPage> : <>
@@ -2073,7 +2077,7 @@ export default function App() {
               </>}
             </article>
           ))}
-        </div>
+        </SortableCards>
       </section>
 
       <section hidden={page !== "activities"} className="activities" id="activities" aria-labelledby="activities-title">
@@ -2468,7 +2472,7 @@ export default function App() {
           CSV and JSON use the activity date range selected above. Exports are generated
           locally and never contain credentials or session tokens.
         </p>
-        <div className="export-grid">
+        <SortableCards id={`export-grid:${page}`} className="export-grid">
           <article className="export-panel">
             <span>Portable data</span>
             <h3>Spreadsheet and JSON</h3>
@@ -2542,7 +2546,7 @@ export default function App() {
               <p className="restore-result restore-result--error" role="alert">{restoreState.message}</p>
             )}
           </article>
-        </div>
+        </SortableCards>
       </section>
 
       <section hidden={page !== "data"} className="import" aria-labelledby="import-title">
@@ -2631,7 +2635,7 @@ export default function App() {
         {!settingsDraft ? (
           <p className="settings-message">Settings are available when the local backend is running.</p>
         ) : (
-          <div className="settings-layout">
+          <SortableCards id={`settings-layout:${page}`} className="settings-layout">
             <form
               hidden={page !== "profile"}
               className="settings-panel"
@@ -2963,7 +2967,7 @@ export default function App() {
                 </fieldset>
               ))}
             </form>
-          </div>
+          </SortableCards>
         )}
         {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
       </section>
@@ -2973,7 +2977,7 @@ export default function App() {
           <p>Foundation 01</p>
           <h2 id="foundation-title">Local by design</h2>
         </div>
-        <div className="cards">
+        <SortableCards id={`cards:${page}`} className="cards">
           {foundations.map((foundation, index) => (
             <article key={foundation.title}>
               <div className="card-number">0{index + 1}</div>
@@ -2982,8 +2986,8 @@ export default function App() {
               <span>{foundation.detail}</span>
             </article>
           ))}
-        </div>
+        </SortableCards>
       </section>
-    </main>
+    </SortableCards>
   );
 }

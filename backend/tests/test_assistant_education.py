@@ -8,6 +8,15 @@ from app.ai_chat import chat_stream,_educational_answer,_instructions,_trainer_i
 
 
 class EducationTests(unittest.TestCase):
+ def test_two_ride_advice_is_not_forced_into_workout_or_adjustment(self):
+  from app.ai_chat import _today_request,_today_chat_request,_forced_tool_name
+  from app.training_adjustments import is_adjustment
+  question='I want to do today in the evening 30-45 minutes ride on my indoor trainer and tomorrow morning I will do a 2 hours ride does it make sense?'
+  self.assertFalse(_today_request(question))
+  self.assertIsNone(_today_chat_request(question,[]))
+  self.assertNotEqual(_forced_tool_name(question),'suggest_today_workout')
+  self.assertFalse(is_adjustment(question))
+  self.assertTrue(_today_request('I have 45 minutes today, suggest a ride'))
  def test_general_metric_questions_do_not_check_personal_records(self):
   with tempfile.TemporaryDirectory() as root:
    path=Path(root)/'education.sqlite';migrate(path)

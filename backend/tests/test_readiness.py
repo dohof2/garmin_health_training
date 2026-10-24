@@ -32,7 +32,7 @@ def observations():
     rows=[]
     for offset in range(100):
         day=DAY-timedelta(days=offset)
-        for kind,value,unit in [('hrv_last_night_average',50,'ms'),('resting_heart_rate',50,'bpm'),('sleep_duration',28800,'s'),('sleep_score',90,'score')]:
+        for kind,value,unit in [('hrv_last_night_average',50,'ms'),('resting_heart_rate',50,'bpm'),('sleep_duration',28800,'s'),('sleep_score',90,'score'),('average_stress',20,'score')]:
             rows.append({'id':f'{kind}:{day}','source_name':'garmin_connect','metric_type':kind,'recorded_at':day.isoformat(),'value':value,'unit':unit,
                          'period_start':f'{day-timedelta(days=1)}T22:00:00Z' if kind.startswith('sleep') else day.isoformat(),
                          'period_end':f'{day}T06:00:00Z' if kind.startswith('sleep') else day.isoformat()})
@@ -60,12 +60,14 @@ class ReadinessCalculationTests(unittest.TestCase):
         self.assertEqual(result['groups'][0]['hrv_baseline']['count'],28)
         self.assertEqual(result['inputs']['rhr_previous_day']['wake_date'],'2026-10-09')
 
-    def test_severe_hrv_and_rhr_share_one_bounded_penalty(self):
+    def test_hrv_penalty_is_bounded_and_rhr_is_context_only(self):
         self.change('hrv_last_night_average',35)
         self.change('resting_heart_rate',60,0)
         result=self.run_model()
-        self.assertEqual(result['groups'][0]['penalty_min'],40)
-        self.assertEqual(result['score'],60)
+        self.assertGreater(result['groups'][0]['penalty_min'],0)
+        self.assertLessEqual(result['groups'][0]['penalty_min'],DEFAULTS['autonomic_weight'])
+        self.change('resting_heart_rate',50,0)
+        self.assertEqual(result['score'],self.run_model()['score'])
 
     def test_high_hrv_no_bonus_and_context_flag(self):
         self.change('hrv_last_night_average',80)
@@ -77,14 +79,14 @@ class ReadinessCalculationTests(unittest.TestCase):
         self.change('sleep_duration',18000)
         self.change('sleep_score',20)
         result=self.run_model()
-        self.assertEqual(result['groups'][1]['penalty_min'],35)
-        self.assertEqual(result['score'],65)
+        self.assertEqual(result['groups'][1]['penalty_min'],30)
+        self.assertEqual(result['score'],67)  # Separate three-night sleep history also contributes.
 
     def test_all_three_groups_can_reach_low_band(self):
         self.change('sleep_duration',18000)
         for offset in range(7):self.change('hrv_last_night_average',30,offset)
         result=self.run_model(activities=[activity(load=1000)])
-        self.assertEqual(result['score'],0)
+        self.assertLess(result['score'],50)
         self.assertEqual(result['band'],'lower')
 
     def test_seven_day_hrv_smooths_single_night_and_excludes_window_from_baseline(self):
@@ -94,7 +96,7 @@ class ReadinessCalculationTests(unittest.TestCase):
         self.assertGreater(result['score'],80)
         self.assertEqual(result['groups'][0]['baseline_end'],'2026-10-03')
         for offset in range(7):self.change('hrv_last_night_average',30,offset)
-        self.assertEqual(self.run_model()['score'],60)
+        self.assertEqual(self.run_model()['score'],85)
 
     def test_sparse_seven_day_hrv_does_not_claim_complete(self):
         self.rows=[r for r in self.rows if not (r['metric_type']=='hrv_last_night_average' and (DAY-timedelta(days=6)).isoformat()<=r['recorded_at']<(DAY-timedelta(days=2)).isoformat())]
@@ -106,25 +108,25 @@ class ReadinessCalculationTests(unittest.TestCase):
         recent=self.run_model(activities=[activity()])
         older=self.run_model(activities=[activity(start='2026-10-08T14:00:00Z',end='2026-10-08T15:00:00Z')])
         self.assertAlmostEqual(older['groups'][2]['exposure']/recent['groups'][2]['exposure'],2**(-24/36),places=4)
-        excluded=self.run_model(activities=[activity(start='2026-10-10T07:00:00Z',end='2026-10-10T09:00:00Z'),activity('future',start='2026-10-11T07:00:00Z',end='2026-10-11T09:00:00Z')])
+        excluded=self.run_model(activities=[activity(start='2026-10-10T13:00:00Z',end='2026-10-10T15:00:00Z'),activity('future',start='2026-10-11T07:00:00Z',end='2026-10-11T09:00:00Z')])
         self.assertEqual(excluded['groups'][2]['exposure'],0)
 
     def test_missing_load_keeps_fixed_unknown_budget(self):
         result=self.run_model(activities=[activity(load=None)])
         self.assertIsNone(result['score'])
-        self.assertEqual(result['score_range'],{'low':75,'high':100})
+        self.assertEqual(result['score_range'],{'low':70,'high':100})
         self.assertEqual(result['groups'][2]['missing_activity_ids'],['ride'])
 
     def test_workload_requires_verification_of_the_morning_date(self):
         coverage={**COVERAGE,'coverage_end':'2026-10-09'}
         result=self.run_model(coverage=coverage)
         self.assertIsNone(result['score'])
-        self.assertEqual(result['score_range'],{'low':75,'high':100})
+        self.assertEqual(result['score_range'],{'low':70,'high':100})
 
     def test_missing_hrv_or_unverified_coverage_never_fabricates_score(self):
         rows=[r for r in self.rows if r['metric_type']!='hrv_last_night_average' or r['recorded_at']!=DAY.isoformat()]
-        self.assertEqual(self.run_model(rows=rows)['score_range'],{'low':60,'high':100})
-        self.assertEqual(self.run_model(coverage={})['score_range'],{'low':75,'high':100})
+        self.assertEqual(self.run_model(rows=rows)['score_range'],{'low':85,'high':100})
+        self.assertEqual(self.run_model(coverage={})['score_range'],{'low':70,'high':100})
         rows=[r for r in rows if r['metric_type']!='hrv_last_night_average']
         self.assertEqual(self.run_model(rows=rows)['status'],'insufficient_data')
 
@@ -147,7 +149,7 @@ class ReadinessCalculationTests(unittest.TestCase):
         self.assertEqual(fallback['inputs']['rhr']['value'],74)
         self.assertEqual(fallback['inputs']['rhr_selection']['date'],'2026-10-09')
         self.assertEqual(fallback['inputs']['rhr_selection']['kind'],'previous_day_fallback')
-        self.assertGreater(today['score'],fallback['score'])
+        self.assertEqual(today['score'],fallback['score'])
         self.assertLess(today['groups'][0]['rhr_z'],fallback['groups'][0]['rhr_z'])
         self.assertEqual(today['groups'][0]['rhr_baseline'],fallback['groups'][0]['rhr_baseline'])
         future=copy.deepcopy(self.rows[0]);future.update(id='future',recorded_at='2026-10-11',value=500)
@@ -183,7 +185,7 @@ class ReadinessCalculationTests(unittest.TestCase):
         for row in rows:
             if row['metric_type'].startswith('sleep') and row['recorded_at']=='2026-10-09':
                 row['period_end']='2026-10-09T23:30:00Z'
-        result=self.run_model(rows=rows,zone='Asia/Jerusalem')
+        result=self.run_model(rows=rows,zone='Asia/Jerusalem',now=NOW+timedelta(days=1))
         self.assertEqual(result['cutoff'],'2026-10-09T23:30:00+00:00')
         for day,expected in [(date(2026,3,29),'06:00'),(date(2026,10,25),'07:00')]:
             result=calculate(day,'Europe/Berlin',[],[],COVERAGE,DEFAULTS,now=NOW)
@@ -238,7 +240,7 @@ class ReadinessPersistenceTests(unittest.TestCase):
         self.assertEqual(first['latest']['calculation_id'],second['latest']['calculation_id'])
         with connect(self.path) as c:c.execute("UPDATE metric_readings SET value=18000 WHERE id='sleep_duration:2026-10-10'")
         corrected=self.history()
-        self.assertEqual(corrected['latest']['score'],65)
+        self.assertEqual(corrected['latest']['score'],67)
         self.assertNotEqual(first['latest']['calculation_id'],corrected['latest']['calculation_id'])
         with connect(self.path) as c:
             old=json.loads(c.execute('SELECT result_json FROM readiness_calculations WHERE id=?',(first['latest']['calculation_id'],)).fetchone()[0])
@@ -277,11 +279,11 @@ class ReadinessPersistenceTests(unittest.TestCase):
             c.execute("INSERT INTO readiness_configs(version,formula_version,parameters_json) VALUES('legacy-v3','readiness-v3',?)",(json.dumps(old_parameters),))
             c.execute("INSERT INTO readiness_settings(id,config_version) VALUES(1,'legacy-v3')")
         updated=get_readiness_settings(self.path)
-        self.assertEqual(updated['formula_version'],'readiness-v4')
+        self.assertEqual(updated['formula_version'],'readiness-v5')
         self.assertEqual(updated['parameters']['sleep_target_hours'],9)
         with connect(self.path) as c:self.assertEqual(c.execute("SELECT formula_version FROM readiness_configs WHERE version='legacy-v3'").fetchone()[0],'readiness-v3')
         result=self.history()
-        self.assertEqual(result['latest']['formula_version'],'readiness-v4')
+        self.assertEqual(result['latest']['formula_version'],'readiness-v5')
         self.assertEqual(result['latest']['inputs']['rhr']['wake_date'],DAY.isoformat())
 
     def test_parameter_versions_preserve_old_formula_and_portability(self):

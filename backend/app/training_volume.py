@@ -5,7 +5,7 @@ from statistics import median, mean
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from .training_constraints import SPORTS,capacity,optional_cap,resolve
-POLICY_VERSION='sport-volume-v3'
+POLICY_VERSION='sport-volume-v4-week-reference'
 CYCLING_GROWTH_LIMIT=.20
 PROVISIONAL={'cycling':180,'running':90,'strength':90,'hiking':120,'other':60}
 REDUCTIONS={'elevated':.7,'recovery':.7,'easy':.85}
@@ -36,6 +36,12 @@ def cycling_increment(baseline,observed_weeks,tolerated_sessions,adverse,load_st
  return baseline*CYCLING_GROWTH_LIMIT
 
 def estimates(c,answers,brief,today,tz):
+ # Keep a week's completed-volume reference stable as its weekdays elapse.
+ # Recovery/load and tolerance below still use current observations.
+ anchor=date.fromisoformat(brief['program_start']) if brief.get('program_start') else today-timedelta(days=today.weekday())
+ planning_day=date.fromisoformat(brief.get('_planning_day') or today.isoformat())
+ week_start=anchor+timedelta(weeks=(planning_day-anchor).days//7)
+ reference_day=min(anchor+timedelta(weeks=(today-anchor).days//7),week_start)
  days=resolve(answers,brief)['days'];begin=today-timedelta(days=42);records=[];activity_ids=set()
  for row in c.execute("SELECT id,activity_type,started_at,duration_seconds FROM activities WHERE deleted_at IS NULL AND source_name!='synthetic_fixture' AND started_at>=?",(begin.isoformat(),)):
   try:day=datetime.fromisoformat(row['started_at'].replace('Z','+00:00')).astimezone(ZoneInfo(tz)).date()
@@ -60,7 +66,7 @@ def estimates(c,answers,brief,today,tz):
   available=capacity(days,sport)
   if available<=0 and sport not in answers.get('sports',[]):continue
   selected=[row for row in records if row['sport']==sport]
-  reference=weekly_reference(selected,today,coverage,PROVISIONAL[sport]);weeks=reference['weeks']
+  reference=weekly_reference(selected,reference_day,coverage,PROVISIONAL[sport]);reference['as_of']=reference_day.isoformat();weeks=reference['weeks']
   observed=[week['minutes'] for week in weeks if week['minutes'] is not None];baseline=reference['baseline_minutes']
   if sport=='strength' and not selected:baseline=PROVISIONAL[sport]
   tolerance=[row for row in feedback if row['sport']==sport and row['completion_status']=='completed' and row.get('effort') is not None and row['effort']<=6 and (row.get('soreness') or 0)<=3 and not row.get('pain_or_illness')]

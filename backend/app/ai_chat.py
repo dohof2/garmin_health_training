@@ -165,6 +165,9 @@ def _educational_answer(message):
 
 
 def _today_request(message):
+    # Advice about a proposed session or two closely spaced rides is not an
+    # instruction to replace the conversation with today's workout card.
+    if re.search(r'\b(does (?:it|that|this) make sense|is (?:it|that|this) (?:ok|okay|sensible)|is that too much|what do you think)\b',message,re.I):return False
     if re.search(r'\b(training plan|weekly plan|long.term|weeks?|increase ftp|improve ftp|build ftp|ftp improvement|ftp inprovement|build endurance|increase endurance)\b',message,re.I):return False
     return bool(re.search(r'\btoday\b',message,re.I) and re.search(r'\b(ride|cycling|bike|run|workout|train|training|exercise)\b',message,re.I) and re.search(r'\b(suggest|recommend|should|can|have|available|do)\b',message,re.I))
 
@@ -713,7 +716,7 @@ def _deterministic_answer(outputs):
             lines.extend(result['assumptions']);lines.extend(result['limitations'])
             return '\n\n'.join(lines)
         if item['name'] == 'get_training_readiness':
-            heading = f"Morning readiness for {result['date']} ({result['timezone']}): "
+            heading = f"Training readiness for {result['date']} ({result['timezone']}): "
             if result['score'] is not None:
                 heading += f"{result['score']}/100, {result['band']} readiness."
             elif result['score_range']:
@@ -723,7 +726,10 @@ def _deterministic_answer(outputs):
             lines = [heading]
             for group in result['groups']:
                 lines.append(f"{group['name'].capitalize()}: {group['penalty_min']:g}–{group['penalty_max']:g} points deducted, " + ('covered.' if group['complete'] else 'incomplete evidence.'))
-            lines.append('RHR uses the previous completed day. References use earlier dates only; historical results use currently corrected records.')
+            lines.append('RHR is context only and does not deduct points. References use earlier dates; historical results use currently corrected records.')
+            recovery=result.get('inputs',{}).get('recovery')
+            if recovery:
+                lines.append(f"App-estimated recovery demand: {recovery['remaining_hours']:g} hours remaining; counts down with elapsed time. This is not a Garmin recovery measurement.")
             if 'band_sensitive_to_provisional_parameters' in result['warnings']:
                 lines.append('The band changes under reasonable parameter adjustments.')
             lines.append(result['caution'])
@@ -1057,6 +1063,7 @@ def _trainer_instructions(timezone_name):
 Today is {_today(timezone_name).isoformat()}, timezone {timezone_name or 'UTC'}.
 Calendar anchor: the trailing twelve-month range is {prior_year.isoformat()} through {today.isoformat()}, inclusive (same calendar date one year earlier; do not shift it by one day). Trailing months use the same day of month where valid. An unspecified plot period means all available stored history; omit start/end rather than inventing a recent window.
 Speak directly and naturally to the user. Start with a clear practical answer, then two or three relevant findings and, when useful, one concrete next step. Usually use 60–120 words. Do not recite every returned metric, tool mechanics or boilerplate warnings.
+When the user asks whether proposed rides make sense together, answer as a coach about their timing, intensity and recovery. A mention of today's ride or its duration is not itself a workout-generation or plan-edit request. Use read-only context when useful; do not replace the advice with a suggestion card or adjustment proposal unless the user actually requests one.
 Do not call a ride steady, easy or low intensity from average power alone; compare averages with the user's recorded history and state when zones, interval structure or perceived effort are missing. Use the recorded Garmin primary benefit when available rather than guessing from a training-effect score.
 For 'was it good?' or similar follow-ups, use the conversation to identify the activity, fetch fresh recorded evidence and explain what the session was useful for. You can say it was useful endurance work when recorded benefit supports it. Distinguish training stimulus from proven fitness improvement. Unknown session intent should qualify your judgment, not prevent a useful answer. Ask one focused question only when necessary.
 Resolve short replies using the preceding request and answer. When a comparison conversation continues with 'all rides', 'general records' or 'overall', continue that comparison against the requested period; do not reinterpret the reply as a new records-list request or ask the same clarification again. A reply of 'GPS' or 'same route' in that conversation explicitly selects route matching; check the available route evidence. Keep the comparison concise unless the user explicitly requests a table or individual records.

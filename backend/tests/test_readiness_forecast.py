@@ -45,7 +45,7 @@ class ForecastTests(unittest.TestCase):
  def test_early_completed_wake_unlocks_before_fallback_hour(self):
   now=datetime(2026,10,10,6,10,tzinfo=timezone.utc)
   result=calculate(DAY,'UTC',self.rows,[],COVERAGE,DEFAULTS,now=now)
-  self.assertEqual(result['status'],'complete');self.assertEqual(result['cutoff'],'2026-10-10T06:00:00+00:00');self.assertEqual(result['score'],100)
+  self.assertEqual(result['status'],'complete');self.assertEqual(result['cutoff'],'2026-10-10T06:10:00+00:00');self.assertEqual(result['score'],100)
  def test_sleep_not_finished_does_not_unlock(self):
   result=calculate(DAY,'UTC',self.rows,[],COVERAGE,DEFAULTS,now=datetime(2026,10,10,5,59,tzinfo=timezone.utc))
   self.assertEqual(result['status'],'awaiting_morning');self.assertIsNone(result['score'])
@@ -53,7 +53,7 @@ class ForecastTests(unittest.TestCase):
   before=[]
   with connect(self.path) as c:before=[tuple(r) for r in c.execute('SELECT * FROM metric_readings ORDER BY id')]
   r=forecast('UTC',self.path,NOW)
-  self.assertEqual(r['date'],'2026-10-11');self.assertEqual(r['status'],'projected');self.assertEqual(r['score'],100);self.assertEqual(r['range'],{'low':95,'high':100});self.assertEqual(r['model']['lookback_days'],100);self.assertGreaterEqual(r['validation']['mornings'],14);self.assertEqual(r['model']['selected'],'recent_median')
+  self.assertEqual(r['date'],'2026-10-11');self.assertEqual(r['status'],'projected');self.assertEqual(r['score'],100);self.assertEqual(r['range'],{'low':95,'high':100});self.assertEqual(r['model']['lookback_days'],100);self.assertGreaterEqual(r['validation']['mornings'],14);self.assertEqual(r['model']['selected'],'blended_personal_trend')
   with connect(self.path) as c:self.assertEqual(before,[tuple(r) for r in c.execute('SELECT * FROM metric_readings ORDER BY id')]);self.assertEqual(c.execute('SELECT COUNT(*) FROM readiness_calculations').fetchone()[0],0)
  def test_improving_hrv_does_not_create_forecast_cliff_without_workouts(self):
   with connect(self.path) as c:
@@ -62,11 +62,12 @@ class ForecastTests(unittest.TestCase):
    c.execute("UPDATE metric_readings SET value=24 WHERE metric_type='hrv_last_night_average' AND recorded_at>=? AND recorded_at<?",((DAY-timedelta(days=6)).isoformat(),DAY.isoformat()))
   r=forecast('UTC',self.path,NOW)
   comparison=r['comparison'];parts={p['name']:p for p in comparison['contributors']}
-  self.assertEqual(parts['Workout load']['score_change'],0)
-  self.assertGreaterEqual(parts['HRV and resting heart rate']['score_change'],0)
+  self.assertEqual(parts['Load trend']['score_change'],0)
+  self.assertGreaterEqual(parts['HRV status']['score_change'],0)
   self.assertGreaterEqual(comparison['baseline_score'],comparison['today_score'])
   self.assertIn('seven-day average',comparison['explanation'])
-  self.assertAlmostEqual(r['hrv_7day']['average'],(5*24+35+(24+24+35)/3)/7)
+  projected=next(row for row in r['inputs'] if row['metric']=='hrv_last_night_average')['predicted_value']
+  self.assertAlmostEqual(r['hrv_7day']['average'],(5*24+35+projected)/7)
  def test_future_observations_and_today_whole_day_rhr_do_not_leak(self):
   original=project(NOW,'UTC',self.rows,[],COVERAGE,DEFAULTS)
   changed=copy.deepcopy(self.rows)

@@ -1,5 +1,7 @@
 # T12 readiness algorithm: evidence and proposed v1
 
+**Current implementation — 24 October 2026:** [Readiness v5 / forecast v5 verification and model](../qa/2026-10-24-readiness/REPORT.md) supersede the v1 formula below. Six provisional budgets, RHR context-only behavior, load/session recovery countdowns, sleep adjustment, three-day stress and a longer-reference forecast are implemented. The earlier discussion remains historical evidence; none of these app models is a validated physiological recovery formula.
+
 Research date: 10 October 2026. Status: implemented as `readiness-v1`, a provisional advisory prototype; predictive usefulness is not prospectively validated. See `../status/t12-verification.md`. The intended outcome is morning readiness for a demanding endurance session. It does not measure general health, muscular recovery in every sport, or the probability of performing well.
 
 ## Recommendation and evidence
