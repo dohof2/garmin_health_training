@@ -16,8 +16,11 @@ def number(value, label, minimum, maximum):
 
 def workout_payload(definition, marker):
     sport=definition.get('sport')
+    if sport=='strength':
+        from .garmin_strength import payload
+        return payload(definition,marker)
     if sport not in ('cycling','running'):
-        raise ValueError('First release supports cycling and running. Strength needs verified Garmin exercise mappings; other sports are not converted.')
+        raise ValueError('Supported sports are cycling, running and strength with explicit exercise mappings; other sports are not converted.')
     title=definition.get('title')
     if not isinstance(title,str) or not title.strip() or len(title)>120:raise ValueError('Workout title must be 1–120 characters')
     duration=number(definition.get('duration_minutes'),'Workout minutes',10,720)*60
@@ -64,5 +67,10 @@ def canonical(payload):
     steps=segments[0].get('workoutSteps')
     if not isinstance(steps,list) or not steps:raise ValueError('Garmin did not return workout steps')
     def numeric(value):return float(value) if type(value) in (int,float) else value
-    return {'name':payload.get('workoutName'),'sport':payload.get('sportType',{}).get('sportTypeId'),'description':payload.get('description'),
+    result={'name':payload.get('workoutName'),'sport':payload.get('sportType',{}).get('sportTypeId'),'description':payload.get('description'),
         'steps':[{'type':s.get('type'),'order':s.get('stepOrder'),'step':s.get('stepType',{}).get('stepTypeId'),'end':s.get('endCondition',{}).get('conditionTypeId'),'seconds':numeric(s.get('endConditionValue')),'target':s.get('targetType',{}).get('workoutTargetTypeId'),'low':numeric(s.get('targetValueOne')) if s.get('targetType',{}).get('workoutTargetTypeId')!=1 else None,'high':numeric(s.get('targetValueTwo')) if s.get('targetType',{}).get('workoutTargetTypeId')!=1 else None,'description':s.get('description')} for s in steps]}
+
+    if payload.get('sportType',{}).get('sportTypeId')==5:
+        for output,step in zip(result['steps'],steps):
+            output.update(condition=step.get('endCondition',{}).get('conditionTypeId'),category=step.get('category'),exercise=step.get('exerciseName'),weight=numeric(step.get('weightValue')),weight_unit=step.get('weightUnit',{}).get('unitId') if isinstance(step.get('weightUnit'),dict) else None)
+    return result

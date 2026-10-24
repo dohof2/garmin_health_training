@@ -1,6 +1,20 @@
 # Garmin Health & Training App — Progress Status
 
+**Accepted chat experience — 24 October:** one shared conversation routes between Trainer, Assistant and Nutrition. The user has moved it into the Dashboard overview and removed its separate navigation tab. Training/Nutrition entry points open that overview chat. New answers scroll to their beginning when text first arrives, with no forced jump on completion. See the [implementation/QC report](../qa/2026-10-24-roadmap-1-4/REPORT.md).
+
 Last updated: 24 October 2026 (Asia/Jerusalem)
+
+## Training edits and follow-through — 24 October
+
+Added cross-week pending-stimulus tracking, category-specific recorded-tolerance variant selection, reviewed uniform interval/recovery/target edits and explicit named strength reductions. Saved edits survive review and become pending Garmin updates; fake-client checks verify strength and cycling read-back and idempotent rolling updates. Mixed food/chart and workout changes clarify before preparing partial actions. See the [follow-up report](../qa/2026-10-24-roadmap-1-4/REPORT.md#training-edits-and-cross-week-follow-through--24-october).
+
+**77 focused tests pass; 205 of 217 pass in the broader selection**, with the same 11 known failures/1 error and no new failing cases. Build and fictional browser review/save checks pass. Heterogeneous/nested blocks, lifting progression, live Garmin/device testing, semantic mixed-task orchestration, normal-use QC and the legacy regression backlog remain open. No personal records or Garmin records were edited. Quit/reopen the normal app to load the backend; changes remain local and uncommitted.
+
+## Roadmap areas 1–4 — implementation start, 24 October
+
+The user selected **one shared Chat routing between Trainer, Assistant and Nutrition**. The [first implementation pass](../qa/2026-10-24-roadmap-1-4/REPORT.md) adds date-only completion matching and visible completions, intended/achieved benefit tracking and conservative quality-slot reassignment, a small sourced variant library, reviewed continuous-endurance formatting, supported strength payloads, opt-in rolling Garmin publication, retained activity/climb analysis, broader app-data queries, and activity plots with overlays/time-distance switching/zoom. Chat is shared across Training/Nutrition entry points with visible roles and manual correction. Telegram remains plan-only.
+
+**21 new workflow tests pass.** In a 206-test combined selection, 194 pass; the remaining 11 failures/1 error also occur on committed HEAD, with no new failures and three completion failures resolved. Frontend build and fictional-data browser checks pass. Full multiweek adaptation, arbitrary block editing, live strength/device and conversational checks remain open; this is not full QC sign-off. No personal workouts/meals or Garmin records were changed; automatic publication was not enabled. Quit/reopen the normal app to load migration 031 and the backend. Changes are local and uncommitted.
 
 ## Readiness v5 checkpoint — 24 October
 
@@ -271,3 +285,9 @@ These are not the whole remaining backlog. The [readiness QC checklist](../qa/20
 Clarification: the daily resting-heart-rate value is context-only in this app's readiness and forecast. Garmin's imported stress score is derived upstream from heart-rate and HRV signals; that is an indirect heart-signal contribution, not evidence that Garmin uses the daily RHR summary specifically.
 
 Commit checkpoint validation: **159 focused backend tests pass**, including long-ride allocation and manual weight publishing, alongside the TypeScript/Vite production build and `git diff --check`. No credential patterns were found in pending source/document files; ignored local databases, tokens and screenshots are outside this checkpoint. Existing legacy-suite failures remain documented.
+
+
+### 2026-10-24 — Future frontend QC: Trainer/Assistant confusion
+Added an explicit reminder at the top of this report and a detailed frontend-touchups checkpoint in the application plan. Revisit role separation, naming, entry points, examples, conversation context and tool routing with the user when frontend touchups begin. This also informs the planned Telegram routing. No interface or agent behavior changed by this note.
+
+Frontend-touchups planning comment added: agents may explain when another role is better suited and offer a context-preserving handoff. Review alongside Trainer/Assistant clarity and Telegram routing; no implementation yet.

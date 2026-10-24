@@ -17,6 +17,10 @@ def normalized(message):
 
 
 def is_adjustment(message):
+    from .workout_format import requested
+    from .workout_edits import requested as blocks_requested
+    if blocks_requested(message):return True
+    if requested(message):return True
     text=normalized(message)
     if re.search(r'\bdoes (it|that|this) make sense\b|\bwhat do you think\b',text) and not re.search(r'\b(change|replace|remove|save|apply)\b',text):return False
     if re.search(r'\b(how|what|show|graph|plot|compare)\b',text) and not re.search(r'\b(make|give|change|reduce|cut|can we|should i|could we|would you)\b',text):return False
@@ -31,6 +35,8 @@ def propose(message, path=None, now=None):
     from .training_load_charts import daily_rows
     now=now or datetime.now(timezone.utc)
     if not isinstance(message,str) or not message.strip() or len(message)>1500:raise ValueError('Describe the change in up to 1,500 characters')
+    from .workout_format import requested, propose as format_proposal
+    if requested(message):return format_proposal(message,path,now)
     text=normalized(message);active=read_active({},path);program=active.get('program')
     base={'tool':'propose_training_adjustment','kind':'adaptation','status':'needs_input','changes':{},'adjustments':[], 'request':message}
     def answer(status,reason):return {**base,'status':status,'message':reason}
@@ -40,7 +46,7 @@ def propose(message, path=None, now=None):
     weekly=bool(re.search(r'\b(week|weekly|next 7 days)\b',text))
     if 'next week' in text:return answer('needs_input','Do you mean the next seven days or the following calendar week? I can adapt the materialized sessions once those dates are clear.')
     if re.search(r'\b(last|yesterday|finished|completed|felt|feedback)\b',text) and not re.search(r'\b(today|tomorrow|next|week|make|give|reduce|cut)\b',text):return answer('needs_input','Which completed session is this feedback for? Choose Feedback / edit session so I attach it to the correct workout.')
-    sport='strength' if re.search(r'\b(strength|weights|gym)\b',text) else 'running' if re.search(r'\b(run|running)\b',text) else 'cycling' if re.search(r'\b(ride|bike|cycling|sprints?|anaerobic|tempo)\b',text) else None
+    sport='strength' if re.search(r'\b(strength|weights|gym|dumbbell|barbell|pull.up|dips?|leg press)\b',text) else 'running' if re.search(r'\b(run|running)\b',text) else 'cycling' if re.search(r'\b(ride|bike|cycling|sprints?|anaerobic|tempo)\b',text) else None
     if sport:rows=[w for w in rows if w['sport']==sport]
     target_day=today+timedelta(days=1) if 'tomorrow' in text else today if 'today' in text else None
     explicit=re.findall(r'\b\d{4}-\d{2}-\d{2}\b',text)
@@ -71,6 +77,30 @@ def propose(message, path=None, now=None):
     symptoms=re.sub(r'\b(no|without) (pain|soreness|illness)\b','',text)
     illness=bool(re.search(r'\b(pain|fever|sick|illness|injured|injury|dizzy|chest)\b',symptoms))
     fatigue=bool(re.search(r'\b(tired|exhausted|sore|soreness|poor sleep|bad sleep|slept badly|slept poorly|sleep was bad|sleep was terrible|burnt out)\b|\b(slept|sleep)\s+(only\s+)?[1-4]\s*(hours?|h)\b',symptoms))
+    from .workout_edits import requested as blocks_requested, edit, EditError
+    if blocks_requested(text):
+        if weekly or len(rows)!=1:return answer('needs_input','Choose one dated session for a block edit.')
+        if illness or fatigue or context['blockers'] or policy['level']=='hold' or context['answers'].get('pain_or_illness'):
+            return answer('not_recommended','Recovery or saved restrictions need review. Request an easier session or rest before editing its blocks.')
+        w=rows[0];definition=w['definition']
+        with connect(path) as c:
+            managed=c.execute('SELECT 1 FROM garmin_publication_links WHERE workout_id=? AND verified_hash IS NOT NULL',(w['id'],)).fetchone()
+            if w['publish_status'] not in ('local','published','update_needed') or w['publish_status']!='local' and not managed or definition.get('fixed_commitment') or definition.get('event_id') or definition.get('review_hold'):
+                return answer('not_recommended','This session has a commitment, review hold or unfinished/unverified Garmin send. Resolve it before editing blocks.')
+            from .cycling_variants import tolerated_sessions
+            tolerated=tolerated_sessions(c,definition.get('workout_kind'),today,tz)
+        phase=definition.get('training_block',{}).get('phase')
+        day=datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()
+        week=max(0,(day-datetime.fromisoformat(program['state']['starts_on']).date()).days//7)
+        blocks=program['state']['blocks']
+        if week<len(blocks):phase=blocks[week]['phase']
+        allow_increase=len(tolerated)>=2 and phase not in ('Recovery / review','Race week','Freshen up','Post-event recovery')
+        try:replacement,summary=edit(definition,text,policy,allow_increase)
+        except EditError as error:return answer(error.status,str(error))
+        changes=[{'workout_id':w['id'],'expected_revision':w['revision'],'title':w['title'],'date':w.get('scheduled_date',w['scheduled_for'][:10]),'summary':summary,'changes':{'definition':replacement}}]
+        proposal={**base,'status':'proposal','root_plan_id':program['plan_id'],'program_revision':program['revision'],'adjustments':changes,'message':'Review these block edits. Saving preserves the session date and duration. '+('Then review Send to Garmin to update its instructions.' if w['publish_status']!='local' else ''),'policy':policy}
+        proposal['fingerprint']=hashlib.sha256(encoded({k:proposal[k] for k in ('root_plan_id','program_revision','adjustments')}).encode()).hexdigest()
+        return proposal
     easier=bool(re.search(r'\b(easier|easy|lighter|reduce|cut|decrease|back off|dial down|dial it back|recovery|halve|less intensity|too hard)\b',text))
     harder=not easier and bool(re.search(r'\b(harder|tougher|hard|intensity|sprints?|anaerobic|tempo|intervals|ramp|push|challenge|turn it up)\b',text))
     skip=bool(re.search(r'\b(skip|cancel|rest|day off)\b',text))
@@ -136,6 +166,8 @@ def propose(message, path=None, now=None):
 
 def save(arguments,path=None,now=None):
     """Never trust client definitions. Recompute using current recovery and compare."""
+    from .workout_format import requested, save as save_format
+    if requested(arguments['message']):return save_format(arguments,path,now)
     proposed=propose(arguments['message'],path,now)
     if proposed.get('status')!='proposal' or proposed.get('fingerprint')!=arguments.get('fingerprint'):raise ValueError('Training or recovery changed. Ask again and review a fresh proposal.')
     with connect(path) as c:

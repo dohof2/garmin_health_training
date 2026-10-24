@@ -295,6 +295,9 @@ function proposalRows(proposal: SettingsProposal) {
 }
 
 type ChatEvidence = {
+  activity_id?:string;
+  activity?:{id:string};
+  nutrition?:Record<string,unknown>;
   training_event?:EventProposal;
   training_setup?: Setup;
   training_adjustment?: Adjustment;
@@ -368,7 +371,9 @@ type ChatEvidence = {
   limitations?: string[];
 };
 
+type ChatRole='trainer'|'assistant'|'nutrition';
 type ChatMessage = {
+  chat_role?:ChatRole;
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -376,7 +381,7 @@ type ChatMessage = {
 };
 
 type ChatStreamEvent =
-  | { type: "start"; provider: AiProviderName; model: string }
+  | { type: "start"; provider: AiProviderName; model: string; chat_role?:ChatRole }
   | { type: "tool"; evidence: ChatEvidence }
   | { type: "delta"; text: string }
   | { type: "complete"; provider: AiProviderName; model: string; evidence: ChatEvidence[] }
@@ -717,12 +722,13 @@ function ActivityDetailPanel({
 
 const appPages = [
   ['dashboard', 'Dashboard'], ['activities', 'Activities'], ['health', 'Health'],
-  ['assistant', 'Assistant'], ['training', 'Training'], ['nutrition', 'Nutrition'],
+  ['training', 'Training'], ['nutrition', 'Nutrition'],
   ['maintenance', 'Maintenance'], ['profile', 'Profile'], ['data', 'Data & sync'], ['settings', 'Settings'],
 ] as const;
 function currentPage() {
   const hash = window.location.hash.slice(1);
   if (hash === 'sync') return 'data';
+  if (hash === 'assistant' || hash === 'chat') return 'dashboard';
   return appPages.some(([id]) => id === hash) ? hash : 'dashboard';
 }
 
@@ -769,7 +775,23 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [chatInput, setChatInput] = useState("");
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [initialRouting]=useState<{role?:ChatRole;nutrition?:Record<string,unknown>}>(()=>{try{return JSON.parse(sessionStorage.getItem('garmin-shared-routing-v1')||'{}');}catch{return {};}});
+  const [chatRole,setChatRole]=useState<'auto'|ChatRole>('auto');
+  const lastChatRole=useRef<ChatRole>(initialRouting.role??'assistant');
+  const nutritionChatContext=useRef<Record<string,unknown>>(initialRouting.nutrition??{});
+  const chatMessagesFrame=useRef<HTMLDivElement>(null);
+  const pendingAnswerStart=useRef<string|null>(null);
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(()=>{try{const saved=JSON.parse(sessionStorage.getItem('garmin-shared-chat-v1')||'[]');return Array.isArray(saved)?saved.filter(item=>item&&typeof item.id==='string'&&['user','assistant'].includes(item.role)&&typeof item.content==='string'&&Array.isArray(item.evidence)).slice(-40):[];}catch{return [];}});
+  useLayoutEffect(()=>{
+    if(page!=='dashboard'||!pendingAnswerStart.current)return;
+    const frame=chatMessagesFrame.current;
+    const answer=document.getElementById(`chat-message-${pendingAnswerStart.current}`);
+    if(!frame||!answer)return;
+    pendingAnswerStart.current=null;
+    frame.scrollIntoView({behavior:'instant',block:'nearest'});
+    frame.scrollTo({top:frame.scrollTop+answer.getBoundingClientRect().top-frame.getBoundingClientRect().top-22,behavior:'instant'});
+  },[chatMessages,page]);
+  useEffect(()=>{try{sessionStorage.setItem('garmin-shared-chat-v1',JSON.stringify(chatMessages.slice(-40)));}catch{/* Continue in memory if browser storage is full or disabled. */}},[chatMessages]);
   const [initialChatContext] = useState<{plots?: ChartSpec[]; ride?: string; coaching?: ChatEvidence["coaching"]}>(() => {
     try { return JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
   });
@@ -778,6 +800,7 @@ export default function App() {
     const ask=(event:Event)=>{
       const {question,coaching}=(event as CustomEvent<{question:string;coaching:ChatEvidence['coaching']}>).detail;
       if(!question)return;
+      window.location.hash='dashboard';setChatRole('trainer');
       chatContext.current.coaching=coaching;
       setChatMessages(current=>current.at(-1)?.role==='assistant'&&current.at(-1)?.content===question?current:[...current,{id:crypto.randomUUID(),role:'assistant',content:question,evidence:coaching?[{tool:'preview_training_plan',coaching}]:[]}]);
       window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});
@@ -1138,7 +1161,7 @@ export default function App() {
     }
   };
 
-  const sendChatMessage = async (suggestedMessage?: string) => {
+  const sendChatMessage = async (suggestedMessage?: string, roleOverride?:ChatRole, nutritionOverride?:Record<string,unknown>) => {
     const message = (suggestedMessage ?? chatInput).trim();
     if (!message || chatStatus.kind === "streaming") return;
 
@@ -1173,8 +1196,11 @@ export default function App() {
         : current);
     }, 10_000);
 
+    let answerStarted=false;
+    const showAnswerStart=()=>{if(!answerStarted){answerStarted=true;pendingAnswerStart.current=assistantId;}};
     const applyEvent = (event: ChatStreamEvent) => {
       if (event.type === "start") {
+        if(event.chat_role){lastChatRole.current=event.chat_role;setChatMessages(current=>current.map(item=>item.id===assistantId?{...item,chat_role:event.chat_role}:item));}
         setChatStatus({
           kind: "streaming",
           provider: event.provider,
@@ -1182,6 +1208,10 @@ export default function App() {
           slow: false,
         });
       } else if (event.type === "tool") {
+        const ride=event.evidence.activity_id??event.evidence.activity?.id??event.evidence.reference_record?.id;
+        if(ride)chatContext.current.ride=ride;
+        if(event.evidence.nutrition){const result=event.evidence.nutrition;nutritionChatContext.current={...nutritionChatContext.current,day:result.context_date,pending_target:(result.target_proposal as {request?:unknown}|undefined)?.request,pending_foods:(result.ingredients as {name:string;grams_low:number;grams_high:number;grams_proposed?:number;question:string;meal_type?:string}[]|undefined)?.map(i=>({name:i.name,grams_low:i.grams_low,grams_high:i.grams_high,grams_proposed:i.grams_proposed,question:i.question,meal_type:i.meal_type}))};}
+        try{sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({role:lastChatRole.current,nutrition:nutritionChatContext.current}));}catch{/* Keep in-memory routing context. */}
         if (event.evidence.coaching) chatContext.current.coaching = event.evidence.coaching;
         if (event.evidence.plots?.length) {
           chatContext.current.plots = event.evidence.plots.map(p => p.spec);
@@ -1199,22 +1229,22 @@ export default function App() {
           ? { ...item, evidence: [...item.evidence, event.evidence] }
           : item));
       } else if (event.type === "delta") {
+        if(event.text)showAnswerStart();
         setChatMessages((current) => current.map((item) => item.id === assistantId
           ? { ...item, content: item.content + event.text }
           : item));
       } else if (event.type === "complete") {
-        window.requestAnimationFrame(() => document.getElementById(`chat-message-${assistantId}`)?.scrollIntoView({ behavior: "instant", block: "start" }));
         setChatStatus({
           kind: "idle",
           provider: event.provider,
           model: event.model,
         });
       } else if (event.type === "error") {
+        showAnswerStart();
         setChatMessages((current) => current.map((item) => item.id === assistantId
           ? { ...item, content: item.content ? `${item.content}\n\n${event.message}` : event.message }
           : item));
         setChatStatus({ kind: "error", message: event.message });
-        window.requestAnimationFrame(() => document.getElementById(`chat-message-${assistantId}`)?.scrollIntoView({ behavior: "instant", block: "start" }));
       }
     };
 
@@ -1222,7 +1252,7 @@ export default function App() {
       const response = await coalescedFetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, coaching_context: chatContext.current.coaching,
+        body: JSON.stringify({ message, history, chat_role:roleOverride??chatRole,previous_role:lastChatRole.current,nutrition_context:nutritionOverride??nutritionChatContext.current,coaching_context: chatContext.current.coaching,
           plot_context: chatMessages.find(item => item.id === plotMessageId)?.evidence.flatMap(e => e.plots ?? []).map(p => p.spec) ?? chatContext.current.plots,
           ride_context: chatContext.current.ride ?? chatMessages.flatMap(item => item.evidence).filter(e => e.tool === 'find_same_course_rides').at(-1)?.reference_record?.id,
           timezone: browserTimeZone, operation_id: userMessage.id,
@@ -1250,6 +1280,7 @@ export default function App() {
         ? { kind: "idle", provider: current.provider, model: current.model }
         : current);
     } catch (error: unknown) {
+      showAnswerStart();
       if (error instanceof DOMException && error.name === "AbortError") {
         setChatMessages((current) => current.map((item) => item.id === assistantId
           ? { ...item, content: item.content || (trainerTimedOut ? "The trainer took too long. Your saved answers are retained; retry your last reply." : "Response stopped.") }
@@ -1268,6 +1299,8 @@ export default function App() {
       chatAbortController.current = null;
     }
   };
+  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{message?:string;role?:ChatRole;nutrition?:Record<string,unknown>}>).detail;window.location.hash='dashboard';if(detail?.nutrition)nutritionChatContext.current=detail.nutrition;if(detail?.role)setChatRole(detail.role);if(detail?.message)void sendChatMessage(detail.message,detail.role,detail.nutrition);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
+
 
   const [savingProposal, setSavingProposal] = useState<string | null>(null);
   const [proposalError, setProposalError] = useState<string | null>(null);
@@ -1812,6 +1845,220 @@ export default function App() {
         <p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p>
       </header>
       <WeightEntryDialog showButton={['dashboard','health','profile'].includes(page)} unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} />
+      <section hidden={page !== "dashboard"} className="assistant overview-chat" id="assistant" aria-labelledby="assistant-title">
+        <div className="section-heading assistant-heading">
+          <div>
+            <p>Trainer · Assistant · Nutrition</p>
+            <h2 id="assistant-title">Chat</h2>
+          </div>
+          <div className={`assistant-provider ${activeAiStatus?.available ? "assistant-provider--ready" : "assistant-provider--attention"}`}>
+            <strong>{activeAiProvider === "chatgpt" ? "ChatGPT account" : activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
+            <span>{activeAiStatus?.available ? "Ready" : "Setup needed"}</span>
+          </div>
+        </div>
+        <p className="assistant-intro">Ask about your plan, analyse a ride, explore your health data or describe a meal. The same conversation follows you between roles. Proposed changes stay reviewable.</p>
+        <label>Answering role <select value={chatRole} disabled={chatStatus.kind==='streaming'} onChange={e=>setChatRole(e.target.value as 'auto'|ChatRole)}><option value="auto">Auto · route my question</option><option value="trainer">Trainer · coaching and plan changes</option><option value="assistant">Assistant · data and activity analysis</option><option value="nutrition">Nutrition · food and targets</option></select></label>
+
+        <button type="button" disabled={chatStatus.kind==='streaming'||!chatMessages.length} onClick={()=>{setChatMessages([]);setPlotMessageId(null);chatContext.current={};nutritionChatContext.current={};lastChatRole.current='assistant';setChatRole('auto');try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.removeItem('garmin-shared-routing-v1');}catch{/* In-memory context is already cleared. */}}}>New conversation</button>
+        <p className="assistant-privacy">
+          {activeAiProvider === "chatgpt"
+            ? "ChatGPT account mode sends your question, recent chat context and relevant tool results to OpenAI using your authorized ChatGPT plan. Plan limits are shared; it never falls back to paid API billing."
+            : activeAiProvider === "openai"
+            ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
+            : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
+          {" "}This shared conversation and graph/ride selections stay in this browser tab, including after a refresh.
+        </p>
+
+        <AssistantPlots plots={(chatMessages.find(message => message.id === plotMessageId) ?? chatMessages.filter(message => message.evidence.some(e => e.plots?.length)).at(-1))?.evidence.flatMap(evidence => evidence.plots ?? []) ?? []} profile={settingsDraft?.profile} />
+        {proposalError && <p role="alert">{proposalError}</p>}
+        {maintenanceActionError && <p role="alert">{maintenanceActionError}</p>}
+        <div className="chat-shell">
+          {chatMessages.length === 0 ? (
+            <div className="chat-empty">
+              <strong>{page === 'training' ? 'Your personalized training plan starts here' : 'Start a conversation'}</strong>
+              {page==='training'?<div className="chat-suggestions"><button type="button" onClick={()=>void sendChatMessage('I have 60 minutes today. What should I do according to my plan and recovery?')}>I have 60 minutes today</button><button type="button" onClick={()=>void sendChatMessage('Help me build a cycling and strength plan. Ask only for essential missing preferences, calibration and upcoming events.')}>Build my training plan</button><button type="button" onClick={()=>void sendChatMessage('What are the next seven days in my active plan, and why?')}>Review my week</button><button type="button" onClick={()=>void sendChatMessage('Help me add an upcoming event. Ask its name, activity, distance, ascent, date and race status.')}>Add an upcoming event</button></div>:              <div className="chat-suggestions">
+                <button type="button" onClick={()=>void sendChatMessage('Help me build a cycling and strength plan. Ask only for essential missing preferences.')}>Build my training plan</button>
+                <button type="button" onClick={()=>void sendChatMessage('What are the next seven days in my active plan, and why?')}>Review my training week</button>
+                <button type="button" onClick={()=>void sendChatMessage('Help me review my nutrition targets.')}>Nutrition targets</button>
+                <button type="button" onClick={() => void sendChatMessage("Plot my weight over the last year.")}>Weight over the last year</button>
+                <button type="button" onClick={() => void sendChatMessage("Plot power versus speed across all my cycling rides.")}>Power vs speed</button>
+                <button type="button" onClick={() => void sendChatMessage("Plot resting heart rate versus cycling VO2 max on matching dates.")}>Resting HR vs VO₂ max</button>
+                <button type="button" onClick={() => void sendChatMessage("Summarize my steps and sleep over the last seven days.")}>Last seven days</button>
+                <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
+                <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride using GPS coordinates and explain the matching criteria.")}>Similar rides (GPS)</button>
+                <button type="button" onClick={() => void sendChatMessage("Find earlier rides on the same GPS course as my latest ride and show how my performance changed.")}>Same course</button>
+                <button type="button" onClick={() => void sendChatMessage("Was my latest ride effective? In what way?")}>Ride effectiveness</button>
+                <button type="button" onClick={() => void sendChatMessage("When did I last replace the rear tire on my road bike?")}>Maintenance history</button>
+                <button type="button" onClick={() => void sendChatMessage("Set my goal to improve cycling endurance.")}>Set a goal</button>
+                <button type="button" onClick={() => void sendChatMessage("What is my training readiness today?")}>Training readiness</button>
+                <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
+              </div>}
+            </div>
+          ) : (
+            <div ref={chatMessagesFrame} className="chat-messages" aria-live="polite">
+              {chatMessages.map((message) => (
+                <article id={`chat-message-${message.id}`} className={`chat-message chat-message--${message.role}`} key={message.id}>
+                  <span>{message.role === "user" ? "You" : ({trainer:"Trainer",assistant:"Assistant",nutrition:"Nutrition"}[message.chat_role??"assistant"])}</span>
+                  <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
+                  {message.evidence.some(e=>e.nutrition)&&<button type="button" onClick={()=>{const result=message.evidence.find(e=>e.nutrition)!.nutrition!;try{sessionStorage.setItem('nutrition-pending-review-v1',JSON.stringify(result));if(result.target_proposal)sessionStorage.setItem('nutrition-target-proposal-v1',JSON.stringify(result.target_proposal));}catch{/* Review can still use the in-memory event. */}window.location.hash='nutrition';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('nutrition-chat-review',{detail:result})));}}>Review food / targets in Nutrition</button>}
+                  {message.evidence.find(e=>e.coaching)?.coaching?.status === 'ready' && <button type="button" onClick={()=>{window.location.hash='training';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)?.coaching})));}}>Review coaching proposal in Training</button>}
+                  {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
+                  {message.evidence.length > 0 && (
+                    <div className="chat-evidence">
+                      {message.evidence.map((evidence, index) => (
+                        <div key={`${message.id}-${evidence.tool}-${index}`}>
+                          <strong>{evidence.maintenance ? "Maintenance history" : evidence.tool === "propose_settings_change" ? "Settings change" : evidence.tool === "assess_ride" ? "Ride assessment" : evidence.tool === "running_volume_trend" ? "Weekly running volume" : evidence.tool.replaceAll("_", " ")}</strong>
+                          {evidence.period && <span>{formatLongDate(evidence.period.start)} – {formatLongDate(evidence.period.end)}</span>}
+                          {evidence.period_a && evidence.period_b && (
+                            <span>
+                              {formatLongDate(evidence.period_a.start)}–{formatLongDate(evidence.period_a.end)} vs. {formatLongDate(evidence.period_b.start)}–{formatLongDate(evidence.period_b.end)}
+                            </span>
+                          )}
+                          {typeof evidence.record_count === "number" && <small>{evidence.record_count.toLocaleString()} metric records</small>}
+                          {evidence.maintenance && <div className="maintenance-chat-evidence">
+                            {evidence.maintenance.events?.slice(0, 6).map((event) => <a key={event.id} href={`/api/maintenance/events/${encodeURIComponent(event.id)}`} target="_blank" rel="noreferrer">
+                              {event.event_date} · {event.equipment_label} · {event.action}
+                            </a>)}
+                            {evidence.maintenance.saved && <strong>Saved locally · revision history retained</strong>}
+                            {evidence.maintenance.undo_available && <button type="button" onClick={() => void undoChatMaintenance(evidence.maintenance!)}>Undo maintenance action</button>}
+                            {evidence.maintenance.events?.length ? <a href="#maintenance">Edit in Maintenance history</a> : null}
+                            {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
+                            {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
+                          </div>}
+                          {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}{evidence.training_event&&<TrainingEventProposal proposal={evidence.training_event}/>}
+                          {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
+                          {evidence.proposal && (
+                            <div className="settings-proposal">
+                              <strong>{evidence.proposal.status === "saved" ? "Saved locally" : "Review proposed change"}</strong>
+                              <table>
+                                <thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead>
+                                <tbody>{proposalRows(evidence.proposal).map((row, index) => (
+                                  <tr key={index}><td>{row.label}</td><td>{row.before}</td><td>{row.after}</td></tr>
+                                ))}</tbody>
+                              </table>
+                              <button type="button" disabled={savingProposal !== null || evidence.proposal.status === "saved"}
+                                onClick={() => void saveChatProposal(evidence.proposal!)}>
+                                {savingProposal === evidence.proposal.id ? "Saving…" : evidence.proposal.status === "saved" ? "Saved" : "Save change"}
+                              </button>
+                              <a href="#profile">Edit in Profile</a>
+                              <small>To revise this proposal, ask for a correction in chat. Changes use the same profile and goals as Settings.</small>
+                            </div>
+                          )}
+                          {typeof evidence.total_matches === "number" && (
+                            <small>
+                              {evidence.total_matches.toLocaleString()} matching {evidence.tool === "find_same_course_rides" ? "course attempts" : evidence.tool === "find_similar_rides" ? "rides" : "activities"}
+                              {typeof evidence.candidate_pool_count === "number" ? ` from ${evidence.candidate_pool_count.toLocaleString()} candidates` : ""}
+                              {evidence.truncated ? ` · ${evidence.returned_count} shown` : ""}
+                            </small>
+                          )}
+                          {(evidence.freshness?.latest_recorded_at || evidence.freshness?.latest_started_at) && (
+                            <small>Fresh through {formatLongDate(evidence.freshness.latest_recorded_at ?? evidence.freshness.latest_started_at ?? "")}</small>
+                          )}
+                          {evidence.records && evidence.records.length > 0 && (
+                            <div className="evidence-links">
+                              {evidence.reference_record && (
+                                <span>
+                                  Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
+                                </span>
+                              )}
+                              {evidence.records.slice(0, 6).map((record) => (
+                                <span key={record.id}>
+                                  {record.name ?? record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
+                                  {typeof record.similarity_score === "number" ? ` · ${record.similarity_score.toFixed(0)}% similarity` : ""}
+                                  {typeof record.route_overlap_percent === "number" ? ` · ${record.route_overlap_percent.toFixed(0)}% route overlap` : ""}
+                                  {record.direction ? ` · ${record.direction}` : ""}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                          {evidence.reference_record && (!evidence.records || evidence.records.length === 0) && (
+                            <div className="evidence-links">
+                              <span>
+                                Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
+                              </span>
+                            </div>
+                          )}
+                          {evidence.criteria && evidence.criteria.length > 0 && (
+                            <div className="evidence-criteria">
+                              {evidence.criteria.map((criterion) => (
+                                <small key={criterion.field}>{formatSimilarityCriterion(criterion, preferredDistanceUnit)}</small>
+                              ))}
+                            </div>
+                          )}
+                          {evidence.unavailable_criteria && evidence.unavailable_criteria.length > 0 && (
+                            <small>Not available for matching: {evidence.unavailable_criteria.join(", ")}</small>
+                          )}
+                          {evidence.course_progress && (
+                            <div className="course-progress">
+                              <strong>
+                                {evidence.course_progress.attempt_count} matched attempts · {formatLongDate(evidence.course_progress.earliest.local_date)} to {formatLongDate(evidence.course_progress.latest.local_date)}
+                              </strong>
+                              {evidence.course_progress.changes_latest_minus_earliest.map((change) => (
+                                <small key={change.metric}>
+                                  {change.metric}: {formatCourseMetric(change.earliest, change.unit)} → {formatCourseMetric(change.latest, change.unit)}
+                                  {change.percent === null ? "" : ` · ${change.percent >= 0 ? "+" : ""}${change.percent.toFixed(1)}%`}
+                                </small>
+                              ))}
+                            </div>
+                          )}
+                          {evidence.privacy && <small>{evidence.privacy}</small>}
+                          {evidence.missing_metric_types && evidence.missing_metric_types.length > 0 && (
+                            <small>Not recorded: {evidence.missing_metric_types.join(", ")}</small>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </article>
+              ))}
+            </div>
+          )}
+
+          <form
+            className="chat-composer"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void sendChatMessage();
+            }}
+          >
+            <label htmlFor="chat-question">{page==='training'?'Tell your trainer what you want to work on':'Message'}</label>
+            <textarea
+              id="chat-question"
+              maxLength={4000}
+              placeholder={page==='training'?'For example: Help me build an endurance and strength plan':'For example: How has my running volume changed over the last eight weeks?'}
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+                event.preventDefault();
+                if (!event.repeat && chatInput.trim() && connection.kind === "ready" && chatStatus.kind !== "streaming") {
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              aria-describedby="chat-keyboard-hint"
+              disabled={chatStatus.kind === "streaming"}
+            />
+            <small id="chat-keyboard-hint">{page==='training'?'Enter to send':'Enter to ask'} · Shift+Enter for a new line</small>
+            <div className="chat-actions">
+              <span>
+                {chatStatus.kind === "streaming"
+                  ? chatStatus.slow
+                    ? "Still preparing your answer. You can stop and retry if needed."
+                    : `Using ${chatStatus.model ?? "the selected model"}…`
+                  : chatStatus.kind === "error"
+                    ? chatStatus.message
+                    : "Missing measurements are never filled with guesses."}
+              </span>
+              {chatStatus.kind === "streaming" ? (
+                <button className="secondary-action" type="button" onClick={stopChatResponse}>Stop</button>
+              ) : (
+                <button type="submit" disabled={!chatInput.trim() || connection.kind !== "ready"}>Send</button>
+              )}
+            </div>
+          </form>
+        </div>
+      </section>
+
       <RetainedPage active={page === 'dashboard'}><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
       <RetainedPage active={page === 'health'}><GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
 
@@ -2170,212 +2417,6 @@ export default function App() {
       <RetainedPage active={page==='activities'}><RemovedActivities revision={activityRevision} onChanged={activityRemovalChanged}/></RetainedPage>
         </section>
 
-      <section hidden={page !== "assistant" && page !== "training"} className="assistant" id="assistant" aria-labelledby="assistant-title">
-        <div className="section-heading assistant-heading">
-          <div>
-            <p>Personal trainer &amp; data assistant</p>
-            <h2 id="assistant-title">{page === "training" ? "Talk to your trainer" : "Ask your Garmin data"}</h2>
-          </div>
-          <div className={`assistant-provider ${activeAiStatus?.available ? "assistant-provider--ready" : "assistant-provider--attention"}`}>
-            <strong>{activeAiProvider === "chatgpt" ? "ChatGPT account" : activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
-            <span>{activeAiStatus?.available ? "Ready" : "Setup needed"}</span>
-          </div>
-        </div>
-        <p className="assistant-intro">{page === 'training' ? 'Describe what you want to improve, your available time, upcoming events or how a session felt. Your trainer uses the saved plan and asks only for missing details. Review and save proposed changes here.' : 'Explore history, compare rides and assess recorded training. Calculations use stored data; review proposed changes before saving.'}</p>
-        <p className="assistant-privacy">
-          {activeAiProvider === "chatgpt"
-            ? "ChatGPT account mode sends your question, recent chat context and relevant tool results to OpenAI using your authorized ChatGPT plan. Plan limits are shared; it never falls back to paid API billing."
-            : activeAiProvider === "openai"
-            ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
-            : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
-          {" "}Chat messages are kept in this app session. Graph and ride selections are retained in this browser tab, including after a refresh.
-        </p>
-
-        <AssistantPlots plots={(chatMessages.find(message => message.id === plotMessageId) ?? chatMessages.filter(message => message.evidence.some(e => e.plots?.length)).at(-1))?.evidence.flatMap(evidence => evidence.plots ?? []) ?? []} profile={settingsDraft?.profile} />
-        {proposalError && <p role="alert">{proposalError}</p>}
-        {maintenanceActionError && <p role="alert">{maintenanceActionError}</p>}
-        <div className="chat-shell">
-          {chatMessages.length === 0 ? (
-            <div className="chat-empty">
-              <strong>{page === 'training' ? 'Your personalized training plan starts here' : 'Start a conversation'}</strong>
-              {page==='training'?<div className="chat-suggestions"><button type="button" onClick={()=>void sendChatMessage('I have 60 minutes today. What should I do according to my plan and recovery?')}>I have 60 minutes today</button><button type="button" onClick={()=>void sendChatMessage('Help me build a cycling and strength plan. Ask only for essential missing preferences, calibration and upcoming events.')}>Build my training plan</button><button type="button" onClick={()=>void sendChatMessage('What are the next seven days in my active plan, and why?')}>Review my week</button><button type="button" onClick={()=>void sendChatMessage('Help me add an upcoming event. Ask its name, activity, distance, ascent, date and race status.')}>Add an upcoming event</button></div>:              <div className="chat-suggestions">
-                <button type="button" onClick={() => void sendChatMessage("Plot my weight over the last year.")}>Weight over the last year</button>
-                <button type="button" onClick={() => void sendChatMessage("Plot power versus speed across all my cycling rides.")}>Power vs speed</button>
-                <button type="button" onClick={() => void sendChatMessage("Plot resting heart rate versus cycling VO2 max on matching dates.")}>Resting HR vs VO₂ max</button>
-                <button type="button" onClick={() => void sendChatMessage("Summarize my steps and sleep over the last seven days.")}>Last seven days</button>
-                <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
-                <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride using GPS coordinates and explain the matching criteria.")}>Similar rides (GPS)</button>
-                <button type="button" onClick={() => void sendChatMessage("Find earlier rides on the same GPS course as my latest ride and show how my performance changed.")}>Same course</button>
-                <button type="button" onClick={() => void sendChatMessage("Was my latest ride effective? In what way?")}>Ride effectiveness</button>
-                <button type="button" onClick={() => void sendChatMessage("When did I last replace the rear tire on my road bike?")}>Maintenance history</button>
-                <button type="button" onClick={() => void sendChatMessage("Set my goal to improve cycling endurance.")}>Set a goal</button>
-                <button type="button" onClick={() => void sendChatMessage("What is my training readiness today?")}>Training readiness</button>
-                <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
-              </div>}
-            </div>
-          ) : (
-            <div className="chat-messages" aria-live="polite">
-              {chatMessages.map((message) => (
-                <article id={`chat-message-${message.id}`} className={`chat-message chat-message--${message.role}`} key={message.id}>
-                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
-                  <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
-                  {message.evidence.find(e=>e.coaching)?.coaching?.status === 'ready' && <button type="button" onClick={()=>{window.location.hash='training';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)?.coaching})));}}>Review coaching proposal in Training</button>}
-                  {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
-                  {message.evidence.length > 0 && (
-                    <div className="chat-evidence">
-                      {message.evidence.map((evidence, index) => (
-                        <div key={`${message.id}-${evidence.tool}-${index}`}>
-                          <strong>{evidence.maintenance ? "Maintenance history" : evidence.tool === "propose_settings_change" ? "Settings change" : evidence.tool === "assess_ride" ? "Ride assessment" : evidence.tool === "running_volume_trend" ? "Weekly running volume" : evidence.tool.replaceAll("_", " ")}</strong>
-                          {evidence.period && <span>{formatLongDate(evidence.period.start)} – {formatLongDate(evidence.period.end)}</span>}
-                          {evidence.period_a && evidence.period_b && (
-                            <span>
-                              {formatLongDate(evidence.period_a.start)}–{formatLongDate(evidence.period_a.end)} vs. {formatLongDate(evidence.period_b.start)}–{formatLongDate(evidence.period_b.end)}
-                            </span>
-                          )}
-                          {typeof evidence.record_count === "number" && <small>{evidence.record_count.toLocaleString()} metric records</small>}
-                          {evidence.maintenance && <div className="maintenance-chat-evidence">
-                            {evidence.maintenance.events?.slice(0, 6).map((event) => <a key={event.id} href={`/api/maintenance/events/${encodeURIComponent(event.id)}`} target="_blank" rel="noreferrer">
-                              {event.event_date} · {event.equipment_label} · {event.action}
-                            </a>)}
-                            {evidence.maintenance.saved && <strong>Saved locally · revision history retained</strong>}
-                            {evidence.maintenance.undo_available && <button type="button" onClick={() => void undoChatMaintenance(evidence.maintenance!)}>Undo maintenance action</button>}
-                            {evidence.maintenance.events?.length ? <a href="#maintenance">Edit in Maintenance history</a> : null}
-                            {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
-                            {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
-                          </div>}
-                          {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}{evidence.training_event&&<TrainingEventProposal proposal={evidence.training_event}/>}
-                          {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
-                          {evidence.proposal && (
-                            <div className="settings-proposal">
-                              <strong>{evidence.proposal.status === "saved" ? "Saved locally" : "Review proposed change"}</strong>
-                              <table>
-                                <thead><tr><th>Field</th><th>Current</th><th>Proposed</th></tr></thead>
-                                <tbody>{proposalRows(evidence.proposal).map((row, index) => (
-                                  <tr key={index}><td>{row.label}</td><td>{row.before}</td><td>{row.after}</td></tr>
-                                ))}</tbody>
-                              </table>
-                              <button type="button" disabled={savingProposal !== null || evidence.proposal.status === "saved"}
-                                onClick={() => void saveChatProposal(evidence.proposal!)}>
-                                {savingProposal === evidence.proposal.id ? "Saving…" : evidence.proposal.status === "saved" ? "Saved" : "Save change"}
-                              </button>
-                              <a href="#profile">Edit in Profile</a>
-                              <small>To revise this proposal, ask for a correction in chat. Changes use the same profile and goals as Settings.</small>
-                            </div>
-                          )}
-                          {typeof evidence.total_matches === "number" && (
-                            <small>
-                              {evidence.total_matches.toLocaleString()} matching {evidence.tool === "find_same_course_rides" ? "course attempts" : evidence.tool === "find_similar_rides" ? "rides" : "activities"}
-                              {typeof evidence.candidate_pool_count === "number" ? ` from ${evidence.candidate_pool_count.toLocaleString()} candidates` : ""}
-                              {evidence.truncated ? ` · ${evidence.returned_count} shown` : ""}
-                            </small>
-                          )}
-                          {(evidence.freshness?.latest_recorded_at || evidence.freshness?.latest_started_at) && (
-                            <small>Fresh through {formatLongDate(evidence.freshness.latest_recorded_at ?? evidence.freshness.latest_started_at ?? "")}</small>
-                          )}
-                          {evidence.records && evidence.records.length > 0 && (
-                            <div className="evidence-links">
-                              {evidence.reference_record && (
-                                <span>
-                                  Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
-                                </span>
-                              )}
-                              {evidence.records.slice(0, 6).map((record) => (
-                                <span key={record.id}>
-                                  {record.name ?? record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
-                                  {typeof record.similarity_score === "number" ? ` · ${record.similarity_score.toFixed(0)}% similarity` : ""}
-                                  {typeof record.route_overlap_percent === "number" ? ` · ${record.route_overlap_percent.toFixed(0)}% route overlap` : ""}
-                                  {record.direction ? ` · ${record.direction}` : ""}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {evidence.reference_record && (!evidence.records || evidence.records.length === 0) && (
-                            <div className="evidence-links">
-                              <span>
-                                Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
-                              </span>
-                            </div>
-                          )}
-                          {evidence.criteria && evidence.criteria.length > 0 && (
-                            <div className="evidence-criteria">
-                              {evidence.criteria.map((criterion) => (
-                                <small key={criterion.field}>{formatSimilarityCriterion(criterion, preferredDistanceUnit)}</small>
-                              ))}
-                            </div>
-                          )}
-                          {evidence.unavailable_criteria && evidence.unavailable_criteria.length > 0 && (
-                            <small>Not available for matching: {evidence.unavailable_criteria.join(", ")}</small>
-                          )}
-                          {evidence.course_progress && (
-                            <div className="course-progress">
-                              <strong>
-                                {evidence.course_progress.attempt_count} matched attempts · {formatLongDate(evidence.course_progress.earliest.local_date)} to {formatLongDate(evidence.course_progress.latest.local_date)}
-                              </strong>
-                              {evidence.course_progress.changes_latest_minus_earliest.map((change) => (
-                                <small key={change.metric}>
-                                  {change.metric}: {formatCourseMetric(change.earliest, change.unit)} → {formatCourseMetric(change.latest, change.unit)}
-                                  {change.percent === null ? "" : ` · ${change.percent >= 0 ? "+" : ""}${change.percent.toFixed(1)}%`}
-                                </small>
-                              ))}
-                            </div>
-                          )}
-                          {evidence.privacy && <small>{evidence.privacy}</small>}
-                          {evidence.missing_metric_types && evidence.missing_metric_types.length > 0 && (
-                            <small>Not recorded: {evidence.missing_metric_types.join(", ")}</small>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </article>
-              ))}
-            </div>
-          )}
-
-          <form
-            className="chat-composer"
-            onSubmit={(event) => {
-              event.preventDefault();
-              void sendChatMessage();
-            }}
-          >
-            <label htmlFor="chat-question">{page==='training'?'Tell your trainer what you want to work on':'Question about your stored data'}</label>
-            <textarea
-              id="chat-question"
-              maxLength={4000}
-              placeholder={page==='training'?'For example: Help me build an endurance and strength plan':'For example: How has my running volume changed over the last eight weeks?'}
-              value={chatInput}
-              onChange={(event) => setChatInput(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
-                event.preventDefault();
-                if (!event.repeat && chatInput.trim() && connection.kind === "ready" && chatStatus.kind !== "streaming") {
-                  event.currentTarget.form?.requestSubmit();
-                }
-              }}
-              aria-describedby="chat-keyboard-hint"
-              disabled={chatStatus.kind === "streaming"}
-            />
-            <small id="chat-keyboard-hint">{page==='training'?'Enter to send':'Enter to ask'} · Shift+Enter for a new line</small>
-            <div className="chat-actions">
-              <span>
-                {chatStatus.kind === "streaming"
-                  ? chatStatus.slow
-                    ? "Still preparing your answer. You can stop and retry if needed."
-                    : `Using ${chatStatus.model ?? "the selected model"}…`
-                  : chatStatus.kind === "error"
-                    ? chatStatus.message
-                    : "Missing measurements are never filled with guesses."}
-              </span>
-              {chatStatus.kind === "streaming" ? (
-                <button className="secondary-action" type="button" onClick={stopChatResponse}>Stop</button>
-              ) : (
-                <button type="submit" disabled={!chatInput.trim() || connection.kind !== "ready"}>{page==='training'?'Send':'Ask'}</button>
-              )}
-            </div>
-          </form>
-        </div>
-      </section>
 
       <RetainedPage active={page === "training"}><TrainingPanel timezone={browserTimeZone} /></RetainedPage>
       <RetainedPage active={page === "nutrition"}><NutritionPanel timezone={browserTimeZone} /></RetainedPage>

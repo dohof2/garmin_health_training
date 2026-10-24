@@ -139,24 +139,8 @@ def _fill(c,program,state,today,now):
 def _reconcile_events(c,program,state,today,now):
     from .training_coach import _preview
     from .training_prescriptions import endurance
-    notes=[];changes=[]
-    linked={r[0] for r in c.execute('SELECT activity_id FROM training_feedback WHERE activity_id IS NOT NULL')}
-    for w in _program_workouts(c,program):
-        planned_start=datetime.fromisoformat(w['scheduled_for'])
-        if w['completion_status']!='planned' or planned_start>=now:continue
-        d=json.loads(w['definition_json']);candidates=[]
-        if d.get('time_unspecified'):continue
-        for a in c.execute("SELECT id,activity_type,started_at,duration_seconds FROM activities WHERE deleted_at IS NULL AND source_name!='synthetic_fixture' AND started_at>=?",((planned_start-timedelta(days=1)).date().isoformat(),)):
-            if a['id'] in linked or a['duration_seconds'] is None:continue
-            started=datetime.fromisoformat(a['started_at'].replace('Z','+00:00'))
-            if started>=now or abs((started-planned_start).total_seconds())>3600:continue
-            sport='cycling' if any(k in a['activity_type'].lower() for k in ('cycl','bik')) else 'running' if 'run' in a['activity_type'].lower() else 'strength' if 'strength' in a['activity_type'].lower() else None
-            if sport==w['sport'] and abs(a['duration_seconds']/60-d['duration_minutes'])<=max(5,d['duration_minutes']*.15):candidates.append(a['id'])
-        if len(candidates)==1:
-            c.execute("UPDATE planned_workouts SET completion_status='completed',revision=revision+1 WHERE id=?",(w['id'],))
-            c.execute('INSERT INTO training_feedback(workout_id,pain_or_illness,activity_id,updated_at) VALUES(?,0,?,?) ON CONFLICT(workout_id) DO UPDATE SET activity_id=excluded.activity_id,updated_at=excluded.updated_at',(w['id'],candidates[0],now.isoformat()));_revision(c,_snapshot(c,w['id']));linked.add(candidates[0])
-            changes.append({'workout_id':w['id'],'title':w['title'],'action':'Matched completed activity','reason':'A unique same-sport recording matches the planned time and duration.'})
-        elif len(candidates)>1:notes.append('Several recordings match '+w['title']+'; confirm its activity link before completion is recorded.')
+    from .training_completion import reconcile
+    changes,notes=reconcile(c,_program_workouts(c,program),state['timezone'],now)
     events=state['brief']['fixed_events'];ids={e['id'] for e in events if e.get('id')}
     rows=_program_workouts(c,program)
     for w in rows:
@@ -184,13 +168,13 @@ def _reconcile_events(c,program,state,today,now):
                 existing=w;continue
             if w['completion_status']!='planned' or (begin.astimezone(ZoneInfo(state['timezone'])).date()<today if d.get('time_unspecified') else begin<now):continue
             overlap=not (fixed['definition'].get('time_unspecified') or d.get('time_unspecified')) and scheduled<begin+timedelta(minutes=d['duration_minutes']) and begin<ending
-            if overlap and (d.get('fixed_commitment') or w['publish_status']!='local'):
+            if overlap and (d.get('fixed_commitment') or d.get('user_adjusted') or w['publish_status']!='local'):
                 notes.append('Event '+e['title']+' conflicts with another fixed/published session; choose a time or event priority.');blocked=True;continue
             if overlap:
                 c.execute("UPDATE planned_workouts SET completion_status='cancelled',revision=revision+1 WHERE id=?",(w['id'],));_revision(c,_snapshot(c,w['id']))
                 changes.append({'workout_id':w['id'],'title':w['title'],'action':'Replaced by upcoming event','reason':e['title']})
             elif demanding and abs((day-event_day).days)<=protected and (d['duration_minutes']>=60 or d.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic')):
-                if d.get('fixed_commitment') or w['publish_status']!='local':notes.append('Review fixed session '+w['title']+' near '+e['title']);continue
+                if d.get('fixed_commitment') or d.get('user_adjusted') or w['publish_status']!='local':notes.append('Review protected session '+w['title']+' near '+e['title']);continue
                 if w['sport']=='strength':
                     c.execute("UPDATE planned_workouts SET completion_status='cancelled',revision=revision+1 WHERE id=?",(w['id'],));_revision(c,_snapshot(c,w['id']))
                     action='Rest around event'
@@ -213,7 +197,7 @@ def _reconcile_events(c,program,state,today,now):
     quality_assigned=any(json.loads(w['definition_json']).get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or json.loads(w['definition_json']).get('fixed_commitment') and 'hard' in json.loads(w['definition_json']).get('effort_target',{}).get('description','') for w in _program_workouts(c,program) if w['completion_status']=='planned')
     for w in _program_workouts(c,program):
         d=json.loads(w['definition_json'])
-        if w['completion_status']!='planned' or w['publish_status']!='local' or d.get('fixed_commitment') or datetime.fromisoformat(w['scheduled_for'])<now:continue
+        if w['completion_status']!='planned' or w['publish_status']!='local' or d.get('fixed_commitment') or d.get('user_adjusted') or datetime.fromisoformat(w['scheduled_for'])<now:continue
         if w['sport']=='cycling' and d.get('workout_kind') and (d.get('program_ftp')!=state['brief'].get('ftp_watts') or d.get('program_goal')!=state['brief'].get('goal') or d.get('calibration')!=state['brief'].get('calibration') or d.get('workout_location')!=state['brief'].get('workout_location','outdoor')):
             kind=d['workout_kind'];minutes=d['duration_minutes']
             if d.get('program_goal')!=state['brief'].get('goal'):
@@ -232,7 +216,7 @@ def _reconcile_events(c,program,state,today,now):
         for w in sorted(selected,key=lambda w:json.loads(w['definition_json'])['duration_minutes'],reverse=True):
             if excess<=0:break
             d=json.loads(w['definition_json'])
-            if w['completion_status']!='planned' or d.get('fixed_commitment') or w['publish_status']!='local' or datetime.fromisoformat(w['scheduled_for'])<now:continue
+            if w['completion_status']!='planned' or d.get('fixed_commitment') or d.get('user_adjusted') or w['publish_status']!='local' or datetime.fromisoformat(w['scheduled_for'])<now:continue
             old=d['duration_minutes'];new=old-excess;minimum=20 if sport!='running' else 15
             if new<minimum or sport=='strength':
                 c.execute("UPDATE planned_workouts SET completion_status='cancelled',revision=revision+1 WHERE id=?",(w['id'],));excess-=old
@@ -298,7 +282,7 @@ def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=()):
     return {row['id']:targets.get(row['id'],0) for row in candidates},long_id,assigned
 
 
-REVIEW_POLICY='training-review-v5-long-ride-allocation'
+REVIEW_POLICY='training-review-v7-multiweek-edits'
 
 def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
     timezone_info(timezone_name);now=now or datetime.now(timezone.utc)
@@ -406,7 +390,7 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
                 day=datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()
                 demanding=definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals' or definition.get('duration_minutes',0)>=90
                 action='Kept';why='Consistent with the active block and recent recorded tolerance.'
-                protected=definition.get('fixed_commitment') or w['publish_status']!='local' or w['garmin_workout_id']
+                protected=definition.get('fixed_commitment') or definition.get('user_adjusted') or w['publish_status']!='local' or w['garmin_workout_id']
                 minutes=definition['duration_minutes'];kind=definition.get('workout_kind')
                 if program['status']=='active' and pain:
                     definition['review_hold']={'date':today.isoformat(),'reason':'; '.join(reasons)};action='Review required';why='; '.join(reasons)
@@ -463,6 +447,9 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
                 if definition!=original:
                     c.execute('UPDATE planned_workouts SET title=?,definition_json=?,revision=revision+1 WHERE id=?',(definition['title'],encoded(definition),w['id']));_revision(c,_snapshot(c,w['id']))
                 report['changes'].append({'workout_id':w['id'],'title':definition['title'],'action':action,'reason':why})
+            from .training_completion import adapt_missed_stimulus
+            stimulus_changes,stimulus_warnings=adapt_missed_stimulus(c,_program_workouts(c,program['plan_id']),state,today,now,adaptation,answers) if program['status']=='active' else ([],[])
+            report['changes'].extend(stimulus_changes);report['warnings'].extend(stimulus_warnings)
             if readiness['score'] is None:report['warnings'].append('A complete current readiness score is unavailable; no readiness-based increase is made.')
             report['warnings'].append('Review thresholds are provisional app rules. Garmin training effects describe recent stimulus, not aerobic or anaerobic capacity tests.')
             c.execute('INSERT INTO training_program_reviews(plan_id,fingerprint,review_json) VALUES(?,?,?)',(program['plan_id'],fingerprint,encoded(report)))
@@ -479,8 +466,10 @@ def read_active(arguments,path=None):
         if root is None:return {'tool':'get_active_training_plan','program':None,'workouts':[]}
         rows=_program_workouts(c,p['plan_id'])
         last=c.execute('SELECT review_json FROM training_program_reviews WHERE plan_id=? ORDER BY id DESC LIMIT 1',(p['plan_id'],)).fetchone()
+        from .training_completion import benefit_coverage
+        state=json.loads(p['state_json']);coverage=benefit_coverage(c,rows,state['timezone'],datetime.now(timezone.utc).astimezone(ZoneInfo(state['timezone'])).date())
     from .training_prescriptions import cycling_mix
-    return {'tool':'get_active_training_plan','program':{**dict(p),'root_plan_id':p['plan_id'],'name':root['name'],'plan_revision':root['plan_revision'],'state':json.loads(p['state_json']),'cycling_mix':cycling_mix(json.loads(p['state_json'])['brief'])},'workouts':[{**w,'definition':json.loads(w['definition_json'])} for w in rows if w['completion_status']=='planned'],'latest_review':json.loads(last[0]) if last else None}
+    return {'tool':'get_active_training_plan','benefit_coverage':coverage,'completed_workouts':[{**w,'definition':json.loads(w['definition_json'])} for w in rows if w['completion_status']=='completed'][-30:],'program':{**dict(p),'root_plan_id':p['plan_id'],'name':root['name'],'plan_revision':root['plan_revision'],'state':json.loads(p['state_json']),'cycling_mix':cycling_mix(json.loads(p['state_json'])['brief'])},'workouts':[{**w,'definition':json.loads(w['definition_json'])} for w in rows if w['completion_status']=='planned'],'latest_review':json.loads(last[0]) if last else None}
 
 
 def set_status(status,path=None):
@@ -740,10 +729,13 @@ def active_view(path=None,timezone_name='UTC',now=None):
         last=c.execute('SELECT review_json FROM training_program_reviews WHERE plan_id=? ORDER BY id DESC LIMIT 1',(root['id'],)).fetchone()
     history=list_training(path);ids={row['id'] for row in history['plans'] if row['id']==root['id'] or row['context'].get('program_id')==root['id']}
     upcoming=[row for row in history['workouts'] if row['training_plan_id'] in ids and row['completion_status']=='planned' and today<=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(timezone_name)).date()<=today+timedelta(days=6)]
+    completed=[row for row in history['workouts'] if row['training_plan_id'] in ids and row['completion_status']=='completed' and (today-timedelta(days=6))<=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(timezone_name)).date()<=today]
+    from .training_completion import benefit_coverage
+    with connect(path) as c:coverage=benefit_coverage(c,_program_workouts(c,root['id']),timezone_name,today,now)
     key=str(root['plan_revision'])+':'+str(program['revision']);due=program['status']=='active' and not(gate and gate['local_date']==today.isoformat() and gate['timezone']==timezone_name and gate['input_revision']==key and gate['policy_version']==REVIEW_POLICY)
     metadata={'review_due':due,'last_reviewed_date':gate['local_date'] if gate else None,'reviewed_at':gate['reviewed_at'] if gate else None}
     from .training_prescriptions import cycling_mix
-    return {'program':{'cycling_mix':cycling_mix(state['brief']),'id':root['id'],'root_plan_id':root['id'],'plan_id':root['id'],'name':root['name'],'plan_revision':root['plan_revision'],'revision':program['revision'],'status':program['status'],**state},'workouts':upcoming,'review':json.loads(last[0]) if last else None,'review_due':due,'review_metadata':metadata,**metadata}
+    return {'program':{'cycling_mix':cycling_mix(state['brief']),'id':root['id'],'root_plan_id':root['id'],'plan_id':root['id'],'name':root['name'],'plan_revision':root['plan_revision'],'revision':program['revision'],'status':program['status'],**state},'completed_workouts':completed,'benefit_coverage':coverage,'workouts':upcoming,'review':json.loads(last[0]) if last else None,'review_due':due,'review_metadata':metadata,**metadata}
 
 
 def save_event(arguments,path=None,now=None):

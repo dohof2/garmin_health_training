@@ -64,6 +64,17 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
             if not isinstance(definition,dict):raise ValueError('Invalid standalone workout')
             day=arguments.get('scheduled_date') or today.isoformat();date.fromisoformat(day)
             snapshots.append({'workout_id':None,'revision':None,'definition':definition,'date':day,'completion_status':'planned','identity':'standalone:'+digest({'definition':definition,'date':day})})
+    rolling=arguments.get('enable_rolling',False)
+    if type(rolling) is not bool:raise ValueError('Choose whether to enable rolling publication')
+    rolling_root=None
+    if rolling:
+        if not schedule or definition:raise ValueError('Rolling publication requires saved sessions scheduled on their plan dates')
+        from .rolling_publication import window
+        with connect(path) as c:
+            program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+            if not program:raise ValueError('Activate a program before enabling rolling publication')
+            if set(identifiers)!=set(window(c,program['plan_id'],tz,now,include_pending=False)):raise ValueError('Review the whole next-seven-day window before enabling automatic publication')
+            rolling_root=program['plan_id']
     candidates=[]
     for snapshot in snapshots:
         try:
@@ -78,6 +89,7 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
     with connect(path) as c:
         c.execute('BEGIN IMMEDIATE')
         c.execute('INSERT INTO garmin_publication_jobs(id,account_key,account_label,timezone,created_at,expires_at) VALUES(?,?,?,?,?,?)',(job_id,key,label,tz,now.isoformat(),(now+timedelta(minutes=30)).isoformat()))
+        if rolling:c.execute('UPDATE garmin_publication_jobs SET rolling_root=?,rolling_requested=1 WHERE id=?',(rolling_root,job_id))
         for snapshot,payload in candidates:
             link=c.execute('SELECT * FROM garmin_publication_links WHERE account_key=? AND identity_key=?',(key,snapshot['identity'])).fetchone()
             if snapshot.get('existing_remote_id') and not link:raise ValueError('This workout belongs to another Garmin account or has no verified app mapping. Reconnect the original account; it was not duplicated.')
@@ -93,7 +105,7 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
             c.execute('INSERT INTO garmin_publication_items(id,job_id,account_key,identity_key,workout_id,workout_revision,snapshot_json,payload_json,payload_hash,scheduled_date,action,remote_workout_id,remote_schedule_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (str(uuid.uuid4()),job_id,key,snapshot['identity'],snapshot['workout_id'],snapshot['revision'],encoded(snapshot),encoded(payload),payload_hash,target_date,action,link['remote_workout_id'] if link else None,link['remote_schedule_id'] if link else None))
         if not c.execute('SELECT 1 FROM garmin_publication_items WHERE job_id=?',(job_id,)).fetchone():raise ValueError('These sessions are not scheduled in Garmin; nothing needs sending or removing.')
-    return {**view(job_id,path),'blocked':blocked,'message':'Review exactly what will be sent. Garmin has not been changed.'}
+    return {**view(job_id,path),'blocked':blocked,'message':'Review exactly what will be sent. Garmin has not been changed.'+(' Approving also enables automatic maintenance of this program’s next seven days on app sync, including app-managed workout updates and calendar moves/removals. Unrelated Garmin workouts are preserved.' if rolling else '')}
 
 
 def approve(job_id,path=None,client_factory=load_client,now=None):
@@ -243,6 +255,11 @@ def run(job_id,path=None,client_factory=load_client):
         with connect(path) as c:
             pending=c.execute("SELECT COUNT(*) FROM garmin_publication_items WHERE job_id=? AND state!='verified'",(job_id,)).fetchone()[0]
             c.execute('UPDATE garmin_publication_jobs SET status=? WHERE id=?',('attention' if pending else 'verified',job_id))
+            if not pending and c.execute('SELECT rolling_requested FROM garmin_publication_jobs WHERE id=?',(job_id,)).fetchone()[0]:
+                program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active' AND plan_id=?",(job['rolling_root'],)).fetchone()
+                if program:
+                    c.execute("INSERT INTO garmin_rolling_publication(id,enabled,account_key,root_plan_id,timezone,last_job_id) VALUES(1,1,?,?,?,?) ON CONFLICT(id) DO UPDATE SET enabled=1,account_key=excluded.account_key,root_plan_id=excluded.root_plan_id,timezone=excluded.timezone,last_job_id=excluded.last_job_id,status='enabled',updated_at=CURRENT_TIMESTAMP",(job['account_key'],job['rolling_root'],job['timezone'],job_id))
+
 
 
 def retry(job_id,path=None,client_factory=load_client):
@@ -256,5 +273,6 @@ def retry(job_id,path=None,client_factory=load_client):
 def recover(path=None):
     """Startup never resumes external writes on its own."""
     with connect(path) as c:
+        c.execute('UPDATE garmin_rolling_publication SET running=0')
         c.execute("UPDATE garmin_publication_items SET state='unknown',error='App stopped during a remote operation. Reconcile before retrying.' WHERE state IN ('creating','updating','scheduling')")
         c.execute("UPDATE garmin_publication_jobs SET status='attention' WHERE status IN ('running','queued')")

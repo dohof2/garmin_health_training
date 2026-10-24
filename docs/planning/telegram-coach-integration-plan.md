@@ -198,3 +198,11 @@ B0 precedes meaningful data-access sign-off; B1 precedes B2/B3. Shared action va
 At implementation time the owner creates the bot through BotFather, stores its token through app setup and performs private pairing; never request the token in chat or put it in a document. The plan defaults to private single-owner access, English/Hebrew voice, text replies, local polling and no paid fallback. Select STT model/runtime after benchmarks. Decide background availability, optional spoken replies, retention changes and server hosting only when needed; these do not block the shared local-first architecture.
 
 Reference facts checked 23 October 2026: [Telegram Bot API](https://core.telegram.org/bots/api), [Telegram Bots FAQ](https://core.telegram.org/bots/faq). Recheck API/media limits and current library/runtime support when implementing.
+
+
+> **Planning comment — role awareness and handoff (24 October 2026; idea to review during frontend touchups):** A bot/agent could acknowledge when another role is better suited: “This is better handled by the Trainer because it changes your training plan. Shall I hand this over?” Offer a clear handoff button/link and carry the relevant question, activity/session reference and conversation context so the user does not need to repeat it. Explain the destination in everyday language. Avoid unnecessary redirects when the current role can answer, referral loops, and implying a transfer or plan change has happened before it actually has. Apply the same idea to Trainer, Assistant and Nutrition where relevant; it does not require separate Telegram accounts/bots. Decide whether to offer or automatically perform a clearly announced handoff when reviewing the frontend experience. This is a design comment, not implemented behavior.
+
+
+## Browser chat direction accepted — 24 October 2026
+
+The user selected one shared browser Chat with Trainer, Assistant and Nutrition routing. The [initial browser implementation](../qa/2026-10-24-roadmap-1-4/REPORT.md) has shared history, visible roles, manual correction and domain review controls. Align the future Telegram channel with that experience, rather than creating separate role bots or requiring the user to repeat context. This does not implement Telegram or complete B0’s full durable/mixed-media action contracts.

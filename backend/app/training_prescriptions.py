@@ -3,7 +3,7 @@ import math
 from datetime import date
 
 KINDS=('recovery','endurance','long_endurance','climbing_endurance','long_tempo','tempo','threshold','vo2','short_efforts','sprint','anaerobic')
-RATIOS={'recovery':(.35,.5),'endurance':(.55,.7),'long_endurance':(.55,.7),'climbing_endurance':(.65,.75),'long_tempo':(.76,.87),'tempo':(.76,.87),'threshold':(.9,.95),'vo2':(1.05,1.15),'short_efforts':(1.1,1.3)}
+RATIOS={'recovery':(.35,.5),'endurance':(.55,.7),'long_endurance':(.55,.7),'climbing_endurance':(.65,.75),'long_tempo':(.76,.87),'tempo':(.76,.87),'threshold':(.95,1.0),'vo2':(1.05,1.15),'short_efforts':(1.1,1.3)}
 RPE={'recovery':(1,2),'endurance':(2,3),'long_endurance':(2,3),'climbing_endurance':(3,4),'long_tempo':(5,6),'tempo':(5,6),'threshold':(6,7),'vo2':(7,8),'short_efforts':(7,8),'sprint':(9,10),'anaerobic':(9,9)}
 
 def validate_calibration(value):
@@ -61,20 +61,32 @@ def validate_workout(w):
  if abs(total-w['duration_minutes']*60)>.01:raise ValueError('Lap durations do not match the total workout duration')
  return w
 
-def endurance(kind,minutes,brief,sport='cycling',indoor=None,today=None):
+def endurance(kind,minutes,brief,sport='cycling',indoor=None,today=None,variant=None):
  if indoor is None:indoor=brief.get('workout_location','outdoor')=='indoor'
  if kind not in KINDS:raise ValueError('Unknown endurance prescription')
  if type(minutes) not in (int,float) or not math.isfinite(minutes) or not 10<=minutes<=720:raise ValueError('Workout duration must be 10–720 minutes')
+ from .cycling_variants import options
+ choices=options(kind);selected=next((v for v in choices if v['id']==variant),None) if variant else None
+ if variant and selected is None:raise ValueError('Unknown variant for this workout category')
  requested_kind=kind
  if kind in ('sprint','anaerobic') and sport!='cycling':raise ValueError('Sprint and anaerobic prescriptions currently support cycling only')
  if kind in ('sprint','anaerobic') and minutes<45:kind='endurance'
  total=int(round(minutes*60));warm=900 if kind in ('sprint','anaerobic') else min(600,total//5);cool=600 if kind in ('sprint','anaerobic') else min(300,total//8);steps=[]
  def lap(name,seconds,zone):
   if seconds<=0:return
-  t=target(zone,brief,sport,indoor,today);steps.append({'power_reference_fractions':{'lower':RATIOS[zone][0],'upper':RATIOS[zone][1]} if sport=='cycling' and zone in RATIOS else None,'name':name,'type':name.lower().replace(' ','_'),'duration_seconds':seconds,'termination':'time','repetitions':1,'target':t,'effort':text(t)+(' · '+t['description'] if zone in ('sprint','anaerobic') else '')})
+  t=target(zone,brief,sport,indoor,today)
+  fractions=RATIOS.get(zone)
+  if selected and zone=='endurance' and kind=='endurance' and sport=='cycling':
+   fractions=selected['ratios']
+   if t['type']=='power':t={**t,'lower':round(brief['ftp_watts']*fractions[0],2),'upper':round(brief['ftp_watts']*fractions[1],2)}
+   elif t['type']=='perceived_effort':t={**t,'lower':selected['rpe'][0],'upper':selected['rpe'][1]}
+  steps.append({'power_reference_fractions':{'lower':fractions[0],'upper':fractions[1]} if sport=='cycling' and fractions else None,'name':name,'type':name.lower().replace(' ','_'),'duration_seconds':seconds,'termination':'time','repetitions':1,'target':t,'effort':text(t)+(' · '+t['description'] if zone in ('sprint','anaerobic') else '')})
+ if sport=='cycling' and kind in ('endurance','long_endurance') and brief.get('continuous_endurance'):
+  warm=cool=0
  lap('Warm-up',warm,'recovery');remaining=total-warm-cool
  if kind in ('tempo','long_tempo','climbing_endurance','threshold','vo2','short_efforts','sprint','anaerobic'):
   reps,work,recover={'tempo':(2,480,240),'long_tempo':(2,600,300),'climbing_endurance':(3,480,240),'threshold':(2,360,240),'vo2':(3,180,180),'short_efforts':(4,15,180),'sprint':(4,8,240),'anaerobic':(4,30,240)}[kind]
+  if selected and selected.get('intervals'):reps,work,recover=selected['intervals']
   if remaining<reps*work+(reps-1)*recover:kind='endurance'
   else:
    for i in range(reps):
@@ -86,7 +98,7 @@ def endurance(kind,minutes,brief,sport='cycling',indoor=None,today=None):
  reference_date=validate_calibration(brief.get('calibration'))['ftp_confirmed_on'];reference_today=today or date.today()
  reference_status='undated' if not reference_date else 'future' if date.fromisoformat(reference_date)>reference_today else 'stale' if (reference_today-date.fromisoformat(reference_date)).days>90 else 'usable'
  reference_ftp={'watts':brief.get('ftp_watts'),'measurement_date':reference_date,'source':validate_calibration(brief.get('calibration'))['ftp_source'],'status':reference_status,'advisory_only':True} if sport=='cycling' and brief.get('ftp_watts') else None
- return validate_workout({'reference_ftp':reference_ftp,'version':'training-prescription-v2','template_id':'cycling_'+kind if sport=='cycling' else 'running_easy','workout_kind':kind,'sport':sport,'title':titles[kind] if sport=='cycling' else 'Easy conversational run','duration_minutes':total/60,'steps':steps,'effort_target':{'method':steps[0]['target']['type'],'description':'; '.join(f"{s['name']}: {s['effort']}" for s in steps)},'workout_location':'indoor' if indoor else 'outdoor','program_ftp':brief.get('ftp_watts'),'program_goal':brief.get('goal'),'calibration':validate_calibration(brief.get('calibration')),'rationale':['Targets use confirmed calibration when available; otherwise the explicit effort fallback applies.']+(['Dedicated high-intensity work uses effort and repeatability, not watts inferred from FTP. Use a controlled traffic-free setting or suitable trainer; stop the efforts if technique or power quality deteriorates.'] if kind in ('sprint','anaerobic') else [])+(['Insufficient time for the full warm-up, efforts and recovery; replaced with easy endurance rather than compressing sprint/anaerobic recovery.'] if requested_kind in ('sprint','anaerobic') and requested_kind!=kind else [])})
+ return validate_workout({'variant_id':selected['id'] if selected and kind==requested_kind else None,'variant_label':selected['label'] if selected and kind==requested_kind else None,'sources':[selected['source']] if selected else [],'reference_ftp':reference_ftp,'version':'training-prescription-v2','template_id':'cycling_'+kind if sport=='cycling' else 'running_easy','workout_kind':kind,'sport':sport,'title':titles[kind] if sport=='cycling' else 'Easy conversational run','duration_minutes':total/60,'steps':steps,'effort_target':{'method':steps[0]['target']['type'],'description':'; '.join(f"{s['name']}: {s['effort']}" for s in steps)},'workout_location':'indoor' if indoor else 'outdoor','program_ftp':brief.get('ftp_watts'),'program_goal':brief.get('goal'),'calibration':validate_calibration(brief.get('calibration')),'rationale':['Targets use confirmed calibration when available; otherwise the explicit effort fallback applies.']+(['Dedicated high-intensity work uses effort and repeatability, not watts inferred from FTP. Use a controlled traffic-free setting or suitable trainer; stop the efforts if technique or power quality deteriorates.'] if kind in ('sprint','anaerobic') else [])+(['Insufficient time for the full warm-up, efforts and recovery; replaced with easy endurance rather than compressing sprint/anaerobic recovery.'] if requested_kind in ('sprint','anaerobic') and requested_kind!=kind else [])})
 
 
 def strength(base,brief,answers,week_index=0,tolerated=False):

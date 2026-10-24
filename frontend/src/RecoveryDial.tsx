@@ -2,7 +2,7 @@ import {useEffect,useState} from 'react';
 import StatusDial, {type DialBand} from './StatusDial';
 
 type Recovery={remaining_hours:number;session_remaining_hours:number;load_settling_hours:number|null;coverage_complete:boolean;source:string;ratio:number|null;ratio_threshold:number;stable_baseline:boolean;range_hours:{low:number;high:number}};
-const bands:DialBand[]=[{label:'0–12 h',color:'#39a582',end:12/72},{label:'12–24 h',color:'#468bd5',end:24/72},{label:'24–48 h',color:'#e79938',end:48/72},{label:'48+ h',color:'#dc545c',end:1}];
+const bands:DialBand[]=[{label:'48+ h',color:'#dc545c',end:24/72},{label:'24–48 h',color:'#e79938',end:48/72},{label:'12–24 h',color:'#468bd5',end:60/72},{label:'0–12 h',color:'#39a582',end:1}];
 
 export default function RecoveryDial({timezone,refreshToken}:{timezone:string;refreshToken:string}) {
   const [tick,setTick]=useState(0),[recovery,setRecovery]=useState<Recovery|null>(null),[error,setError]=useState(''),[outdated,setOutdated]=useState(false);
@@ -19,7 +19,7 @@ export default function RecoveryDial({timezone,refreshToken}:{timezone:string;re
   if(outdated)return <section className="graph-card health-recovery-card"><h3>Recovery time</h3><p>Quit and reopen the app to enable the new recovery estimate.</p></section>;
   return <section className="graph-card health-recovery-card" aria-label="Recovery time estimate"><div className="graph-heading"><div><h3>Recovery time</h3><p>App estimate · updates every minute</p></div></div>
     <StatusDial value={recovery?`${complete?'':'≥'}${Math.ceil(recovery.remaining_hours)}`:'—'} unit="hours remaining" bands={bands}
-      position={complete&&recovery?Math.min(1,recovery.remaining_hours/72):null}
+      position={complete&&recovery?1-Math.max(0,Math.min(1,recovery.remaining_hours/72)):null}
       interpretation={complete?'Before another hard session':recovery?'Incomplete activity evidence: shown demand is a lower bound.':'Waiting for recovery evidence.'}/>
     {error&&<p role="alert">{error}</p>}
     {recovery&&<details className="graph-notes"><summary>What contributes?</summary><p>{recovery.source}. Counts down with actual elapsed time; completed sleep can adjust the estimate.</p>

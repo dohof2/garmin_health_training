@@ -101,6 +101,7 @@ app = FastAPI(
 
 
 class GarminPublicationPreview(BaseModel):
+    enable_rolling: bool = False
     model_config={'extra':'forbid'}
     workout_ids: list[str] = Field(default_factory=list,max_length=21)
     definition: dict[str,object] | None = None
@@ -109,10 +110,22 @@ class GarminPublicationPreview(BaseModel):
     timezone: str = 'UTC'
 
 
+@app.get('/api/training/publication/rolling')
+def rolling_publication_status():
+    from .rolling_publication import status
+    return status()
+
+
+@app.post('/api/training/publication/rolling/disable')
+def disable_rolling_publication():
+    from .rolling_publication import disable
+    return disable()
+
+
 @app.get('/api/training/publication/capabilities')
 def garmin_publication_capabilities():
     state=connection_state()
-    return {'provider':'garminconnect (unofficial)','connection_status':state['status'],'has_saved_session':state['has_saved_session'],'sports':['cycling','running'],'targets':['prescribed_watts','prescribed_bpm','effort_in_notes'],'scheduling':True,'device_delivery':'unverified','unsupported':{'strength':'Exercise mappings need validation before strength publication.','hiking':'No verified Garmin workout mapping in this release.'}}
+    return {'provider':'garminconnect (unofficial)','connection_status':state['status'],'has_saved_session':state['has_saved_session'],'sports':['cycling','running','strength'],'strength_mapping':'Explicit supported exercises only; live Garmin/device validation pending','targets':['prescribed_watts','prescribed_bpm','effort_in_notes'],'scheduling':True,'device_delivery':'unverified','unsupported':{'hiking':'No verified Garmin workout mapping in this release.'}}
 
 
 @app.post('/api/training/publication/preview')
@@ -497,6 +510,9 @@ class AIChatMessage(BaseModel):
 
 
 class AIChatRequest(BaseModel):
+    chat_role: Literal['auto','trainer','assistant','nutrition'] = 'auto'
+    previous_role: Literal['trainer','assistant','nutrition'] | None = None
+    nutrition_context: dict[str, object] | None = None
     coaching_context: dict[str, object] | None = None
     plot_context: list[dict[str, object]] | None = Field(default=None, max_length=4)
     ride_context: str | None = Field(default=None, max_length=160)
@@ -627,6 +643,7 @@ def ai_chat(payload: AIChatRequest) -> StreamingResponse:
             plot_context=payload.plot_context,
             ride_context=payload.ride_context,
             coaching_context=payload.coaching_context,
+            chat_role=payload.chat_role,previous_role=payload.previous_role,nutrition_context=payload.nutrition_context,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
@@ -1016,6 +1033,13 @@ def remove_activity(activity_id: str, request: ActivityRemovalRequest):
         raise HTTPException(404,str(error)) from error
     except ValueError as error:
         raise HTTPException(400,str(error)) from error
+
+
+@app.get("/api/activities/{activity_id}/plots")
+def recorded_activity_plots(activity_id: str):
+    from .activity_sections import plots
+    try:return plots(activity_id)
+    except ValueError as error:raise HTTPException(status_code=400,detail=str(error)) from error
 
 
 @app.get("/api/activities/{activity_id}/full-stats")

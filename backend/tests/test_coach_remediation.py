@@ -29,7 +29,7 @@ class PrescriptionTests(unittest.TestCase):
  def test_numeric_ftp_laps_and_exact_total(self):
   w=endurance('threshold',60,{**DEFAULT,'ftp_watts':250,'calibration':CAL},today=WEEK)
   work=[s for s in w['steps'] if s['name'].startswith('Work')]
-  self.assertEqual(len(work),2);self.assertEqual(work[0]['target']['lower'],225);self.assertEqual(work[0]['target']['upper'],237.5)
+  self.assertEqual(len(work),2);self.assertEqual(work[0]['target']['lower'],237.5);self.assertEqual(work[0]['target']['upper'],250)
   self.assertEqual(sum(s['duration_seconds'] for s in w['steps']),3600)
  def test_indoor_access_is_not_outdoor_access(self):
   b={**DEFAULT,'ftp_watts':250,'calibration':{**CAL,'power_access':'indoor'}}

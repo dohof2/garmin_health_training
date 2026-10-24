@@ -1724,6 +1724,18 @@ from .active_training import propose_event
 TOOL_HANDLERS['propose_training_event']=propose_event
 TOOL_DEFINITIONS.append({'name':'propose_training_event','description':'Propose an active-program event addition, update or removal from the user message. Read only; a visible confirmation saves it with revision protection.', 'input_schema':{'type':'object','properties':{'message':{'type':'string'},'timezone':{'type':'string'},'operation':{'type':'string','enum':['upsert','remove']},'event_id':{'type':'string'},'event':{'type':'object'}},'additionalProperties':False}})
 
+from .activity_sections import climbs
+TOOL_HANDLERS['analyze_activity_climbs']=climbs
+TOOL_DEFINITIONS.append({'name':'analyze_activity_climbs','description':'Find sustained uphill sections in the referenced activity using recorded elevation, then calculate elapsed/moving time and time-weighted power for those same boundaries. Retain the existing activity ID on follow-ups. Multiple comparable climbs require clarification; do not substitute lap averages. Read only.', 'input_schema':{'type':'object','properties':{'activity_id':{'type':'string'}},'required':['activity_id'],'additionalProperties':False}})
+
+from .app_data_queries import query as query_app_data
+TOOL_HANDLERS['query_app_data']=query_app_data
+TOOL_DEFINITIONS.append({'name':'query_app_data','description':'Read user-facing app data beyond the common health metrics: nutrition meals/targets/totals (up to 31 days), saved profile/goals, synchronization status, every retained normalized health metric, or imported Garmin archive categories. Omit metric_type/category to discover available fields. No credentials or account metadata. Other datasets use dedicated activity/FIT/training/maintenance/chart tools. Bounded results disclose truncation.', 'input_schema':{'type':'object','properties':{'dataset':{'type':'string','enum':['nutrition','profile','sync','archive','health']},'start_date':{'type':'string','format':'date'},'end_date':{'type':'string','format':'date'},'timezone':{'type':'string'},'metric_type':{'type':'string'},'category':{'type':'string'}},'required':['dataset','start_date','end_date'],'additionalProperties':False}})
+
+from .cycling_variants import preview as cycling_variant_previews
+TOOL_HANDLERS['get_cycling_workout_variants']=cycling_variant_previews
+TOOL_DEFINITIONS.append({'name':'get_cycling_workout_variants','description':'Preview source-backed alternatives for base, threshold, sprint or anaerobic cycling, retaining distinct structures, targets and complete recoveries. Read-only library previews; use active plan and recovery/tolerance tools before recommending one. Does not save or publish.', 'input_schema':{'type':'object','properties':{'category':{'type':'string','enum':['base','threshold','sprint','anaerobic']},'minutes':{'type':'integer','minimum':45,'maximum':360},'timezone':{'type':'string'}},'required':['category','minutes'],'additionalProperties':False}})
+
 TOOL_DEFINITIONS_BY_NAME = {
     str(definition["name"]): definition for definition in TOOL_DEFINITIONS
 }

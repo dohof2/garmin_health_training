@@ -972,6 +972,9 @@ def run_sync(
                         """,
                         (_now(), data_type),
                     )
+        # New evidence invalidates the once-per-day training review, including late uploads.
+        with connect(path) as connection:
+            connection.execute('DELETE FROM training_review_gate')
         status = "failed" if failures else "completed"
         with connect(path) as connection:
             connection.execute(
@@ -987,7 +990,9 @@ def run_sync(
                     job_id,
                 ),
             )
-        return {"job_id": job_id, "status": status, "trigger": trigger, "totals": totals, "failures": failures}
+        from .rolling_publication import sync as sync_rolling_publication
+        publication=sync_rolling_publication(path) if not failures else {'status':'waiting_for_complete_sync','message':'Automatic workout publication waits for complete sync evidence.'}
+        return {"job_id": job_id, "status": status, "trigger": trigger, "totals": totals, "failures": failures,"rolling_publication":publication}
     except Exception as error:
         with connect(path) as connection:
             connection.execute(

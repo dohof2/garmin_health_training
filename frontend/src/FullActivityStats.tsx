@@ -1,3 +1,4 @@
+import ActivityPlots from './ActivityPlots';
 import {useState, type ReactNode} from 'react';
 
 type Stats = {records: Record<string,unknown>[]; statistics: Record<string,{unit?:string|null}>; total_records:number; original_available:boolean};
@@ -57,7 +58,7 @@ export default function FullActivityStats({activity,timezone,footer}:{activity:{
   }catch(e){setError(e instanceof Error?e.message:'Could not load statistics');}finally{setLoading(false);}}
   return <div className="full-activity-stats">
     <button type="button" aria-expanded={open} onClick={()=>open?setOpen(false):void show()}>{open?'Close details':'More details'}</button>
-    {open&&<section aria-label={`Training statistics for ${activity.name??'activity'}`}>
+    <ActivityPlots activityId={activity.id}/>{open&&<section aria-label={`Training statistics for ${activity.name??'activity'}`}>
       <h3>{activity.name??'Activity'} · Training summary</h3>
       {loading&&<p role="status">Loading ride statistics…</p>}
       {error&&<p role="alert">{error} <button type="button" onClick={()=>void show()}>Retry</button></p>}

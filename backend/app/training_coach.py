@@ -12,12 +12,13 @@ from .time_utils import timezone_info
 
 GOALS = {'ftp':'Increase FTP', 'endurance':'Build endurance', 'race':'Prepare for a race', 'general':'Stay in shape'}
 VERSION = 'training-coach-v1'
-DEFAULT = {'goal':None,'goal_sport':'cycling','horizon_weeks':12,'target_date':None,'event_name':'','ftp_watts':None,'fixed_events':[],'calibration':{},'strength_role':None,'strength_purpose':None,'strength_capacity':{},'program_start':None,'workout_location':'outdoor','duration_confirmed':False,'ftp_selection':'manual','ftp_authorization':None,'sport_days':{},'weekly_time_ranges':{}}
+DEFAULT = {'continuous_endurance':False,'goal':None,'goal_sport':'cycling','horizon_weeks':12,'target_date':None,'event_name':'','ftp_watts':None,'fixed_events':[],'calibration':{},'strength_role':None,'strength_purpose':None,'strength_capacity':{},'program_start':None,'workout_location':'outdoor','duration_confirmed':False,'ftp_selection':'manual','ftp_authorization':None,'sport_days':{},'weekly_time_ranges':{}}
 
 
 def validate_brief(value):
     if not isinstance(value,dict) or set(value)-set(DEFAULT): raise ValueError('Unsupported coaching brief fields')
     b={**DEFAULT,**value}
+    if type(b['continuous_endurance']) is not bool:raise ValueError('Continuous endurance must be yes or no')
     if b['goal'] is not None and (not isinstance(b['goal'],str) or b['goal'] not in GOALS): raise ValueError('Choose FTP, endurance, race or general fitness')
     if b['goal_sport'] not in ('cycling','running'): raise ValueError('Choose cycling or running for the endurance or race goal')
     if not isinstance(b['weekly_time_ranges'],dict) or set(b['weekly_time_ranges'])-{'cycling','running','strength'}:raise ValueError('Invalid weekly time ranges')
@@ -469,7 +470,10 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                         if requested_quality!=kind:warnings.append(f'{requested_quality.title()} deferred: dedicated advanced work needs the build phase, experienced cycling, two tolerated completed quality sessions and recovery clearance. Controlled short efforts are used instead.')
                         protected[(day+timedelta(days=1)).isoformat()]='Recovery after a quality cycling session.'
                     if reduced or protected_day:kind='recovery'
-                    definition=endurance(kind,minutes,b,sport,today=today)
+                    from .cycling_variants import select
+                    variant,variant_evidence=select(c,kind,today,tz,recovery_context['quality_allowed'] and not reduced)
+                    definition=endurance(kind,minutes,b,sport,today=today,variant=variant)
+                    definition['variant_selection']=variant_evidence
                     if slot['slot_id']==long_slot_id:definition['rationale'].append('Your longest available cycling day is prioritized for the long ride before allocating shorter rides; history and recovery still cap its duration.')
                     definition['rationale'].append(f'Building-block week {week_index+1}; sustained endurance for the selected event/direction.')
                     if any((e.get('elevation_gain_meters') or 0)>=1000 for e in b['fixed_events']):definition['rationale'].append('For the hilly event, use a sustained climbing route while keeping the prescribed intensity.')

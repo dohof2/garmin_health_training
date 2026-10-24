@@ -330,3 +330,29 @@ Status: recorded, not implemented by this UI pass.
 - Under each plot, offer overlays of the other main recorded metrics, e.g. speed + power + elevation. Distinguish series and units clearly; missing data must remain explicit.
 - Each plot can switch its horizontal axis between elapsed time and recorded distance; keep overlay samples aligned to the same activity position.
 - Preserve mouse selection zoom, reset, and the chosen overlays when switching the horizontal axis.
+
+
+### Frontend touchups checkpoint — Trainer versus Assistant (24 October 2026)
+Status: open QC/design discussion for later implementation. **At the start of the next frontend touchup or navigation/wording pass, remind the user about this issue and review the proposed distinction before changing it.**
+
+The user confused the Trainer and Assistant despite building the app. Treat this as a usability finding: the interface does not communicate their roles clearly enough. Renaming tabs alone may be insufficient.
+
+Working direction to discuss, not a finalized implementation decision:
+- Trainer: coaching, goals, readiness, session suggestions and training-plan changes.
+- Assistant: exploring app/Garmin data, analysing completed activities and making plots.
+- Share access to underlying health/activity/plan data while separating conversation histories, active activity/session references, and tool responsibilities. The same AI model can serve both.
+- Review names, navigation, introductory text, examples and action labels; consider whether two destinations or one clearly signposted conversation is easier to understand. Make transfers between roles explicit and preserve relevant context.
+- Advice and analysis should remain conversational; a plan change needs an explicit request. Avoid accidentally invoking suggestion or adjustment tools when the user asks a question.
+- Align the eventual Telegram router with the chosen experience, including a clear indication of which role is answering and a simple way to correct routing.
+
+Acceptance for later QC: a user can tell where to ask for tomorrow's workout, analyse a climb, change an endurance block, and inspect a Garmin metric without understanding the internal agent architecture. Confirm the experience with the user during frontend touchups.
+
+
+> **Planning comment — role awareness and handoff (24 October 2026; idea to review during frontend touchups):** A bot/agent could acknowledge when another role is better suited: “This is better handled by the Trainer because it changes your training plan. Shall I hand this over?” Offer a clear handoff button/link and carry the relevant question, activity/session reference and conversation context so the user does not need to repeat it. Explain the destination in everyday language. Avoid unnecessary redirects when the current role can answer, referral loops, and implying a transfer or plan change has happened before it actually has. Apply the same idea to Trainer, Assistant and Nutrition where relevant; it does not require separate Telegram accounts/bots. Decide whether to offer or automatically perform a clearly announced handoff when reviewing the frontend experience. This is a design comment, not implemented behavior.
+
+
+### Accepted chat direction and implementation start — 24 October 2026
+
+The user chose **one chat that routes between Trainer, Assistant and Nutrition**, superseding the earlier tentative separate-conversation direction. Keep one visible history, shared app data and activity/proposal references, indicate the answering role and allow manual correction. Training and Nutrition remain task/data pages with entry points into Chat and their existing review controls.
+
+The [first areas 1–4 implementation pass](../qa/2026-10-24-roadmap-1-4/REPORT.md) implements this initial UI/router, activity plots, completion/benefit follow-through, continuous-endurance review/save, strength mappings and opt-in rolling publication. This records an implementation start, not completion of all multiweek training, general block editing, live Garmin/device or conversational QC requirements. Telegram is still a later channel sharing the same conversation/action contracts.

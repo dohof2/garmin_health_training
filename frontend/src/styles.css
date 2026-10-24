@@ -1939,3 +1939,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .sortable-card > .section-heading { padding-left: 24px; }
 .card-drag-handle svg { display: block; }
+
+/* Keep independent overlay axes readable instead of shrinking or clipping labels. */
+.activity-trace-scroll { max-width: 100%; overflow-x: auto; margin-top: 12px; padding-bottom: 6px; }
+.activity-trace-scroll:focus-visible { outline: 2px solid #356799; outline-offset: 3px; }
+
+.overview-chat .chat-messages { height: min(60vh, 620px); max-height: none; overflow-anchor: none; scroll-behavior: auto; }
+/* Keep the newest answer's beginning in view, even while it is still short. */
+.overview-chat .chat-message--assistant:last-child { min-height: calc(min(60vh, 620px) - 44px); box-sizing: border-box; }
