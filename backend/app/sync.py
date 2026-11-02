@@ -733,6 +733,9 @@ def _commit_interval(
                     detail,
                     path,
                 )
+        if data_type == 'activities':
+            from .training_completion import reconcile_active
+            reconcile_active(connection,datetime.now(timezone.utc))
         day = interval_date.isoformat()
         if source_response is not None:
             connection.execute('''INSERT INTO garmin_sync_payloads(data_type, calendar_date, payload_json)
@@ -791,7 +794,7 @@ def _commit_interval(
             ),
         )
         connection.execute(
-            "UPDATE jobs SET progress_current = progress_current + 1 WHERE id = ?",
+            "UPDATE jobs SET progress_current = progress_current + 1, checkpoint_json=json_set(COALESCE(checkpoint_json,'{}'),'$.data_revision',COALESCE(json_extract(checkpoint_json,'$.data_revision'),0)+1) WHERE id = ?",
             (job_id,),
         )
     return counts
@@ -856,6 +859,10 @@ def run_sync(
     if data_types is not None:
         plan['data_types'] = [item for item in plan['data_types'] if item['data_type'] in data_types]
         plan['total_intervals'] = sum(item['days'] for item in plan['data_types'])
+    # Recovery feeds must not wait behind FIT detail and historical load reads.
+    priority={'sleep_metrics':0,'daily_metrics':1,'hrv_metrics':2,'activities':3}
+    plan['data_types'].sort(key=lambda item:priority.get(item['data_type'],4))
+    requested=[str(item['data_type']) for item in plan['data_types'] if item['start_date']]
     job_id = _job_start(trigger, int(plan["total_intervals"]), path)
     completed = 0
     totals = {
@@ -866,6 +873,7 @@ def run_sync(
         "detail_samples": 0,
     }
     failures: list[dict[str, str]] = []
+    load_refresh = {'status':'not_requested','fetched_dates':[],'failed_dates':[]}
     try:
         with connect(path) as connection:
             connection.execute(
@@ -888,6 +896,7 @@ def run_sync(
                 if data_plan["coverage_end"]
                 else None
             )
+            changed_activity_days=[]
             with connect(path) as connection:
                 if data_plan['kind'] == 'history_backfill':
                     connection.execute('UPDATE sync_checkpoints SET history_backfill_next=? WHERE data_type=?', (start.isoformat(), data_type))
@@ -942,6 +951,8 @@ def run_sync(
                         through_date if data_plan['kind'] == 'history_backfill' else None,
                     )
                     totals["received"] += len(records)
+                    if data_type=='activities' and (counts['created'] or counts['updated'] or counts['detail_samples']):
+                        changed_activity_days.append(interval_date)
                     for key in ("created", "updated", "unchanged"):
                         totals[key] += counts[key]
                     totals["detail_samples"] += counts["detail_samples"]
@@ -962,6 +973,25 @@ def run_sync(
                     _record_failure(job_id, data_type, interval_date, interval_kind, error, path)
                     failures.append({"data_type": data_type, "date": interval_date.isoformat(), "error": str(error)})
                     break
+            # Publish today's load before unrelated historical/static endpoints.
+            # Recheck even unchanged activity retries: Garmin may publish later.
+            load_fetcher=getattr(provider,'fetch_training_load',None)
+            if data_type=='activities' and callable(load_fetcher):
+                from .training_load_charts import store_daily_status
+                first=max(min(changed_activity_days,default=through_date),through_date-timedelta(days=27))
+                dates=[through_date-timedelta(days=i) for i in range((through_date-first).days+1)]
+                for day in dates:
+                    try:
+                        store_daily_status(day.isoformat(),load_fetcher(day),path,job_id)
+                        load_refresh['fetched_dates'].append(day.isoformat())
+                    except Exception:
+                        # Source exceptions can contain credentials/URLs. Only
+                        # publish a bounded actionable failure for this read.
+                        load_refresh['failed_dates'].append(day.isoformat())
+                        failures.append({'data_type':'training_load_history','date':day.isoformat(),'error':'Daily Garmin load could not be refreshed. Retry sync; no updated load is claimed for this date.'})
+                    load_refresh['status']='running' if day!=dates[-1] else 'partial' if load_refresh['failed_dates'] else 'completed'
+                    with connect(path) as connection:
+                        connection.execute("UPDATE jobs SET checkpoint_json=json_set(COALESCE(checkpoint_json,'{}'),'$.training_load_refresh',json(?)) WHERE id=?",(json.dumps(load_refresh),job_id))
             if not any(item["data_type"] == data_type for item in failures):
                 with connect(path) as connection:
                     connection.execute(
@@ -975,32 +1005,37 @@ def run_sync(
         # New evidence invalidates the once-per-day training review, including late uploads.
         with connect(path) as connection:
             connection.execute('DELETE FROM training_review_gate')
+        from .sync_qc import check_and_retry
+        qc=check_and_retry(provider,job_id,through_date,requested,path,load_refresh,totals)
         status = "failed" if failures else "completed"
         with connect(path) as connection:
             connection.execute(
                 """
-                UPDATE jobs SET status = ?, checkpoint_json = ?, error_message = ?, finished_at = ?
+                UPDATE jobs SET status = ?, checkpoint_json = json_patch(COALESCE(checkpoint_json,'{}'),?), error_message = ?, finished_at = ?
                 WHERE id = ?
                 """,
                 (
                     status,
-                    json.dumps({"trigger": trigger, "totals": totals, "failures": failures}),
+                    json.dumps({"trigger": trigger, "totals": totals, "failures": failures, "training_load_refresh":load_refresh,"qc":qc}),
                     "One or more data types remain pending" if failures else None,
                     _now(),
                     job_id,
                 ),
             )
         from .rolling_publication import sync as sync_rolling_publication
-        publication=sync_rolling_publication(path) if not failures else {'status':'waiting_for_complete_sync','message':'Automatic workout publication waits for complete sync evidence.'}
-        return {"job_id": job_id, "status": status, "trigger": trigger, "totals": totals, "failures": failures,"rolling_publication":publication}
+        core_qc=any(issue['data_type'] in ('sleep_metrics','daily_metrics','hrv_metrics') for issue in qc['issues'])
+        publication=sync_rolling_publication(path) if not failures and not core_qc else {'status':'waiting_for_complete_sync','message':'Automatic workout publication waits for complete sync and recovery QC evidence.'}
+        return {"job_id": job_id, "status": status, "trigger": trigger, "totals": totals, "failures": failures,"rolling_publication":publication,"training_load_refresh":load_refresh,"qc":qc}
     except Exception as error:
+        from .sync_qc import audit
+        qc=audit(job_id,through_date,requested,path,load_refresh)
         with connect(path) as connection:
             connection.execute(
                 """
-                UPDATE jobs SET status = 'failed', error_message = ?, checkpoint_json = ?, finished_at = ?
+                UPDATE jobs SET status = 'failed', error_message = ?, checkpoint_json = json_patch(COALESCE(checkpoint_json,'{}'),?), finished_at = ?
                 WHERE id = ?
                 """,
-                (str(error)[:500], json.dumps({"trigger": trigger, "totals": totals}), _now(), job_id),
+                (str(error)[:500], json.dumps({"trigger": trigger, "totals": totals,"qc":qc}), _now(), job_id),
             )
         raise
 
@@ -1017,6 +1052,9 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
             ORDER BY created_at DESC LIMIT 1
             """
         ).fetchone()
+        last_successful_sync_at = connection.execute(
+            "SELECT MAX(finished_at) FROM jobs WHERE job_type = 'garmin_sync' AND status = 'completed'"
+        ).fetchone()[0]
         empty_intervals = connection.execute(
             "SELECT COUNT(*) FROM sync_intervals WHERE status = 'completed' AND empty_result = 1"
         ).fetchone()[0]
@@ -1032,8 +1070,10 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
     connection_ready = settings["connection_status"] == "connected"
     if not connection_ready:
         next_action = "Sign in locally to Garmin Connect to enable synchronization"
-    elif any(item["status"] == "failed" for item in _checkpoint_rows(path)):
+    elif (last_job and last_job['status']=='failed') or any(item["status"] == "failed" for item in _checkpoint_rows(path)):
         next_action = "Retry synchronization; one or more data types remain pending"
+    elif last_job and last_job.get('checkpoint',{}).get('qc',{}).get('status')=='attention':
+        next_action = "Sync QC found missing or partial measurements; review the checks and retry after Garmin posts the data"
     elif settings["schedule_enabled"]:
         next_action = "Hourly catch-up is enabled while the app is open; recent days are rechecked for late uploads"
     else:
@@ -1049,6 +1089,7 @@ def sync_status(path: Path | None = None) -> dict[str, object]:
         "verified_empty_intervals": empty_intervals,
         "additional_data": additional_data,
         "last_job": last_job,
+        "last_successful_sync_at": last_successful_sync_at,
         "live_sync_ready": connection_ready,
         "next_action": next_action,
     }

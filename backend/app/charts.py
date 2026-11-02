@@ -19,6 +19,7 @@ ACTIVITY_FIELDS = {'distance': ('distance_meters', 'km', .001),
                    'power': ('average_power', 'W', 1),
                    'speed': ('speed', 'km/h', 3.6),
                    'heart_rate': ('average_heart_rate', 'bpm', 1),
+                   'max_heart_rate': ('max_heart_rate', 'bpm', 1),
                    'cadence': ('average_cadence', 'rpm', 1)}
 from .activity_stream_charts import STREAM_FIELDS
 
@@ -48,7 +49,7 @@ def catalog(path: Path | None = None):
 def validate_spec(spec, path=None):
     if not isinstance(spec, dict):
         raise ValueError('Chart must be an object')
-    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days', 'sprint_seconds', 'interval_min_seconds', 'interval_max_seconds', 'min_repetitions', 'threshold_watts', 'fit_stat', 'activity_ids', 'window_days', 'show_chronic', 'show_optimal_range'}
+    allowed = {'id', 'title', 'metric', 'x_metric', 'kind', 'start', 'end', 'sport', 'size', 'timezone', 'gps_reference_id', 'reference_lines', 'trend_line', 'correlation', 'aggregation', 'rolling_days', 'sprint_seconds', 'interval_min_seconds', 'interval_max_seconds', 'min_repetitions', 'threshold_watts', 'fit_stat', 'activity_ids', 'window_days', 'show_chronic', 'show_optimal_range', 'bin_seconds'}
     if set(spec) - allowed:
         raise ValueError('Unsupported chart fields')
     if any(k in spec for k in ('window_days', 'show_chronic', 'show_optimal_range')):
@@ -88,8 +89,8 @@ def validate_spec(spec, path=None):
         raise ValueError('Use up to four mean or finite numeric reference lines')
     if spec['kind'] == 'dial' and (lines or spec.get('trend_line') or spec.get('correlation')):
         raise ValueError('Analysis overlays require a line, bar or scatter plot')
-    if spec.get('aggregation') and spec['aggregation'] not in {'daily_mean','daily_median','daily_sum','weekly_mean','weekly_median','weekly_sum','monthly_mean','monthly_median','monthly_sum'}:
-        raise ValueError('Choose daily, weekly or monthly mean, median or sum')
+    if spec.get('aggregation') and spec['aggregation'] not in {'daily_mean','daily_median','daily_sum','weekly_mean','weekly_median','weekly_sum','monthly_mean','monthly_median','monthly_sum','daily_max','weekly_max','monthly_max'}:
+        raise ValueError('Choose daily, weekly or monthly mean, median, sum or max')
     if 'rolling_days' in spec and (not isinstance(spec['rolling_days'],int) or isinstance(spec['rolling_days'],bool) or not 1 <= spec['rolling_days'] <= 365):
         raise ValueError('Rolling window must be 1–365 days')
     if (spec.get('aggregation') or spec.get('rolling_days')) and (spec['kind']=='dial' or (spec['kind']=='scatter' and spec.get('x_metric')!='date')):
@@ -108,6 +109,7 @@ def validate_spec(spec, path=None):
     if spec['metric'] in STREAM_FIELDS:
         from .activity_stream_charts import validate
         return validate(spec)
+    if 'bin_seconds' in spec:raise ValueError('Time bins require recorded stream metrics.')
     if 'activity_ids' in spec or spec.get('x_metric') == 'elapsed_time' or spec.get('x_metric') in STREAM_FIELDS:
         raise ValueError('Activity IDs and elapsed time require a recorded stream metric.')
     normalized=dict(spec)
@@ -182,7 +184,7 @@ def _observations(metric, spec, path=None, activity_ids=None):
                         THEN json_extract(a.raw_json,'$.fit_sessions[0].avg_speed')
                         ELSE json_extract(a.raw_json,'$.fit_sessions[0].enhanced_avg_speed') END END AS fit_speed""" if field=='speed' else 'NULL AS recorded_speed,NULL AS fit_speed'
             rows = c.execute('''SELECT a.id,a.activity_type,a.started_at,a.source_name,a.distance_meters,a.duration_seconds,a.calories_kcal,a.elevation_gain_meters,
-                '''+speed_columns+''',p.value AS average_power, h.value AS average_heart_rate, cad.value AS average_cadence
+                '''+speed_columns+''',COALESCE((SELECT value FROM activity_metrics WHERE activity_id=a.id AND metric_type IN ('max_heart_rate','maximum_heart_rate') LIMIT 1), json_extract(a.raw_json,'$.summaryDTO.maxHR'), json_extract(a.raw_json,'$.maxHR'), (SELECT MAX(heart_rate_bpm) FROM activity_samples WHERE activity_id=a.id AND heart_rate_bpm>0)) AS max_heart_rate,p.value AS average_power, h.value AS average_heart_rate, cad.value AS average_cadence
                 FROM activities a
                 LEFT JOIN activity_metrics p ON p.activity_id=a.id AND p.metric_type='average_power'
                 LEFT JOIN activity_metrics h ON h.activity_id=a.id AND h.metric_type='average_heart_rate'
@@ -367,7 +369,7 @@ def chart_data(spec, path=None):
             day = date.fromisoformat(p['date'])
             bucket = day if frequency=='daily' else date.fromordinal(day.toordinal()-day.weekday()) if frequency=='weekly' else day.replace(day=1)
             groups.setdefault(bucket.isoformat(), []).append(p)
-        aggregate = {'mean': statistics.fmean, 'median': statistics.median, 'sum': math.fsum}[operation]
+        aggregate = {'mean': statistics.fmean, 'median': statistics.median, 'sum': math.fsum, 'max': max}[operation]
         points = [{**rs[-1], 'date':day, 'x':day, 'y':aggregate(r['y'] for r in rs)} for day,rs in sorted(groups.items())]
         transform_notes.append(f'{frequency.capitalize()} {operation} of recorded observations; weeks start Monday. Empty periods are omitted.')
     if spec.get('rolling_days'):

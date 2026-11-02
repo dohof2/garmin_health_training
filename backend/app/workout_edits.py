@@ -10,9 +10,48 @@ class EditError(ValueError):
         self.status = status
 
 
+def widening_requested(message):
+    return bool(re.search(r'\b(widen|wide(?:r)?|broaden|broader)\b',message,re.I) and re.search(r'\b(power|watts?|target)\b',message,re.I) and re.search(r'\b(range|gap|band|tolerance)\b',message,re.I) and not re.search(r"\b(don't|do not|never)\b",message,re.I))
+
+
+def widen_power_range(definition,message):
+    if re.search(r'\b(step|block|interval|recovery)\s+\d',message,re.I):
+        raise EditError('To widen ranges, request the whole session; individual block range changes need explicit watt bounds.')
+    if re.search(r'\b(change|reduce|increase|set|replace)\b',message,re.I):
+        raise EditError('Request widening the power range separately from other changes so the ERG midpoint is preserved.')
+    percent=re.search(r'\bby\s+(\d+(?:\.\d+)?)\s*%',message,re.I)
+    if re.search(r'\d',message) and not percent:raise EditError('Specify widening by a percentage, for example: widen the power range by 20%.')
+    factor=1+float(percent[1])/100 if percent else 1.25
+    if not 1<factor<=2:raise EditError('Widen the current range by more than 0% and at most 100%.')
+    result=copy.deepcopy(definition);changed=0
+    def visit(steps):
+        nonlocal changed
+        for step in steps:
+            if step.get('steps'):visit(step['steps'])
+            t=step.get('target',{})
+            if t.get('type')!='power':continue
+            mid=(t['lower']+t['upper'])/2;half=(t['upper']-t['lower'])/2*factor
+            if half<=0 or mid-half<=0:raise EditError('This target cannot be widened safely while preserving its midpoint.')
+            t.update(lower=round(mid-half,2),upper=round(mid+half,2))
+            step['effort']=target_text(t)
+            refs=step.get('power_reference_fractions')
+            if refs:
+                center=(refs['lower']+refs['upper'])/2;width=(refs['upper']-refs['lower'])/2*factor
+                refs.update(lower=center-width,upper=center+width)
+            changed+=1
+    visit(result.get('steps',[]))
+    if not changed:raise EditError('This session has no numeric power ranges to widen.')
+    summary=[f'Widened power ranges by {(factor-1)*100:g}%; ERG midpoints, durations and repetitions are preserved.']
+    result.update(user_adjusted=True,edit_summary=summary)
+    result['effort_target']={'method':'power','description':'; '.join(f"{s.get('name','Step')}: {s.get('effort','')}" for s in result['steps'])}
+    return validate_workout(result),summary
+
+
 def requested(message):
+    if widening_requested(message):return True
+    if re.search(r'\b(building blocks?|training blocks?|phases?|weeks?)\b',message,re.I) and not re.search(r'\b(work interval|work block|step)\s+\d',message,re.I):return False
     return bool(re.search(r'\b(set|change|reduce|increase|make|use|replace)\b', message, re.I) and
-                re.search(r'\b(reps?|repetitions?|sets?|intervals?|recoveries|recovery between|work target|power target|heart rate target|effort target|load|rest)\b|\d+\s*[x×]\s*\d', message, re.I))
+                re.search(r'\b(reps?|repetitions?|sets?|intervals?|recoveries|recovery between|work target|power target|heart rate target|effort target|load|rest)\b|\b(?:step|block)\s+\d|\d+\s*[x×]\s*\d', message, re.I))
 
 
 def parse(message):
@@ -63,7 +102,86 @@ def work_seconds(definition):
     return sum(s['duration_seconds'] * s.get('repetitions', 1) for s in definition.get('steps', []) if work_step(s))
 
 
+def duration_label(seconds):
+    whole=int(seconds);tail=f'{whole%60:02d}'
+    if seconds!=whole:tail+=f'{seconds-whole:.3f}'[1:].rstrip('0')
+    return f'{whole//3600}:{whole//60%60:02d}:{tail}' if whole>=3600 else f'{whole//60}:{tail}'
+
+
+def expanded_steps(steps,path=(),depth=0):
+    """Flatten explicitly repeated groups without inventing targets or rests."""
+    if depth>5 or not isinstance(steps,list):raise EditError('Use at most six levels of explicitly timed blocks.')
+    result=[]
+    for index,step in enumerate(steps,1):
+        if not isinstance(step,dict):raise EditError('Each block must contain explicit timed steps.')
+        here=path+(index,);repeats=step.get('repetitions',1)
+        if type(repeats) is not int or not 1<=repeats<=50:raise EditError('Use 1–50 explicit repetitions per block.')
+        if 'steps' in step:
+            children=expanded_steps(step['steps'],here,depth+1)
+            for _ in range(repeats):result.extend(copy.deepcopy(children))
+        else:
+            leaf=copy.deepcopy(step);leaf['_edit_path']='.'.join(map(str,here));result.append(leaf)
+        if len(result)>100:raise EditError('The expanded workout exceeds 100 steps; review a smaller structure.')
+    return result
+
+
+def targeted_edit(definition,message,selector,policy,allow_increase):
+    noun,path=selector[1].lower(),selector[2]
+    body=message[:selector.start()]+('recovery' if noun.startswith('recovery') else 'work duration')+message[selector.end():]
+    values=parse(body)
+    if set(values)&{'count','sets','load'}:raise EditError('Target one step’s duration or current-method target; repetition/group-count changes need a separate reviewed structure.')
+    result=copy.deepcopy(definition);steps=expanded_steps(definition.get('steps',[]))
+    try:validate_workout({**definition,'steps':steps})
+    except (ValueError,KeyError,TypeError):raise EditError('The source blocks need a valid timed structure and targets before editing.') from None
+    if noun in ('interval','work interval','work block'):
+        work=[s for s in steps if work_step(s)]
+        selected=[work[int(path)-1]] if '.' not in path and 1<=int(path)<=len(work) else []
+    elif noun.startswith('recovery'):
+        recoveries=[s for s in steps if s.get('name','').lower().startswith('recovery')]
+        selected=[recoveries[int(path)-1]] if '.' not in path and 1<=int(path)<=len(recoveries) else []
+    else:selected=[s for s in steps if s['_edit_path']==path]
+    if not selected:raise EditError('That step does not exist. Number work intervals or recoveries separately, or use a step path such as step 2.1 for a nested block.')
+    if 'recovery_seconds' in values and 'work_seconds' in values:raise EditError('Edit one step duration at a time; no partial change was prepared.')
+    old_work=work_seconds({'steps':steps});changed=False;target_increase=False;delta=0
+    for step in selected:
+        old=copy.deepcopy(step);old_target=step.get('target') or {}
+        if 'target' in values:
+            target=values['target']
+            if target['type']!=old_target.get('type') or target['unit']!=old_target.get('unit'):raise EditError('Keep the current target method and units; review a calibration change separately.')
+            target_increase|=target['lower']>old_target['lower'] or target['upper']>old_target['upper']
+            if target['lower']>old_target['lower']*1.05 or target['upper']>old_target['upper']*1.05:raise EditError('A target increase over 5% needs a replacement-week review.','not_recommended')
+            if any(target[k]!=old_target.get(k) for k in ('type','unit','lower','upper')):
+                step.update(target=copy.deepcopy(target),effort=target_text(target),power_reference_fractions=None)
+        seconds=values.get('work_seconds',values.get('recovery_seconds'))
+        if seconds is not None:
+            name=step.get('name','').lower()
+            recovery=step.get('name','').lower().startswith('recovery') or step.get('type')=='recovery'
+            if not work_step(step) and not recovery and not any(label in name for label in ('warm','cool','steady endurance')):raise EditError('This block has no recognized work/recovery role. Review its structure before changing its duration.')
+            if any(label in name for label in ('warm','cool')) and seconds<step['duration_seconds'] and old_work>0:raise EditError('Keep the prescribed warm-up and cool-down for quality work; shortening them needs a replacement-session review.','not_recommended')
+            if 'recovery_seconds' in values and not recovery:raise EditError('Select the recovery step you want to change.')
+            if recovery and seconds<step['duration_seconds']:raise EditError('Shortening this recovery needs a separate progression review.','not_recommended')
+            delta+=(seconds-step['duration_seconds'])*step.get('repetitions',1);step['duration_seconds']=seconds
+        changed|=step!=old
+    if not changed:raise EditError('Those values already match the saved step.')
+    new_work=work_seconds({'steps':steps})
+    if new_work>old_work*1.2:raise EditError('This exceeds the small-edit work-time limit; review a replacement week.','not_recommended')
+    if (new_work>old_work or target_increase) and (not allow_increase or policy['level']!='normal' or not policy['quality_allowed']):raise EditError('Increasing demand needs two tolerated completed sessions and recovery clearance.','not_recommended')
+    filler=next((s for s in steps if s.get('name')=='Steady endurance' and not any(s is item for item in selected)),None)
+    if delta:
+        if filler is None or filler['duration_seconds']*filler.get('repetitions',1)-delta<0:raise EditError('The change cannot preserve total duration with the available steady riding. Review a replacement session.')
+        filler['duration_seconds']-=delta/filler.get('repetitions',1)
+    result['steps']=[{k:v for k,v in s.items() if k!='_edit_path'} for s in steps if s['duration_seconds']>0]
+    validate_workout(result)
+    summary=[f'{noun.title()} {path}: '+('; '.join(f"{s.get('name','Step')} · {duration_label(s['duration_seconds'])} · {target_text(s['target'])}" for s in selected))+'. Other blocks and total duration are preserved.']
+    result.update(user_adjusted=True,variant_id=None,variant_label=None,edit_summary=summary)
+    result['effort_target']={'method':result['steps'][0]['target']['type'],'description':'; '.join(f"{s.get('name','Step')}: {duration_label(s['duration_seconds'])} · {s['effort']}" for s in result['steps'])}
+    return result,summary
+
+
 def edit(definition, message, policy, allow_increase=False):
+    if widening_requested(message):return widen_power_range(definition,message)
+    selector=re.search(r'\b(work interval|work block|interval|recovery block|recovery|step|block)\s+(\d+(?:\.\d+)*)(?![\d.])',message,re.I)
+    if selector and definition['sport']!='strength':return targeted_edit(definition,message,selector,policy,allow_increase)
     values = parse(message)
     result = copy.deepcopy(definition)
     summary = []

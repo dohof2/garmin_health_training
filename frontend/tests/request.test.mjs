@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {coalescedFetch} from '../src/request.ts';
+import {coalescedFetch,invalidateReadRequests,requestJson} from '../src/request.ts';
 let calls=[];
 globalThis.fetch=(url,options={})=>new Promise((resolve,reject)=>{const call={url,options,resolve:()=>resolve(new Response(JSON.stringify({url}),{headers:{'Content-Type':'application/json'}}))};calls.push(call);options.signal?.addEventListener('abort',()=>reject(new DOMException('aborted','AbortError')));});
 const first=new AbortController(),second=new AbortController();
@@ -13,3 +13,16 @@ const last=new AbortController();const i=coalescedFetch('/api/cancel',{signal:la
 console.log('Shared reads, independent cancellation, fresh repeat reads and unshared writes passed.');
 
 const oldRead=coalescedFetch('/api/freshness'),write=coalescedFetch('/api/save',{method:'POST'});const readCall=calls.at(-2),writeCall=calls.at(-1);writeCall.resolve();await write;const freshRead=coalescedFetch('/api/freshness');assert.notEqual(calls.at(-1),readCall);calls.at(-1).resolve();readCall.resolve();await Promise.all([oldRead,freshRead]);console.log('Successful writes invalidate pre-write in-flight reads.');
+
+const beforeSync=coalescedFetch('/api/background-sync');const beforeCall=calls.at(-1);
+invalidateReadRequests();
+const afterSync=coalescedFetch('/api/background-sync');const afterCall=calls.at(-1);
+assert.notEqual(afterCall,beforeCall);assert.equal(beforeCall.options.signal.aborted,false);
+beforeCall.resolve();await beforeSync;
+const sharedAfterSync=coalescedFetch('/api/background-sync');assert.equal(calls.at(-1),afterCall);
+afterCall.resolve();await Promise.all([afterSync,sharedAfterSync]);
+console.log('Background commit invalidation preserves subscribers and fresh-read coalescing.');
+
+globalThis.fetch=async()=>new Response('Internal Server Error',{status:500});
+await assert.rejects(requestJson('/api/training/failure'),/server could not complete this request \(500\)/);
+console.log('Non-JSON server failures show a readable message.');

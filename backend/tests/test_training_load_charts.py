@@ -5,7 +5,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from app.database import connect,migrate
 from app.charts import chart_data,validate_spec
-from app.training_load_charts import daily_rows,refresh_history
+from app.training_load_charts import daily_rows,refresh_history,store_daily_status
 from app.time_utils import timezone_info
 
 class TrainingLoadTests(unittest.TestCase):
@@ -53,3 +53,35 @@ class TrainingLoadTests(unittest.TestCase):
         old=(datetime.fromisoformat(self.today)-timedelta(days=3)).date().isoformat();self.store(self.payload(old),old)
         r=chart_data(self.spec,self.path)
         self.assertEqual([p['segment'] for p in r['points'] if p['series_id']=='acute'],[0,1])
+    def test_daily_endpoint_wins_equal_timestamp_regardless_of_json_order(self):
+        daily=self.payload();daily['acuteTrainingLoadDTO']['dailyTrainingLoadAcute']=245
+        summary=self.payload();summary['acuteTrainingLoadDTO']['dailyTrainingLoadAcute']=100
+        for endpoints in ({'get_daily_training_status':daily,'get_training_status':summary},{'get_training_status':summary,'get_daily_training_status':daily}):
+            with connect(self.path) as c:
+                c.execute("INSERT OR REPLACE INTO garmin_sync_payloads VALUES('supplementary_metrics',?,?,?)",(self.today,json.dumps({'endpoints':endpoints}),'2026-10-27 10:00:00'))
+            self.assertEqual(daily_rows(self.path)[0]['acute'],245)
+    def test_new_commit_invalidates_cached_rows_and_old_history_cannot_replace_it(self):
+        self.store(self.payload());self.assertEqual(daily_rows(self.path)[0]['acute'],0)
+        fresh=self.payload();fresh['acuteTrainingLoadDTO']['dailyTrainingLoadAcute']=320
+        with connect(self.path) as c:
+            c.execute("UPDATE garmin_sync_payloads SET updated_at='2026-10-26 10:00:00'")
+            c.execute("INSERT INTO garmin_sync_payloads VALUES('supplementary_metrics',?,?,?)",(self.today,json.dumps({'endpoints':{'get_daily_training_status':fresh}}),'2026-10-27 10:00:00'))
+        self.assertEqual(daily_rows(self.path)[0]['acute'],320)
+        with connect(self.path) as c:
+            c.execute("UPDATE garmin_sync_payloads SET payload_json='broken' WHERE data_type='supplementary_metrics'")
+        self.assertEqual(daily_rows(self.path)[0]['acute'],0)
+
+    def test_later_fetch_of_older_garmin_observation_cannot_replace_new_value(self):
+        fresh=self.payload();fresh['timestamp']=1793169000000;fresh['acuteTrainingLoadDTO']['dailyTrainingLoadAcute']=511
+        old=self.payload();old['timestamp']=1793160000000;old['acuteTrainingLoadDTO']['dailyTrainingLoadAcute']=295
+        self.store({'endpoints':{'get_daily_training_status':fresh}})
+        with connect(self.path) as c:
+            c.execute("UPDATE garmin_sync_payloads SET updated_at='2026-10-28 06:40:00'")
+            c.execute("INSERT INTO garmin_sync_payloads VALUES('supplementary_metrics',?,?,?)",(self.today,json.dumps({'endpoints':{'get_daily_training_status':old}}),'2026-10-28 07:00:00'))
+        self.assertEqual(daily_rows(self.path)[0]['acute'],511)
+
+    def test_missing_wrong_day_and_malformed_source_preserve_last_record(self):
+        self.store(self.payload())
+        for payload in ({},self.payload('2000-01-01'),None,{'calendarDate':self.today,'acuteTrainingLoadDTO':{'dailyTrainingLoadAcute':True}}):
+            with self.subTest(payload=payload),self.assertRaises(ValueError):store_daily_status(self.today,payload,self.path)
+        self.assertEqual(daily_rows(self.path)[0]['acute'],0)

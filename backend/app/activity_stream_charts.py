@@ -25,7 +25,14 @@ def validate(spec):
         raise ValueError('Choose one to eight distinct activity IDs.')
     if identifiers is None and not (spec.get('start') and spec.get('end')):
         raise ValueError('Choose activity IDs or a start and end date for an elapsed-time plot.')
-    if spec['kind'] != 'line' or spec.get('x_metric', 'elapsed_time') != 'elapsed_time':
+    if spec['kind'] == 'scatter' and spec.get('x_metric') in STREAM_FIELDS:
+        if spec.get('bin_seconds',60) != 60 or isinstance(spec.get('bin_seconds'),bool):
+            raise ValueError('Stream scatter plots support 60-second bins.')
+        if any(spec.get(key) for key in ('gps_reference_id','aggregation','rolling_days','reference_lines')):
+            raise ValueError('Stream scatter plots use paired minute samples without calendar aggregation.')
+        return {**spec, 'bin_seconds':60}
+    if 'bin_seconds' in spec:raise ValueError('Time bins require a stream scatter plot.')
+    if spec['kind'] != 'line'  or spec.get('x_metric', 'elapsed_time') != 'elapsed_time':
         raise ValueError('Recorded activity overlays require a line chart with elapsed_time on the X axis.')
     if any(spec.get(key) for key in ('gps_reference_id', 'aggregation', 'rolling_days', 'trend_line', 'correlation', 'reference_lines')):
         raise ValueError('Recorded activity overlays preserve separate raw traces; summary analysis and GPS matching are not applied.')
@@ -62,6 +69,9 @@ def reduce_segments(segments):
 def chart(spec, path=None):
     field, label, unit, multiplier = STREAM_FIELDS[spec['metric']]
     identifiers = spec.get('activity_ids')
+    xlabel = xunit = None
+    if spec['kind'] == 'scatter':
+        _, xlabel, xunit, _ = STREAM_FIELDS[spec['x_metric']]
     with connect(path) as c:
         if identifiers:
             placeholders = ','.join('?' for _ in identifiers)
@@ -88,6 +98,26 @@ def chart(spec, path=None):
         points, series, notes = [], [], []
         count = excluded = 0
         for activity, day in selected:
+            if spec['kind'] == 'scatter':
+                xfield, xlabel, xunit, xscale = STREAM_FIELDS[spec['x_metric']]
+                buckets = {}
+                origin = stamp(activity['started_at'])
+                samples = c.execute(f'SELECT recorded_at,{field} AS y,{xfield} AS x FROM activity_samples WHERE activity_id=? ORDER BY recorded_at,rowid',(activity['id'],)).fetchall()
+                seen = set()
+                for sample in samples:
+                    try: elapsed = stamp(sample['recorded_at']) - origin
+                    except (ValueError,TypeError): excluded += 1; continue
+                    if elapsed < 0 or elapsed in seen or any(not isinstance(sample[k],(int,float)) or isinstance(sample[k],bool) or not math.isfinite(sample[k]) or sample[k]<0 for k in ('x','y')):
+                        excluded += 1; continue
+                    seen.add(elapsed)
+                    buckets.setdefault(int(elapsed//60),[]).append((sample['x']*xscale,sample['y']*multiplier))
+                colour_name, colour = SERIES_COLOURS[len(series)]
+                name = activity['name'] or activity['activity_type']
+                for minute, pairs in sorted(buckets.items()):
+                    points.append({'x':statistics.fmean(p[0] for p in pairs),'y':statistics.fmean(p[1] for p in pairs),'date':day,'source':activity['source_name'],'id':activity['id'],'series_id':activity['id'],'elapsed_seconds':minute*60,'sample_count':len(pairs)})
+                count += len(buckets)
+                series.append({'id':activity['id'],'label':name,'color':colour,'color_name':colour_name,'source':activity['source_name'],'count':len(buckets),'display_count':len(buckets)})
+                continue
             origin = stamp(activity['started_at'])
             samples = c.execute(f'SELECT recorded_at,{field} AS value FROM activity_samples WHERE activity_id=? ORDER BY recorded_at,rowid', (activity['id'],)).fetchall()
             segments, values = [], []
@@ -129,7 +159,11 @@ def chart(spec, path=None):
             if len(displayed) < len(values):
                 notes.append(f'{name}: display reduced from {len(values)} to {len(displayed)} recorded points using bucket minima/maxima and endpoints without joining gap boundaries; some short segments may be omitted in fragmented recordings. Export contains displayed points.')
     normalized = {**spec, 'activity_ids': [a['id'] for a, _ in selected]} if selected else dict(spec)
-    normalized.setdefault('title', f'{label} by elapsed time · activity comparison')
+    if spec['kind'] == 'scatter':
+        from .charts import analyze_points
+        normalized.setdefault('title',f'{label} vs {xlabel} · minute averages')
+        return {'spec':normalized,'points':points,'series':series,'unit':unit,'x_unit':xunit,'count':count,'excluded':excluded,'unpaired':excluded,'latest':points[-1] if points else None,'sources':sorted({s['source'] for s in series}),'notes':['One dot per nonempty elapsed minute, starting at activity start. Both axes are sample means of the same paired timestamps. Partial minutes are included; missing samples are omitted, never filled. These are sample means, not time-weighted averages.'],**analyze_points(points,spec)}
+    normalized.setdefault('title' , f'{label} by elapsed time · activity comparison')
     return {'spec': normalized, 'points': points, 'series': series, 'unit': unit, 'x_unit': 's', 'count': count,
             'excluded': excluded, 'unpaired': 0, 'latest': max(points, key=lambda p: p['recorded_at'], default=None),
             'sources': sorted({s['source'] for s in series}),

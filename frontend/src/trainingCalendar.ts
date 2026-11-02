@@ -8,6 +8,17 @@ export function trainingWeek(instant:Date,timeZone:string):string[] {
   return Array.from({length:7},(_,offset)=>new Date(Date.UTC(year,month-1,day+offset)).toISOString().slice(0,10));
 }
 
+/** Completed records take precedence if refresh responses contain both states. */
+export function mergeWorkoutStatus<T extends {id:string;completion_status:string}>(planned:T[],completed:T[]):T[] {
+  const entries=new Map<string,T>();
+  for(const workout of [...planned,...completed]) {
+    if(workout.completion_status==='cancelled')continue;
+    const existing=entries.get(workout.id);
+    if(!existing||existing.completion_status!=='completed')entries.set(workout.id,workout);
+  }
+  return [...entries.values()];
+}
+
 export type WorkoutSchedule={scheduled_for:string;scheduled_date?:string;time_unspecified?:boolean;definition?:{scheduled_date?:string;time_unspecified?:boolean}};
 export function workoutDate(workout:WorkoutSchedule,timeZone:string):string {
   return workout.scheduled_date??workout.definition?.scheduled_date??trainingDate(new Date(workout.scheduled_for),timeZone);

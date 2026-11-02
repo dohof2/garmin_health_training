@@ -33,23 +33,8 @@ TEMPLATES = (
     {'id':'hiking_easy','sport':'hiking','title':'Easy hike','equipment_any':[],'minimum_minutes':10,'kind':'duration'},
     {'id':'other_easy','sport':'other','title':'Easy activity','equipment_any':[],'minimum_minutes':10,'kind':'duration'},
 )
-EXERCISES = (
-    {'id':'pullup_progression','name':'Pull-up progression','movement':'pull','equipment':'pull_up_bar'},
-    {'id':'dip_progression','name':'Dip progression','movement':'push','equipment':'dip_bars'},
-    {'id':'chair_squat','name':'Chair squat','movement':'squat','equipment':'bodyweight'},
-    {'id':'bodyweight_hinge','name':'Hip hinge practice','movement':'hinge','equipment':'bodyweight'},
-    {'id':'wall_pushup','name':'Wall push-up','movement':'push','equipment':'bodyweight'},
-    {'id':'dead_bug','name':'Dead bug','movement':'core','equipment':'bodyweight'},
-    {'id':'dumbbell_row','name':'Dumbbell row','movement':'pull','equipment':'dumbbells'},
-    {'id':'band_row','name':'Band row','movement':'pull','equipment':'bands'},
-    {'id':'machine_row','name':'Seated machine row','movement':'pull','equipment':'gym'},
-    {'id':'dumbbell_squat','name':'Dumbbell squat','movement':'squat','equipment':'dumbbells'},
-    {'id':'dumbbell_press','name':'Dumbbell floor press','movement':'push','equipment':'dumbbells'},
-    {'id':'band_press','name':'Resistance-band press','movement':'push','equipment':'bands'},
-    {'id':'machine_leg_press','name':'Machine leg press','movement':'squat','equipment':'gym'},
-    {'id':'barbell_squat','name':'Barbell squat','movement':'squat','equipment':'barbell'},
-    {'id':'barbell_row','name':'Barbell row','movement':'pull','equipment':'barbell'},
-)
+from .garmin_strength_catalog import planner_exercises
+EXERCISES = planner_exercises()
 
 
 def encoded(value):return json.dumps(value,sort_keys=True,separators=(',',':'),allow_nan=False)
@@ -217,6 +202,7 @@ def workout_definition(template_id,minutes,answers):
             if used+cost<=available:selected.append(e);used+=cost
         if len(selected)<2:raise ValueError('Session length is too short for supported strength exercises')
         result['exercises']=selected;result['warmup_minutes']=5;result['effort_target']={'method':'self_selected','description':'Controlled repetitions with comfortable technique; no maximum load is inferred.'}
+        result['rationale'].append('Strength exercises use exact Garmin catalog entries with reviewed equipment/movement requirements; saved older workouts are not automatically replaced.')
     return result
 
 

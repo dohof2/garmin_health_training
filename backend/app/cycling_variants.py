@@ -3,11 +3,28 @@ SOURCES={
  'base':'https://support.trainerroad.com/hc/trainerroad-support/articles/115005942786-understanding-power-zones',
  'threshold':'https://www.trainerroad.com/blog/threshold-intervals-for-cyclists-benefits-examples-and-tips-for-success/',
  'sprint':'https://www.trainerroad.com/blog/how-to-improve-your-maximum-sprint-power/',
- 'anaerobic':'https://www.trainerroad.com/blog/anaerobic-intervals-for-cyclists-how-they-make-you-faster/'}
+ 'anaerobic':'https://www.trainerroad.com/blog/anaerobic-intervals-for-cyclists-how-they-make-you-faster/',
+ 'tempo':'https://support.trainerroad.com/hc/trainerroad-support/articles/115005942786-understanding-power-zones',
+ 'vo2':'https://www.trainerroad.com/blog/principles-of-recovery-intervals/'}
 VARIANTS={
+ 'recovery':[
+  {'id':'gentle_recovery','label':'Gentle continuous recovery','ratios':(.35,.45),'rpe':(1,2),'source':SOURCES['base']},
+  {'id':'steady_recovery','label':'Steady easy recovery','ratios':(.4,.5),'rpe':(1,2),'source':SOURCES['base']}],
  'endurance':[
   {'id':'easy_continuous','label':'Comfortable continuous base','ratios':(.55,.65),'rpe':(2,3),'source':SOURCES['base']},
   {'id':'upper_endurance','label':'Upper endurance continuous base','ratios':(.65,.7),'rpe':(3,4),'source':SOURCES['base']}],
+ 'long_endurance':[
+  {'id':'long_comfortable_base','label':'Long conversational endurance','ratios':(.55,.65),'rpe':(2,3),'source':SOURCES['base']},
+  {'id':'long_steady_base','label':'Long steady endurance','ratios':(.6,.7),'rpe':(2,3),'source':SOURCES['base']}],
+ 'tempo':[
+  {'id':'split_tempo','label':'Two eight-minute tempo blocks','intervals':(2,480,240),'source':SOURCES['tempo']},
+  {'id':'short_tempo_blocks','label':'Four four-minute tempo blocks','intervals':(4,240,180),'source':SOURCES['tempo']}],
+ 'vo2':[
+  {'id':'three_minute_vo2','label':'Three three-minute VO2 efforts','intervals':(3,180,180),'source':SOURCES['vo2']},
+  {'id':'two_minute_vo2','label':'Four two-minute VO2 efforts','intervals':(4,120,120),'source':SOURCES['vo2']}],
+ 'short_efforts':[
+  {'id':'controlled_fifteen_seconds','label':'Four controlled fifteen-second efforts','intervals':(4,15,180),'source':SOURCES['sprint']},
+  {'id':'controlled_ten_seconds','label':'Six controlled ten-second efforts','intervals':(6,10,180),'source':SOURCES['sprint']}],
  'threshold':[
   {'id':'split_threshold','label':'Two sustained threshold blocks','intervals':(2,480,240),'source':SOURCES['threshold']},
   {'id':'sustained_threshold','label':'One sustained threshold block','intervals':(1,960,0),'source':SOURCES['threshold']}],
@@ -29,7 +46,7 @@ def tolerated_sessions(c, kind, today, tz):
     from datetime import datetime,timedelta
     from zoneinfo import ZoneInfo
     from .ride_comparison import training_benefit
-    labels={'endurance':{'AEROBIC_BASE'},'threshold':{'THRESHOLD','LACTATE_THRESHOLD'},'sprint':{'SPRINT','SPEED'},'anaerobic':{'ANAEROBIC','ANAEROBIC_CAPACITY'},'tempo':{'TEMPO'},'vo2':{'VO2MAX','VO2_MAX'}}
+    labels={'recovery':{'RECOVERY'},'endurance':{'AEROBIC_BASE'},'long_endurance':{'AEROBIC_BASE'},'threshold':{'THRESHOLD','LACTATE_THRESHOLD'},'sprint':{'SPRINT','SPEED'},'anaerobic':{'ANAEROBIC','ANAEROBIC_CAPACITY'},'tempo':{'TEMPO'},'vo2':{'VO2MAX','VO2_MAX'},'short_efforts':{'SPRINT','SPEED','ANAEROBIC','ANAEROBIC_CAPACITY'}}
     rows=[]
     for row in c.execute("SELECT w.definition_json,a.id,a.started_at,f.effort,f.soreness,f.pain_or_illness,f.notes FROM training_feedback f JOIN planned_workouts w ON w.id=f.workout_id JOIN activities a ON a.id=f.activity_id WHERE w.sport='cycling' AND w.completion_status='completed' AND a.deleted_at IS NULL AND a.source_name!='synthetic_fixture' ORDER BY a.started_at"):
         definition=json.loads(row['definition_json'])
@@ -63,7 +80,7 @@ def preview(arguments,path=None):
     from datetime import datetime,timezone
     kind=arguments.get('category');minutes=arguments.get('minutes',60)
     if kind=='base':kind='endurance'
-    if not options(kind):raise ValueError('Choose base, threshold, sprint or anaerobic')
+    if not options(kind):raise ValueError('Choose recovery, base, long_endurance, tempo, threshold, vo2, short_efforts, sprint or anaerobic')
     today=datetime.now(timezone.utc).astimezone(timezone_info(arguments.get('timezone') or 'UTC')).date()
     brief=read_brief(path)['brief']
     return {'tool':'get_cycling_workout_variants','category':kind,'templates':[endurance(kind,minutes,brief,today=today,variant=v['id']) for v in options(kind)],'note':'Library previews, not a saved session or clearance for hard training. Selection must respect the active goal/block, recovery, completed tolerance and available time. Source examples inform the structures; these app variants are not copied personalized prescriptions.'}

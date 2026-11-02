@@ -50,6 +50,27 @@ class RecoveryTimeSyncTests(unittest.TestCase):
             'get_morning_training_readiness': self.snapshot()}}, self.day)
         self.assertEqual(records[0]['source_endpoint'], 'get_morning_training_readiness')
 
+    def test_unusable_nonempty_main_does_not_suppress_valid_morning(self):
+        for main in ('malformed',{'score':75},[self.snapshot(recoveryTime=None)],
+                     [self.snapshot(timestamp='invalid')],[self.snapshot(calendarDate='2026-10-23')],
+                     [self.snapshot(recoveryTime=-1)]):
+            with self.subTest(main=main):
+                records=normalized_metrics({'endpoints':{'get_training_readiness':main,
+                    'get_morning_training_readiness':self.snapshot(recoveryTime=180)}},self.day)
+                self.assertEqual(records[0]['value'],180)
+                self.assertEqual(records[0]['source_endpoint'],'get_morning_training_readiness')
+
+    def test_valid_full_snapshot_retains_priority_including_explicit_zero(self):
+        for value in (0,60):
+            records=normalized_metrics({'endpoints':{'get_training_readiness':self.snapshot(recoveryTime=value),
+                'get_morning_training_readiness':self.snapshot(timestamp=self.day+'T09:00:00Z',recoveryTime=180)}},self.day)
+            self.assertEqual(records[0]['value'],value)
+            self.assertEqual(records[0]['source_endpoint'],'get_training_readiness')
+
+    def test_both_unusable_sources_remain_missing(self):
+        self.assertEqual(normalized_metrics({'endpoints':{'get_training_readiness':{'score':80},
+            'get_morning_training_readiness':self.snapshot(recoveryTime=None)}},self.day),[])
+
     def test_sync_is_idempotent_and_updates_daily_snapshot(self):
         with tempfile.TemporaryDirectory() as folder:
             path = Path(folder)/'test.sqlite3'

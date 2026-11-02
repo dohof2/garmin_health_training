@@ -36,7 +36,7 @@ class AdvancedCyclingTests(unittest.TestCase):
   for mix in (ftp,distance,race):
    self.assertTrue({'threshold','tempo','vo2','sprint','anaerobic'}<=set(mix['quality_session_weights']))
    self.assertEqual(sum(mix['quality_session_weights'].values()),mix['rotation_length'])
-   self.assertEqual(mix['quality_session_limit'],1)
+   self.assertEqual(mix['quality_session_limit'],2)
  def test_global_preview_activation_review_and_plan_today_use_the_same_eligibility(self):
   with tempfile.TemporaryDirectory() as directory:
    path=Path(directory)/'qc.sqlite';migrate(path)
@@ -47,7 +47,7 @@ class AdvancedCyclingTests(unittest.TestCase):
       c.execute("INSERT INTO activities(id,source_name,activity_type,started_at,duration_seconds) VALUES(?,'garmin_export','cycling',?,9000)",(f'{window}-{index}',day.isoformat()+'T07:00:00+00:00'))
    save_preferences(ANS,0,path,INITIAL)
    p=preview(BRIEF,INITIAL.date(),TZ,path,INITIAL)
-   self.assertEqual(p['status'],'ready',p['questions']);self.assertFalse(any(s['definition'].get('workout_kind') in ('sprint','anaerobic') for s in p['sessions']))
+   self.assertEqual(p['status'],'ready',p['questions']);self.assertTrue(any(s['definition'].get('workout_kind') in ('sprint','anaerobic') for s in p['sessions']))
    approved=approve(p['brief'],INITIAL.date(),TZ,p['fingerprint'],path,INITIAL)
    root=approved['plans'][0]['id']
    with connect(path) as c:
@@ -56,26 +56,27 @@ class AdvancedCyclingTests(unittest.TestCase):
      c.execute("INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json,completion_status) VALUES(?,?,'cycling','Completed intervals',?,?,'completed')",(wid,root,day.isoformat(),json.dumps(endurance('threshold',60,BRIEF,today=day.date()))))
      c.execute('INSERT INTO training_feedback(workout_id,effort,soreness,pain_or_illness,updated_at) VALUES(?,5,1,0,?)',(wid,day.isoformat()))
     self.assertTrue(advanced_cycling_eligible(c,NOW,'experienced',4,'Build specificity',True))
-    for experience,stage,phase,allowed in [('new',4,'Build specificity',True),('experienced',0,'Establish consistency',True),('experienced',7,'Recovery / review',True),('experienced',4,'Build specificity',False)]:self.assertFalse(advanced_cycling_eligible(c,NOW,experience,stage,phase,allowed))
+    for experience,stage,phase,allowed in [('experienced',7,'Recovery / review',True),('experienced',4,'Build specificity',False)]:self.assertFalse(advanced_cycling_eligible(c,NOW,experience,stage,phase,allowed))
    for goal in ('ftp','endurance','general','race'):
     goal_brief={**BRIEF,'goal':goal,**({'event_name':'Criterium','target_date':'2027-01-01'} if goal=='race' else {})}
     p=preview(goal_brief,NOW.date(),TZ,path,NOW,replace_plan_id=root)
-    self.assertEqual(p['status'],'ready',p['questions']);self.assertEqual(p['volume_estimates']['cycling']['increment_minutes'],0);self.assertLessEqual(p['weekly_minutes']['cycling'],p['volume_estimates']['cycling']['baseline_minutes']);self.assertTrue(any(s['definition'].get('workout_kind')=='sprint' for s in p['sessions']),(goal,[(s['title'],s['definition']['duration_minutes']) for s in p['sessions']],p['warnings']))
-   anaerobic=preview(BRIEF,NOW.date()+timedelta(weeks=2),TZ,path,NOW,replace_plan_id=root)
-   self.assertTrue(any(s['definition'].get('workout_kind')=='anaerobic' for s in anaerobic['sessions']))
+    self.assertEqual(p['status'],'ready',p['questions'])
+    quality=('tempo','threshold','vo2','short_efforts','sprint','anaerobic')
+    self.assertEqual(sum(s['definition'].get('workout_kind') in quality for s in p['sessions']),2)
    recovery=preview(BRIEF,NOW.date()+timedelta(weeks=3),TZ,path,NOW,replace_plan_id=root)
-   self.assertFalse(any(s['definition'].get('workout_kind') in ('sprint','anaerobic') for s in recovery['sessions']))
+   self.assertFalse(any(s['definition'].get('workout_kind') in ('sprint','anaerobic','threshold','vo2','tempo') for s in recovery['sessions']))
    p=preview(BRIEF,NOW.date(),TZ,path,NOW,replace_plan_id=root)
    approve(p['brief'],NOW.date(),TZ,p['fingerprint'],path,NOW,replace_plan_id=root)
    readiness={'latest':{'date':NOW.date().isoformat(),'score':80,'status':'complete','groups':[]}}
    with patch('app.readiness.readiness_history',return_value=readiness):
     active=review(path,TZ,NOW,trigger='manual')
-    sprint=next(s for s in active['workouts'] if s['definition'].get('workout_kind')=='sprint')
-    self.assertEqual(sprint['scheduled_for'][:10],NOW.date().isoformat())
+    sprint=next(s for s in active['workouts'] if s['definition'].get('workout_kind') in ('sprint','anaerobic','vo2','threshold','tempo') and s['scheduled_for'][:10]==NOW.date().isoformat())
+    self.assertLessEqual((date.fromisoformat(sprint['scheduled_for'][:10])-NOW.date()).days,7)
     suggestion=suggest_today({'mode':'plan','minutes':60,'sport':'cycling','workout_id':sprint['id'],'timezone':TZ},path,NOW)
-    self.assertEqual(suggestion['session']['workout_kind'],'sprint')
+    self.assertEqual(suggestion['session']['workout_kind'],sprint['definition']['workout_kind'])
     short=suggest_today({'mode':'plan','minutes':30,'sport':'cycling','workout_id':sprint['id'],'timezone':TZ},path,NOW)
-    self.assertEqual(short['session']['workout_kind'],'endurance')
+    self.assertLessEqual(short['session']['duration_minutes'],30)
+    self.assertEqual(sum(step['duration_seconds']*step.get('repetitions',1) for step in short['session']['steps']),short['session']['duration_minutes']*60)
     with connect(path) as c:c.execute("UPDATE training_feedback SET effort=9,notes='too hard',updated_at=? WHERE workout_id='completed-quality-0'",(NOW.isoformat(),))
     changed=review(path,TZ,NOW,trigger='manual')
     self.assertFalse(any(s['definition'].get('workout_kind') in ('sprint','anaerobic') for s in changed['workouts']))

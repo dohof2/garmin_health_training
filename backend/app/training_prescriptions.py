@@ -6,6 +6,14 @@ KINDS=('recovery','endurance','long_endurance','climbing_endurance','long_tempo'
 RATIOS={'recovery':(.35,.5),'endurance':(.55,.7),'long_endurance':(.55,.7),'climbing_endurance':(.65,.75),'long_tempo':(.76,.87),'tempo':(.76,.87),'threshold':(.95,1.0),'vo2':(1.05,1.15),'short_efforts':(1.1,1.3)}
 RPE={'recovery':(1,2),'endurance':(2,3),'long_endurance':(2,3),'climbing_endurance':(3,4),'long_tempo':(5,6),'tempo':(5,6),'threshold':(6,7),'vo2':(7,8),'short_efforts':(7,8),'sprint':(9,10),'anaerobic':(9,9)}
 
+# Symmetric MTB tolerance in FTP fractions; the ERG midpoint stays unchanged.
+POWER_HALF_WIDTH={'recovery':.15,'endurance':.15,'long_endurance':.15,'climbing_endurance':.125,'long_tempo':.10,'tempo':.10,'threshold':.075,'vo2':.075,'short_efforts':.10}
+
+def power_range(kind, bounds):
+ low,high=bounds;mid=(low+high)/2
+ half=max((high-low)/2,POWER_HALF_WIDTH[kind])
+ return (round(mid-half,6),round(mid+half,6))
+
 def validate_calibration(value):
  if value is None:value={}
  if not isinstance(value,dict) or set(value)-{'power_access','ftp_confirmed_on','ftp_source','hr_sensor','hr_zones','hr_confirmed_on','hr_source'}:raise ValueError('Unsupported calibration fields')
@@ -35,12 +43,12 @@ def questions(brief,sports):
 
 def target(kind,brief,sport,indoor=False,today=None):
  if kind in ('sprint','anaerobic'):
-  low,high=RPE[kind];return {'type':'perceived_effort','lower':low,'upper':high,'unit':'RPE / 10','source':'effort_prescription','description':'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.' if kind=='sprint' else 'Very hard repeatable 30-second effort; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}
+  low,high=RPE[kind];return {'type':'perceived_effort','lower':low,'upper':high,'unit':'RPE / 10','source':'effort_prescription','description':'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.' if kind=='sprint' else 'Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}
  c=validate_calibration(brief.get('calibration'));today=today or date.today();ftp=brief.get('ftp_watts')
  confirmed=date.fromisoformat(c['ftp_confirmed_on']) if c['ftp_confirmed_on'] else None
  power=c['power_access'] in ('both','indoor' if indoor else 'outdoor')
  if sport=='cycling' and power and ftp and confirmed and 0<=(today-confirmed).days<=90:
-  low,high=RATIOS[kind];return {'type':'power','lower':round(ftp*low,2),'upper':round(ftp*high,2),'unit':'W','ftp_watts':ftp,'confirmed_on':confirmed.isoformat(),'source':c['ftp_source']}
+  low,high=power_range(kind,RATIOS[kind]);return {'type':'power','lower':round(ftp*low,2),'upper':round(ftp*high,2),'unit':'W','ftp_watts':ftp,'confirmed_on':confirmed.isoformat(),'source':c['ftp_source']}
  hrdate=date.fromisoformat(c['hr_confirmed_on']) if c['hr_confirmed_on'] else None
  if c['hr_sensor'] and kind in c['hr_zones'] and hrdate and 0<=(today-hrdate).days<=180:
   low,high=c['hr_zones'][kind];return {'type':'heart_rate','lower':low,'upper':high,'unit':'bpm','confirmed_on':hrdate.isoformat(),'source':c['hr_source']}
@@ -75,13 +83,13 @@ def endurance(kind,minutes,brief,sport='cycling',indoor=None,today=None,variant=
  def lap(name,seconds,zone):
   if seconds<=0:return
   t=target(zone,brief,sport,indoor,today)
-  fractions=RATIOS.get(zone)
-  if selected and zone=='endurance' and kind=='endurance' and sport=='cycling':
-   fractions=selected['ratios']
+  fractions=power_range(zone,RATIOS[zone]) if zone in RATIOS else None
+  if selected and zone==kind and kind in ('recovery','endurance','long_endurance') and sport=='cycling':
+   fractions=power_range(zone,selected['ratios'])
    if t['type']=='power':t={**t,'lower':round(brief['ftp_watts']*fractions[0],2),'upper':round(brief['ftp_watts']*fractions[1],2)}
    elif t['type']=='perceived_effort':t={**t,'lower':selected['rpe'][0],'upper':selected['rpe'][1]}
   steps.append({'power_reference_fractions':{'lower':fractions[0],'upper':fractions[1]} if sport=='cycling' and fractions else None,'name':name,'type':name.lower().replace(' ','_'),'duration_seconds':seconds,'termination':'time','repetitions':1,'target':t,'effort':text(t)+(' · '+t['description'] if zone in ('sprint','anaerobic') else '')})
- if sport=='cycling' and kind in ('endurance','long_endurance') and brief.get('continuous_endurance'):
+ if sport=='cycling' and kind in ('endurance','long_endurance','recovery') and brief.get('continuous_endurance'):
   warm=cool=0
  lap('Warm-up',warm,'recovery');remaining=total-warm-cool
  if kind in ('tempo','long_tempo','climbing_endurance','threshold','vo2','short_efforts','sprint','anaerobic'):
@@ -101,7 +109,7 @@ def endurance(kind,minutes,brief,sport='cycling',indoor=None,today=None,variant=
  return validate_workout({'variant_id':selected['id'] if selected and kind==requested_kind else None,'variant_label':selected['label'] if selected and kind==requested_kind else None,'sources':[selected['source']] if selected else [],'reference_ftp':reference_ftp,'version':'training-prescription-v2','template_id':'cycling_'+kind if sport=='cycling' else 'running_easy','workout_kind':kind,'sport':sport,'title':titles[kind] if sport=='cycling' else 'Easy conversational run','duration_minutes':total/60,'steps':steps,'effort_target':{'method':steps[0]['target']['type'],'description':'; '.join(f"{s['name']}: {s['effort']}" for s in steps)},'workout_location':'indoor' if indoor else 'outdoor','program_ftp':brief.get('ftp_watts'),'program_goal':brief.get('goal'),'calibration':validate_calibration(brief.get('calibration')),'rationale':['Targets use confirmed calibration when available; otherwise the explicit effort fallback applies.']+(['Dedicated high-intensity work uses effort and repeatability, not watts inferred from FTP. Use a controlled traffic-free setting or suitable trainer; stop the efforts if technique or power quality deteriorates.'] if kind in ('sprint','anaerobic') else [])+(['Insufficient time for the full warm-up, efforts and recovery; replaced with easy endurance rather than compressing sprint/anaerobic recovery.'] if requested_kind in ('sprint','anaerobic') and requested_kind!=kind else [])})
 
 
-def strength(base,brief,answers,week_index=0,tolerated=False):
+def strength(base,brief,answers,week_index=0,tolerated=False,observed_at=None):
  role=brief.get('strength_role') or ('primary' if answers.get('priority')=='strength' else 'secondary')
  purpose=brief.get('strength_purpose') or ('strength_development' if role=='primary' else 'general_fitness')
  result={**base,'version':'training-prescription-v2','strength_role':role,'strength_purpose':purpose,'exercises':[dict(e) for e in base['exercises']]}
@@ -128,11 +136,29 @@ def strength(base,brief,answers,week_index=0,tolerated=False):
    else:e['repetitions']=max(1,min(5,capacity-2))
   else:e['repetitions']=6 if purpose=='strength_development' else 10 if purpose=='cycling_support' else 8
   e['sets']=1 if answers['experience']['strength']=='new' else 3 if role=='primary' else 2
-  recorded=[r for r in brief.get('strength_performance',[]) if r['exercise_id']==e['id'] and r.get('repetitions_in_reserve') is not None and r['repetitions_in_reserve']>=2]
-  if tolerated and week_index>0 and len(recorded)>=2:
-   baseline=min(r['repetitions'] for r in recorded[-2:]);e['repetitions']=min(baseline+1,12) if e['equipment'] not in ('pull_up_bar','dip_bars') else min(e['repetitions'],baseline+1)
-   e['last_recorded_load_kg']=recorded[-1]['load_kg']
-   if recorded[-1]['load_kg'] is not None:e['load_target_kg']=recorded[-1]['load_kg']
+  # Two sets in one workout are one exposure, not two tolerated sessions.
+  # Inspect the latest sessions before checking RIR so a recent difficult set
+  # cannot be ignored in favor of older successful performances.
+  from datetime import datetime,timedelta
+  by_session={}
+  for r in brief.get('strength_performance',[]):
+   if r['exercise_id']!=e['id'] or not r.get('workout_id'):continue
+   try:recorded_at=datetime.fromisoformat(r.get('recorded_at','').replace('Z','+00:00'))
+   except (ValueError,TypeError):continue
+   if not recorded_at.tzinfo:continue
+   if observed_at and not observed_at-timedelta(days=90)<=recorded_at<=observed_at:continue
+   by_session.setdefault(r['workout_id'],[]).append((recorded_at,r))
+  recent=sorted(by_session.items(),key=lambda entry:max(at for at,_ in entry[1]))[-2:]
+  recorded=[r for _,rows in recent for _,r in rows]
+  ready=len(recent)==2 and all(r.get('repetitions_in_reserve') is not None and r['repetitions_in_reserve']>=2 for r in recorded)
+  same_load=ready and len({r.get('load_kg') for r in recorded})==1 and (e['equipment'] in ('bodyweight','pull_up_bar','dip_bars') or all(r.get('load_kg') is not None for r in recorded))
+  e['progression_evidence']={'completed_sessions':len(recent),'workout_ids':[identifier for identifier,_ in recent],
+      'status':'eligible' if tolerated and week_index>0 and ready and same_load else 'hold',
+      'reason':'Two recent distinct sessions at the same recorded load with at least two repetitions in reserve are required; recent hard/unknown sets or changed loads hold progression.'}
+  if tolerated and week_index>0 and ready and same_load:
+   baseline=min(r['repetitions'] for r in recorded);e['repetitions']=min(baseline+1,12) if e['equipment'] not in ('pull_up_bar','dip_bars') else min(e['repetitions'],baseline+1)
+   e['last_recorded_load_kg']=recorded[-1].get('load_kg')
+   if recorded[-1].get('load_kg') is not None:e['load_target_kg']=recorded[-1]['load_kg']
   e['rest_seconds']=120 if role=='primary' else 90;e['load']='Self-selected load with 2–3 repetitions in reserve; record actual load/repetitions to guide progression'
  if purpose=='cycling_support':
   preferred=('squat','hinge','core','pull','push');result['exercises'].sort(key=lambda e:preferred.index(e['movement']))
@@ -201,13 +227,8 @@ def recovery_policy(readiness,load,feedback,capacity,today):
 
 
 def advanced_cycling_eligible(c,now,experience,week_index,phase,quality_allowed):
- if experience!='experienced' or week_index<4 or phase!='Build specificity' or not quality_allowed:return False
- from datetime import timedelta
- import json
- rows=c.execute("SELECT f.*,w.completion_status,w.definition_json FROM training_feedback f JOIN planned_workouts w ON w.id=f.workout_id WHERE w.sport='cycling' AND f.updated_at>=? AND datetime(f.updated_at)<=datetime(?) AND datetime(w.scheduled_for)<=datetime(?)",((now-timedelta(days=28)).isoformat(),now.isoformat(),now.isoformat())).fetchall()
- if any(row['pain_or_illness'] or (row['effort'] or 0)>=8 or (row['soreness'] or 0)>=5 for row in rows):return False
- quality=('threshold','tempo','vo2','short_efforts','sprint','anaerobic')
- return sum(row['completion_status']=='completed' and row['effort'] is not None and row['effort']<=7 and (row['soreness'] or 0)<=3 and not row['pain_or_illness'] and json.loads(row['definition_json']).get('workout_kind') in quality for row in rows)>=2
+ # Category access follows recovery and the block, without calendar or feedback quotas.
+ return quality_allowed and phase not in ('Recovery / review','Freshen up','Post-event recovery','Race week','Outside plan')
 
 def cycling_mix(brief):
  import re
@@ -220,7 +241,7 @@ def cycling_mix(brief):
   'short_power':('threshold','vo2','tempo','sprint','anaerobic','sprint','anaerobic'),
   'general':('tempo','threshold','vo2','sprint','tempo','anaerobic')}
  cycle=cycles[focus]
- return {'focus':focus,'quality_session_limit':1,'quality_rotation':list(cycle),'quality_session_weights':{kind:cycle.count(kind) for kind in dict.fromkeys(cycle)},'rotation_length':len(cycle),'note':'The mix emphasizes your goal while retaining base, sustained-power and short-power work across build weeks. These are starting guidelines, adjusted for completed training and recovery. Counts refer to quality sessions, not percentages of riding time. Sprint/anaerobic work is deferred until experience, completed tolerance and recovery support it; recovery/taper weeks intentionally omit it.'}
+ return {'focus':focus,'quality_session_limit':2,'quality_rotation':list(cycle),'quality_session_weights':{kind:cycle.count(kind) for kind in dict.fromkeys(cycle)},'rotation_length':len(cycle),'note':'The mix emphasizes your goal while retaining base, sustained-power and short-power work across build weeks. These are starting guidelines, adjusted for completed training and recovery. Counts refer to quality sessions, not percentages of riding time. Aim for two interval rides and one base ride, plus an optional long ride when it fits per normal week. Recent completed riding, recovery, block and available time can reduce this target. Sprint and anaerobic work have no minimum programme week or completed-feedback quota; recovery/taper weeks omit intervals.'}
 
 def cycling_quality_kind(week_index,advanced_ready,brief=None):
  cycle=cycling_mix(brief or {'goal':'ftp'})['quality_rotation']

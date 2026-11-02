@@ -1,25 +1,22 @@
 """Explicit strength mappings to the pinned garminconnect exercise catalog."""
 from .garmin_workout_mapping import number
 
-# Exact supported variants only. Near matches must be reviewed rather than substituted.
-MAPPINGS={
- 'pullup_progression':('PULL_UP','PULL_UP'),
- 'dip_progression':('TRICEPS_EXTENSION','BODY_WEIGHT_DIP'),
- 'dead_bug':('HIP_STABILITY','DEAD_BUG'),
- 'dumbbell_row':('ROW','DUMBBELL_ROW'),
- 'band_row':('BANDED_EXERCISES','ROW'),
- 'dumbbell_squat':('SQUAT','DUMBBELL_SQUAT'),
- 'dumbbell_press':('BENCH_PRESS','DUMBBELL_FLOOR_PRESS'),
- 'machine_leg_press':('SQUAT','LEG_PRESS'),
- 'barbell_squat':('SQUAT','BARBELL_BACK_SQUAT'),
- 'barbell_row':('ROW','BARBELL_ROW'),
-}
+from .garmin_strength_catalog import mappings, repertoire
+MAPPINGS = mappings()
+
+
+def mapping_blockers(definition):
+    """Report every unsupported instruction without inventing a replacement."""
+    catalog={(category,exercise) for _,category,exercise in repertoire()}
+    exercises=definition.get('exercises')
+    if not isinstance(exercises,list):return ['Strength workout needs explicit exercises.']
+    return ['Unsupported exact Garmin exercise mapping: '+str(exercise.get('name') or exercise.get('id'))+'. Review an explicitly supported exercise before sending; it was not substituted.'
+            for exercise in exercises if isinstance(exercise,dict) and (MAPPINGS.get(exercise.get('id')) not in catalog or 'assisted' in str(exercise.get('name','')).lower())]
 
 
 def payload(definition,marker):
     from garminconnect.workout import StrengthWorkout,create_strength_exercise_step,create_strength_rest_step,ExecutableStep
-    from garminconnect.exercises import _RAW
-    catalog={(category,exercise) for _,category,exercise in _RAW}
+    catalog={(category,exercise) for _,category,exercise in repertoire()}
     title=definition.get('title')
     if not isinstance(title,str) or not 1<=len(title.strip())<=120:raise ValueError('Workout title must be 1–120 characters')
     minutes=number(definition.get('duration_minutes'),'Workout minutes',10,720)

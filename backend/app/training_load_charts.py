@@ -13,8 +13,8 @@ def finite(value):
 
 @versioned_read
 def daily_rows(path=None):
-    days = {}
-    def accept(day, dto, source, identifier):
+    days = {};priorities={}
+    def accept(day, dto, source, identifier,priority):
         if not isinstance(day,str) or len(day)!=10 or not finite(dto.get('dailyTrainingLoadAcute')):
             return
         try:
@@ -25,22 +25,42 @@ def daily_rows(path=None):
         for field in ('chronic','low','high'):
             if not finite(row[field]): row[field]=None
         if row['low'] is not None and row['high'] is not None and row['low']>row['high']: row['low']=row['high']=None
-        days[day]=row
-    def walk(value,identifier):
+        if day not in priorities or priority>priorities[day]:
+            days[day]=row;priorities[day]=priority
+    def walk(value,identifier,priority,endpoint=0):
         if isinstance(value,dict):
             dto=value.get('acuteTrainingLoadDTO')
-            if isinstance(dto,dict): accept(value.get('calendarDate'),dto,'garmin_connect',identifier)
-            for child in value.values():
-                if isinstance(child,(dict,list)):walk(child,identifier)
+            observed=value.get('timestamp')
+            if type(observed) in (int,float) and math.isfinite(observed) and observed>0:
+                observed=observed/1000 if observed>100_000_000_000 else observed
+            else:observed=None
+            # A newly fetched stale device summary must not overwrite a newer
+            # Garmin observation for the same day. Fetch time only breaks ties.
+            if isinstance(dto,dict): accept(value.get('calendarDate'),dto,'garmin_connect',identifier,
+                (priority[0],observed is not None,observed or 0,priority[1],endpoint,*priority[2:]))
+            for key,child in value.items():
+                rank=2 if key=='get_daily_training_status' else 1 if key=='get_training_status' else endpoint
+                if isinstance(child,(dict,list)):walk(child,identifier,priority,rank)
         elif isinstance(value,list):
             for child in value:
-                if isinstance(child,(dict,list)):walk(child,identifier)
+                if isinstance(child,(dict,list)):walk(child,identifier,priority,endpoint)
+    def stamp(value):
+        # Sync timestamps are normally SQLite UTC; tolerate aware import stamps.
+        from datetime import timezone
+        try:
+            dt=datetime.fromisoformat(value.replace('Z','+00:00'))
+            return (dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)).timestamp()
+        except (ValueError,TypeError,AttributeError):return float('-inf')
     with connect(path) as c:
-        for r in c.execute("SELECT id,record_date,source_name,payload_json FROM garmin_archive_records WHERE category='acute_training_load' AND source_name!='synthetic_fixture' ORDER BY record_date,id"):
-            dto=json.loads(r['payload_json'])
-            if isinstance(dto,dict): accept(r['record_date'],dto,r['source_name'],r['id'])
-        for r in c.execute("SELECT data_type,calendar_date,payload_json FROM garmin_sync_payloads WHERE data_type IN ('supplementary_metrics','training_load_history') ORDER BY updated_at,calendar_date"):
-            walk(json.loads(r['payload_json']),r['data_type']+':'+r['calendar_date'])
+        for r in c.execute("SELECT id,record_date,source_name,payload_json,updated_at FROM garmin_archive_records WHERE category='acute_training_load' AND source_name!='synthetic_fixture' ORDER BY record_date,id"):
+            try:dto=json.loads(r['payload_json'])
+            except (ValueError,TypeError):continue
+            if isinstance(dto,dict): accept(r['record_date'],dto,r['source_name'],r['id'],(0,stamp(r['updated_at']),0,0,r['id']))
+        for r in c.execute("SELECT data_type,calendar_date,payload_json,updated_at FROM garmin_sync_payloads WHERE data_type IN ('supplementary_metrics','training_load_history') ORDER BY updated_at,calendar_date"):
+            try:payload=json.loads(r['payload_json'])
+            except (ValueError,TypeError):continue
+            identifier=r['data_type']+':'+r['calendar_date']
+            walk(payload,identifier,(1,stamp(r['updated_at']),int(r['data_type']=='supplementary_metrics'),identifier))
     return [days[day] for day in sorted(days)]
 
 
@@ -67,6 +87,22 @@ def chart(spec,path=None):
     return {'spec':spec,'points':points,'series':series,'range_band':{'label':'Optimal acute load · Garmin','points':band},'x_domain':[start.isoformat(),end.isoformat()],'unit':'Garmin load','x_unit':'Date','count':len(points),'excluded':0,'unpaired':0,'latest':latest,'sources':sorted({r['source'] for r in rows}),'notes':['Recorded daily values; missing days remain gaps.','Green boundaries come from Garmin’s recorded personalized load range. Historical boundaries are not estimated.',f'{len(band)} of {len(rows)} recorded days have available range boundaries.']}
 
 
+def store_daily_status(day,payload,path=None,job_id=None):
+    """Commit one dated load response and publish progress in the same transaction."""
+    datetime.strptime(day,'%Y-%m-%d')
+    def usable(value):
+        if isinstance(value,dict):
+            dto=value.get('acuteTrainingLoadDTO')
+            if value.get('calendarDate')==day and isinstance(dto,dict) and finite(dto.get('dailyTrainingLoadAcute')):return True
+            return any(usable(v) for v in value.values() if isinstance(v,(dict,list)))
+        return isinstance(value,list) and any(usable(v) for v in value)
+    if not usable(payload):raise ValueError('Garmin did not supply a dated acute-load value for '+day)
+    with connect(path) as c:
+        c.execute("INSERT INTO garmin_sync_payloads(data_type,calendar_date,payload_json) VALUES('training_load_history',?,?) ON CONFLICT(data_type,calendar_date) DO UPDATE SET payload_json=excluded.payload_json,updated_at=CURRENT_TIMESTAMP",(day,json.dumps({'endpoints':{'get_daily_training_status':payload}})))
+        if job_id:
+            c.execute("UPDATE jobs SET checkpoint_json=json_set(COALESCE(checkpoint_json,'{}'),'$.data_revision',COALESCE(json_extract(checkpoint_json,'$.data_revision'),0)+1) WHERE id=?",(job_id,))
+
+
 def refresh_history(path=None,days=28,timezone='UTC',client=None):
     if client is None:
         from .garmin_connection import load_client
@@ -77,8 +113,7 @@ def refresh_history(path=None,days=28,timezone='UTC',client=None):
         day=(end-timedelta(days=offset)).isoformat()
         try:
             payload=client.get_daily_training_status(day)
-            with connect(path) as c:
-                c.execute("INSERT INTO garmin_sync_payloads(data_type,calendar_date,payload_json) VALUES('training_load_history',?,?) ON CONFLICT(data_type,calendar_date) DO UPDATE SET payload_json=excluded.payload_json,updated_at=CURRENT_TIMESTAMP",(day,json.dumps({'endpoints':{'get_daily_training_status':payload}})))
+            store_daily_status(day,payload,path)
             fetched+=1
         except Exception:
             failed.append(day)

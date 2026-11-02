@@ -109,10 +109,22 @@ def training_benefit(connection, activity_id):
             value=sessions[0].get(field)
             if metric not in scores and isinstance(value,(int,float)) and not isinstance(value,bool) and math.isfinite(value) and 0<=value<=5:
                 scores[metric]={'value':value,'source_method':'fit_session','source_field':field}
-    parts=[f"Garmin primary benefit: {label_text}." if label_text else 'Primary training benefit is unavailable in the stored source label.']
+    meaning={
+        'AEROBIC_BASE':'This mainly supported your aerobic endurance.',
+        'RECOVERY':'This was recorded as recovery-focused work.',
+        'TEMPO':'This supported sustained aerobic work at a stronger pace.',
+        'LACTATE_THRESHOLD':'This provided threshold-focused training stimulus.',
+        'THRESHOLD':'This provided threshold-focused training stimulus.',
+        'VO2MAX':'This provided high-aerobic training stimulus.',
+        'VO2_MAX':'This provided high-aerobic training stimulus.',
+        'ANAEROBIC_CAPACITY':'This provided an anaerobic training stimulus.',
+        'ANAEROBIC':'This provided an anaerobic training stimulus.',
+        'SPEED':'This was recorded as speed-focused work.',
+        'SPRINT':'This was recorded as sprint-focused work.'}
+    parts=[meaning[label]+f' Recorded focus: {label_text}.' if label_text else 'Primary training benefit is unavailable in the stored source; no label is inferred from the scores.']
     values=[f"{name}: {scores[key]['value']:.1f}" for key,name in [('aerobic_training_effect','aerobic effect'),('anaerobic_training_effect','anaerobic effect')] if key in scores]
-    if values: parts.append('Training Effect — '+', '.join(values)+' (0–5).')
-    return {'label':label_text,'source_label':label,'label_source':'garmin_summary' if label_text else None,'scores':scores,'answer':' '.join(parts)}
+    details='Training Effect — '+', '.join(values)+' (0–5).' if values else ''
+    return {'label':label_text,'source_label':label,'label_source':'garmin_summary' if label_text else None,'scores':scores,'answer':' '.join(parts),'score_details':details}
 
 
 def compare_latest_ride(today: date, path=None, timezone_name=None, message='this year'):
@@ -162,7 +174,7 @@ def compare_latest_ride(today: date, path=None, timezone_name=None, message='thi
         delta = ((value / baseline - 1) * 100) if baseline else None
         change = f", {abs(delta):.1f}% {'above' if delta >= 0 else 'below'} the median" if delta is not None else ''
         text=f"{label}: {value:.1f} {unit} vs median {baseline:.1f} {unit}{change} (n={len(values)})."
-        comparisons.append({'metric': field, 'reference': value, 'median': baseline, 'count': len(values), 'unit': unit,'text':text})
+        comparisons.append({'metric': field, 'reference': value, 'median': baseline, 'count': len(values), 'unit': unit,'label':label,'percent_change':delta,'text':text})
     focused=[r for r in comparisons if ('power' in r['metric'] and re.search(r'\bpower\b',message,re.I)) or ('heart_rate' in r['metric'] and re.search(r'\bheart rate\b',message,re.I))]
     if not focused:
         focused=[r for key in ['distance_meters','duration_seconds','average_power'] for r in comparisons if r['metric']==key]
@@ -176,7 +188,7 @@ def compare_latest_ride(today: date, path=None, timezone_name=None, message='thi
     by_metric={r['metric']:r for r in comparisons}
     duration=by_metric.get('duration_seconds');power=by_metric.get('average_power')
     personal=[]
-    if duration and duration['median']>0:
+    if duration and duration['median']>0 and duration['count']>=3:
         ratio=duration['reference']/duration['median']
         personal.append('This was longer than your typical recorded ride' if ratio>1.25 else 'This was shorter than your typical recorded ride' if ratio<.75 else 'The duration was close to your typical recorded ride')
     if power and power['median']>0 and power['count']>=3:
@@ -189,6 +201,24 @@ def compare_latest_ride(today: date, path=None, timezone_name=None, message='thi
     volume=riding_volume_context(rides,reference)
     if volume['interpretation']: lines.append(volume['interpretation'])
     lines.append('Includes all cycling types; route and effort differ, so this alone does not establish fitness improvement.')
+    detailed=bool(re.search(r'\b(details?|all measurements|full breakdown|statistics|stats|training effect|scores?)\b',message,re.I))
+    if detailed:
+        if benefit['score_details']:lines.insert(-1,benefit['score_details'])
+    elif others and comparisons:
+        # Lead with the personal comparison and its meaning. Numerical evidence
+        # remains in the tool payload; ordinary feedback need not recite it all.
+        climb=by_metric.get('elevation_gain_meters')
+        opening=interpretation
+        if not opening:
+            measured=comparisons[0];delta=measured['percent_change']
+            relative=f" ({abs(delta):.1f}% {'above' if delta>=0 else 'below'})" if delta is not None else ''
+            opening=f"{measured['label']} was {measured['reference']:g} {measured['unit']}, compared with {measured['median']:g} {measured['unit']} in the available comparison"+relative+'.'
+        if climb and climb['count']>=3 and climb['median']>0 and climb['reference']>climb['median']*1.25:
+            opening+=' You also took on more climbing than usual.'
+        lines=[opening,f"Compared with {len(others)} other recorded {'ride' if len(others)==1 else 'rides'}, {start.isoformat()}–{end.isoformat()}."]
+        if benefit['label']:lines.append(benefit['answer'])
+        if volume['interpretation']:lines.append(volume['interpretation'])
+        lines.append('Differences in route, conditions and intended effort can affect the comparison; this ride alone does not prove a fitness change.')
     return {'tool': 'compare_latest_ride', 'period': {'start': start.isoformat(), 'end': end.isoformat()},
             'reference_record': {'id': reference['id'], 'name': reference['name'], 'activity_type': reference['activity_type'], 'local_date': reference['local_date'],
                                  'url': f"/api/activities/{reference['id']}"},

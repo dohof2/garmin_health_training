@@ -1,6 +1,6 @@
 # Telegram nutrition and trainer access — implementation plan
 
-Created: 23 October 2026 (Asia/Jerusalem). Status: **planned; no implementation, bot registration, credentials, deployment or external messages performed.**
+Created: 23 October 2026 (Asia/Jerusalem). Updated 26 October: the owner created and paired a bot and reports it working. Local text questions and meal logging/correction through the shared app chat are implemented; live meal-write verification and the remaining B0–B5 scope are open. See the [implementation and setup report](../qa/2026-10-26-telegram-text/REPORT.md). The sections below describe the full intended scope, beyond the delivered increments.
 
 ## 1. Outcome and scope
 

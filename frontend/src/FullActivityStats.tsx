@@ -1,8 +1,8 @@
 import ActivityPlots from './ActivityPlots';
-import {useState, type ReactNode} from 'react';
+import {useEffect,useState, type ReactNode} from 'react';
 
 type Stats = {records: Record<string,unknown>[]; statistics: Record<string,{unit?:string|null}>; total_records:number; original_available:boolean};
-type Detail = {started_at:string; ended_at:string|null; duration_seconds:number|null; distance_meters:number|null; calories_kcal:number|null; elevation_gain_meters:number|null;activity_metrics: {metric_type:string;value:number;unit:string}[];sample_summary:Record<string,number|string|null>};
+type Detail = {data_quality_warnings?:string[];started_at:string; ended_at:string|null; duration_seconds:number|null; distance_meters:number|null; calories_kcal:number|null; elevation_gain_meters:number|null;activity_metrics: {metric_type:string;value:number;unit:string}[];sample_summary:Record<string,number|string|null>};
 type Item = {label:string;value:number|null;unit?:string;duration?:boolean};
 function trainerGroups(detail:Detail, fit:Stats): {title:string;items:Item[]}[] {
   const session=fit.records[0]??{};
@@ -48,21 +48,29 @@ function display(item:Item):string {
   const precision=item.unit==='km'||item.unit==='km/h'||item.unit==='/ 5'?1:item.label==='Intensity factor'?2:0;
   return `${item.value.toLocaleString(undefined,{maximumFractionDigits:precision})} ${item.unit??''}`.trim();
 }
-export default function FullActivityStats({activity,timezone,footer}:{activity:{id:string;name:string|null};timezone:string;footer?:ReactNode}) {
+export default function FullActivityStats({activity,timezone,footer,refreshToken}:{activity:{id:string;name:string|null};timezone:string;footer?:ReactNode;refreshToken?:number}) {
   const [open,setOpen]=useState(false),[data,setData]=useState<{detail:Detail;fit:Stats}|null>(null),[error,setError]=useState(''),[loading,setLoading]=useState(false);
-  async function show(){setOpen(true);if(data||loading)return;setLoading(true);setError('');try{
+  const [retry,setRetry]=useState(0);
+  function show(){setOpen(true);setRetry(value=>value+1);}
+  useEffect(()=>{
+    if(!open)return;
+    const controller=new AbortController();setLoading(true);setError('');
     const base=`/api/activities/${encodeURIComponent(activity.id)}`;
-    const responses=await Promise.all([fetch(`${base}?timezone=${encodeURIComponent(timezone)}`),fetch(`${base}/full-stats?timezone=${encodeURIComponent(timezone)}`)]);
-    if(responses.some(r=>!r.ok))throw new Error('Could not load the full recorded statistics. Please retry.');
-    const [detail,fit]=await Promise.all(responses.map(r=>r.json()));setData({detail,fit});
-  }catch(e){setError(e instanceof Error?e.message:'Could not load statistics');}finally{setLoading(false);}}
+    Promise.all([fetch(`${base}?timezone=${encodeURIComponent(timezone)}`,{signal:controller.signal,cache:'no-store'}),fetch(`${base}/full-stats?timezone=${encodeURIComponent(timezone)}`,{signal:controller.signal,cache:'no-store'})])
+      .then(async responses=>{if(responses.some(r=>!r.ok))throw new Error('Could not load the full recorded statistics. Please retry.');return Promise.all(responses.map(r=>r.json()));})
+      .then(([detail,fit])=>{if(!controller.signal.aborted)setData({detail,fit});})
+      .catch(error=>{if(!controller.signal.aborted)setError(error.message);})
+      .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+    return()=>controller.abort();
+  },[open,activity.id,timezone,refreshToken,retry]);
   return <div className="full-activity-stats">
     <button type="button" aria-expanded={open} onClick={()=>open?setOpen(false):void show()}>{open?'Close details':'More details'}</button>
-    <ActivityPlots activityId={activity.id}/>{open&&<section aria-label={`Training statistics for ${activity.name??'activity'}`}>
+    <ActivityPlots activityId={activity.id} refreshToken={refreshToken}/>{open&&<section aria-label={`Training statistics for ${activity.name??'activity'}`}>
       <h3>{activity.name??'Activity'} · Training summary</h3>
       {loading&&<p role="status">Loading ride statistics…</p>}
       {error&&<p role="alert">{error} <button type="button" onClick={()=>void show()}>Retry</button></p>}
       {data&&<>
+        {data.detail.data_quality_warnings?.map(warning=><p key={warning} role="note" className="training-notice">{warning}</p>)}
         {trainerGroups(data.detail,data.fit).map(group=><div key={group.title}>
           <h4>{group.title}</h4><div className="activity-detail-grid">{group.items.map(item=><div key={item.label}><span>{item.label}</span><strong>{display(item)}</strong></div>)}</div>
         </div>)}

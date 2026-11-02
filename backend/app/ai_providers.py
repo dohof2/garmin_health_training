@@ -16,6 +16,15 @@ AI_PROVIDERS = {"ollama", "openai", "chatgpt"}
 OLLAMA_BASE_URL = "http://127.0.0.1:11434"
 
 
+def shared_allowance_message(error):
+    """Expose a known limit code without returning provider payloads or secrets."""
+    body=getattr(error,'body',None)
+    detail=body.get('error',body) if isinstance(body,dict) else {}
+    if isinstance(detail,dict) and detail.get('code')=='subscription_sharing_usage_limit_exceeded':
+        return 'Your ChatGPT shared assistant allowance has been reached. Wait for its reset, or explicitly choose another configured provider in Settings. No paid fallback was used.'
+    return None
+
+
 class AIProvider(Protocol):
     def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str: ...
 

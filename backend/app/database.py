@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Iterator
 
 from .config import database_path
+from .chat_access import READ_ONLY
 
 
 MIGRATIONS_DIRECTORY = Path(__file__).resolve().parent / "migrations"
@@ -17,10 +18,13 @@ def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
     target = path or database_path()
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    connection = sqlite3.connect(target)
+    connection = sqlite3.connect(f'{target.resolve().as_uri()}?mode=ro', uri=True) if READ_ONLY.get() else sqlite3.connect(target)
     connection.row_factory = sqlite3.Row
     connection.execute("PRAGMA foreign_keys = ON")
-    connection.execute("PRAGMA journal_mode = WAL")
+    if READ_ONLY.get():
+        connection.execute('PRAGMA query_only = ON')
+    else:
+        connection.execute("PRAGMA journal_mode = WAL")
     connection.execute("PRAGMA busy_timeout = 5000")
     try:
         yield connection
@@ -34,6 +38,8 @@ def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
 
 def migrate(path: Path | None = None) -> list[str]:
     """Apply every unapplied SQL migration in filename order."""
+    if READ_ONLY.get():
+        return []
     applied_now: list[str] = []
 
     with connect(path) as connection:
@@ -45,22 +51,27 @@ def migrate(path: Path | None = None) -> list[str]:
             )
             """
         )
-        applied = {
-            row["version"]
-            for row in connection.execute("SELECT version FROM schema_migrations")
-        }
-
-        for migration in sorted(MIGRATIONS_DIRECTORY.glob("*.sql")):
+        migrations=sorted(MIGRATIONS_DIRECTORY.glob('*.sql'))
+        current={row['version'] for row in connection.execute('SELECT version FROM schema_migrations')}
+        if all(migration.name in current for migration in migrations):
+            return []
+        # Read applied versions under the same write lock as schema changes.
+        # Startup requests can call migrate concurrently; executescript would
+        # implicitly release this lock before applying the next migration.
+        connection.execute('BEGIN IMMEDIATE')
+        applied = {row['version'] for row in connection.execute('SELECT version FROM schema_migrations')}
+        for migration in migrations:
             if migration.name in applied:
                 continue
-            escaped_version = migration.name.replace("'", "''")
-            connection.executescript(
-                "BEGIN IMMEDIATE;\n"
-                f"{migration.read_text(encoding='utf-8')}\n"
-                "INSERT INTO schema_migrations(version) "
-                f"VALUES ('{escaped_version}');\n"
-                "COMMIT;"
-            )
+            statement = ''
+            for character in migration.read_text(encoding='utf-8'):
+                statement += character
+                if character == ';' and sqlite3.complete_statement(statement):
+                    connection.execute(statement)
+                    statement = ''
+            if statement.strip():
+                connection.execute(statement)
+            connection.execute('INSERT INTO schema_migrations(version) VALUES(?)', (migration.name,))
             applied_now.append(migration.name)
 
     return applied_now

@@ -41,6 +41,17 @@ def reconcile(c,workouts,tz,now):
     return changes,warnings
 
 
+def reconcile_active(c, now):
+    """Match committed recordings without reviewing or republishing the plan."""
+    program=c.execute("""SELECT a.plan_id,a.state_json FROM active_training_program a
+        JOIN training_plans p ON p.id=a.plan_id
+        WHERE a.id=1 AND a.status='active' AND p.status='active' AND p.deleted_at IS NULL""").fetchone()
+    if not program:return [],[]
+    from .active_training import _program_workouts
+    state=json.loads(program['state_json'])
+    return reconcile(c,_program_workouts(c,program['plan_id']),state.get('timezone','UTC'),now)
+
+
 def benefit_coverage(c,workouts,tz,today,now=None):
     from .ride_comparison import training_benefit
     intended={'endurance':'base','long_endurance':'base','recovery':'recovery','tempo':'tempo','long_tempo':'tempo','climbing_endurance':'base','threshold':'threshold','sprint':'sprint','anaerobic':'anaerobic','vo2':'vo2'}

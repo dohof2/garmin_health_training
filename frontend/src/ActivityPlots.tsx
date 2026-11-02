@@ -4,10 +4,10 @@ type Trace={label:string;unit:string;points:Point[];sample_count:number};
 type Recording={name:string|null;traces:Record<string,Trace>;distance_available:boolean;note:string};
 const colours:Record<string,string>={speed:'#27836b',elevation:'#936d25',power:'#356799',cadence:'#8258b6',heart_rate:'#c44550'};
 const clock=(seconds:number)=>`${Math.floor(seconds/60)}:${String(Math.round(seconds%60)).padStart(2,'0')}`;
-export default function ActivityPlots({activityId}:{activityId:string}){
+export default function ActivityPlots({activityId,refreshToken}:{activityId:string;refreshToken?:number}){
  const [open,setOpen]=useState(false),[data,setData]=useState<Recording|null>(null),[error,setError]=useState(''),[retry,setRetry]=useState(0);
  useEffect(()=>{
-  if(!open||data)return;
+  if(!open)return;
   const controller=new AbortController();setError('');
   void fetch(`/api/activities/${encodeURIComponent(activityId)}/plots`,{signal:controller.signal,cache:'no-store'})
    .then(async response=>{
@@ -17,7 +17,7 @@ export default function ActivityPlots({activityId}:{activityId:string}){
    }).then(result=>{if(!controller.signal.aborted)setData(result);})
    .catch(error=>{if(!controller.signal.aborted)setError(error instanceof Error?error.message:'Activity plots could not be loaded.');});
   return()=>controller.abort();
- },[activityId,open,data,retry]);
+ },[activityId,open,refreshToken,retry]);
  return <><button type="button" aria-expanded={open} onClick={()=>setOpen(!open)}>{open?'Close plots':'Plots'}</button>{open&&<section aria-label="Recorded activity plots"><h3>{data?.name??'Activity'} · Plots</h3>{error&&<p role="alert">{error} <button type="button" onClick={()=>setRetry(value=>value+1)}>Retry plots</button></p>}{!data&&!error&&<p role="status">Loading recorded plots…</p>}{data&&<><p>{data.note}</p>{Object.entries(data.traces).filter(([,t])=>t.sample_count>0).map(([metric])=><TracePlot key={metric} metric={metric} data={data}/>)}{Object.values(data.traces).every(t=>!t.sample_count)&&<p>No recorded sensor samples are available.</p>}</>}</section>}</>;
 }
 function TracePlot({metric,data}:{metric:string;data:Recording}){

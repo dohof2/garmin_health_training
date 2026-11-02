@@ -17,6 +17,13 @@ def normalized(message):
 
 
 def is_adjustment(message):
+    text=normalized(message)
+    # Interpretation of recorded efforts must not trigger a workout edit.
+    analysis = re.search(r'\b(look at|do you see|decline|fade|fading|what does (?:it|that|this) mean|makes? sense|supposed to be|suppoese to be)\b',text)
+    explicit_edit = re.search(r'\b(change|replace|remove|save|apply|reschedule|swap|reduce|increase|set)\b',text)
+    if analysis and not explicit_edit:return False
+    from .strength_adjustments import sets_request
+    if sets_request(message) is not None:return True
     from .workout_format import requested
     from .workout_edits import requested as blocks_requested
     if blocks_requested(message):return True
@@ -41,6 +48,9 @@ def propose(message, path=None, now=None):
     base={'tool':'propose_training_adjustment','kind':'adaptation','status':'needs_input','changes':{},'adjustments':[], 'request':message}
     def answer(status,reason):return {**base,'status':status,'message':reason}
     if not program or program['status']!='active':return answer('needs_input','There is no active plan to change. Activate a plan, or ask for an independent workout today.')
+    from .strength_adjustments import propose as propose_strength_sets
+    strength_sets=propose_strength_sets(message,program,path,now)
+    if strength_sets is not None:return strength_sets
     tz=program['state']['timezone'];today=now.astimezone(ZoneInfo(tz)).date()
     rows=[w for w in active['workouts'] if w['completion_status']=='planned' and w.get('scheduled_date',w['scheduled_for'][:10])>=today.isoformat()]
     weekly=bool(re.search(r'\b(week|weekly|next 7 days)\b',text))
@@ -183,6 +193,10 @@ def save(arguments,path=None,now=None):
             else:c.execute("UPDATE planned_workouts SET completion_status='skipped',revision=revision+1 WHERE id=?",(row['id'],))
             if row['publish_status']!='local':c.execute("UPDATE planned_workouts SET publish_status='update_needed' WHERE id=?",(row['id'],))
             _revision(c,_snapshot(c,row['id']))
+        set_policy=next((item['changes'].get('definition',{}).get('strength_set_policy') for item in proposed['adjustments'] if item['changes'].get('definition',{}).get('strength_set_policy')),None)
+        if set_policy:
+            state=json.loads(program['state_json']);state['strength_set_policy']=set_policy
+            c.execute('UPDATE active_training_program SET state_json=? WHERE id=1',(encoded(state),))
         c.execute('UPDATE active_training_program SET revision=revision+1 WHERE id=1')
         from .training_lifecycle import invalidate
         invalidate(c,program['plan_id'])

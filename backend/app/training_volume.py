@@ -81,9 +81,20 @@ def estimates(c,answers,brief,today,tz):
   if sport=='cycling':increment=cycling_increment(baseline,len(observed),len(tolerance),adverse or answers.get('pain_or_illness',False),load_status,rising,recovery_week)
   estimate=max(20 if sport=='cycling' else 15,round((baseline+increment)*(REDUCTIONS['recovery'] if adverse or elevated else 1)))
   cap,cap_source=optional_cap(answers,sport);effective=min(available,cap if cap is not None else 5040,estimate)
+  explicit_range=answers.get('weekly_caps',{}).get(sport) or {}
+  confirmed_range=explicit_range.get('range_min_minutes') is not None and not adverse and not elevated and not recovery_week and not answers.get('pain_or_illness')
+  # A deliberately confirmed range is a user-chosen allowance, not automatic
+  # growth from elapsed weeks. Recovery/taper reductions still take priority.
+  if confirmed_range:effective=min(available,explicit_range['max_minutes'])
   durations=[row['minutes'] for row in selected if row['date']>=(today-timedelta(days=28)).isoformat()];longs=[minutes for minutes in durations if minutes>=90] if sport=='cycling' else durations
   long_weeks={date.fromisoformat(row['date']).isocalendar()[:2] for row in selected if row['date']>=(today-timedelta(days=28)).isoformat() and row['minutes']>=90}
   long=min(estimate,round(median(longs) if len(longs)>=3 and (sport!='cycling' or len(long_weeks)>=2) else median(durations) if len(durations)>=3 else min(durations+[60 if sport=='cycling' else 30])))
+  # Two long outings in separate weeks support the shorter observed duration;
+  # averaging them could turn one exceptional outing into an excessive target.
+  if sport=='cycling' and len(longs)==2 and len(long_weeks)>=2:
+   long=min(estimate,round(min(longs)))
   if sport=='strength' and not selected:long=min(30,estimate)
   result[sport]={'policy_version':POLICY_VERSION,'estimate_minutes':estimate,'effective_ceiling_minutes':effective,'availability_ceiling_minutes':available,'optional_cap_minutes':cap,'cap_source':cap_source,'baseline_minutes':baseline,'weekly_reference':reference,'increment_minutes':increment,'long_session_minutes':long,'evidence_window':{'start':begin.isoformat(),'end':today.isoformat()},'weeks':weeks,'recorded_activity_count':len(selected),'status':'history_based' if len(observed)>=2 else 'provisional','load':{'status':load_status,'latest':latest,'scope':'overall_mixed_sport','chronic_rising':chronic_rising,'note':'Recorded load is not converted into sport minutes or split between sports.'},'progression':{'maximum_increase_percent':20 if sport=='cycling' else None,'reference':'completed_four_week_average','recovery_week':recovery_week,'requires_recorded_tolerance':True},'factors':{'adverse_feedback':adverse,'tolerated_completions':len(tolerance),'reduction':REDUCTIONS['recovery'] if adverse or elevated else 1},'rationale':'Weekly baseline uses the average of up to four completed seven-day periods, excluding today; unknown weeks are not counted as zero. Available minutes and optional caps are ceilings. Completed sport-specific volume and tolerance determine this provisional estimate; Cycling can add up to 20% above this baseline only with tolerated completions and normal load, never in recovery/taper weeks; elapsed plan weeks alone do not cause growth.'}
+  result[sport]['explicit_weekly_range']=explicit_range if confirmed_range else None
+  if confirmed_range:result[sport]['rationale']+=' The user-confirmed weekly range supplies a separate allowance; the historical estimate remains a reference, not a hidden cap on that explicit instruction.'
  return result

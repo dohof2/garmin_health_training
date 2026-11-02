@@ -200,38 +200,39 @@ def recovery_metrics(payload, day):
     """
     date.fromisoformat(day)
     endpoints = payload.get('endpoints', {})
-    source = 'get_training_readiness'
-    records = endpoints.get(source)
-    if not records:
-        source = 'get_morning_training_readiness'
-        records = endpoints.get(source)
-    if isinstance(records, dict):
-        records = [records]
-    if not isinstance(records, list):
-        return []
+    # Prefer full readiness only when it supplies usable recovery evidence.
+    # A nonempty score-only/malformed response must not suppress morning data.
     candidates = []
-    for row in records:
-        if not isinstance(row, dict) or row.get('calendarDate') != day:
+    for source in ('get_training_readiness','get_morning_training_readiness'):
+        records = endpoints.get(source)
+        if isinstance(records, dict):
+            records = [records]
+        if not isinstance(records, list):
             continue
-        stamp = row.get('timestamp')
-        if not isinstance(stamp, str):
-            continue
-        try:
-            observed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
-        except ValueError:
-            continue
-        if observed.tzinfo is None:
-            continue
-        value = row.get('recoveryTime')
-        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
-                                  or not math.isfinite(value) or value < 0):
-            continue
-        reached_zero = row.get('recoveryTimeChangePhrase') == 'REACHED_ZERO'
-        if reached_zero:
-            value = 0
-        if value is None:
-            continue
-        candidates.append((observed, value, row))
+        for row in records:
+            if not isinstance(row, dict) or row.get('calendarDate') != day:
+                continue
+            stamp = row.get('timestamp')
+            if not isinstance(stamp, str):
+                continue
+            try:
+                observed = datetime.fromisoformat(stamp.replace('Z', '+00:00'))
+            except ValueError:
+                continue
+            if observed.tzinfo is None:
+                continue
+            value = row.get('recoveryTime')
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))
+                                      or not math.isfinite(value) or value < 0):
+                continue
+            reached_zero = row.get('recoveryTimeChangePhrase') == 'REACHED_ZERO'
+            if reached_zero:
+                value = 0
+            if value is None:
+                continue
+            candidates.append((observed, value, row))
+        if candidates:
+            break
     if not candidates:
         return []
     observed, value, row = max(candidates, key=lambda item: item[0])

@@ -13,7 +13,7 @@ from zoneinfo import ZoneInfo
 from .database import connect
 from .time_utils import timezone_info
 
-FORMULA_VERSION = 'readiness-v5'
+FORMULA_VERSION = 'readiness-v7'
 DEFAULTS = {
     'sleep_target_hours': 8.0, 'load_half_life_hours': 36.0,
     'autonomic_weight': 15.0, 'sleep_weight': 30.0, 'workload_weight': 5.0,
@@ -70,8 +70,15 @@ def _config(connection, values):
 
 
 def get_readiness_settings(path: Path | None = None):
+    from .chat_access import READ_ONLY
     with connect(path) as c:
         row = c.execute('SELECT r.* FROM readiness_configs r JOIN readiness_settings s ON s.config_version=r.version WHERE s.id=1').fetchone()
+        if READ_ONLY.get() and (row is None or row['formula_version'] != FORMULA_VERSION):
+            old = json.loads(row['parameters_json']) if row else {}
+            values = {k:v for k,v in old.items() if k in DEFAULTS and not k.endswith('_weight')}
+            config = parameters(values)
+            version = FORMULA_VERSION + '-' + hashlib.sha256(canonical(config).encode()).hexdigest()[:16]
+            return {'config_version':version,'formula_version':FORMULA_VERSION,'parameters':config,'caution':CAUTION}
         if row is None:
             version = _config(c, {})
             c.execute('INSERT OR IGNORE INTO readiness_settings(id,config_version) VALUES (1,?)', (version,))
@@ -80,7 +87,7 @@ def get_readiness_settings(path: Path | None = None):
             old = json.loads(row['parameters_json'])
             # v5 changes the factor definitions: old 40/35/25 weights cannot
             # be silently reinterpreted. Preserve personal non-weight settings.
-            migrated = {k: v for k, v in old.items() if k in DEFAULTS and not k.endswith('_weight')}
+            migrated = {k: v for k, v in old.items() if k in DEFAULTS and (row['formula_version'] in ('readiness-v5','readiness-v6') or not k.endswith('_weight'))}
             version = _config(c, migrated)
             c.execute('UPDATE readiness_settings SET config_version=? WHERE id=1',(version,))
             row = c.execute('SELECT * FROM readiness_configs WHERE version=?',(version,)).fetchone()
@@ -226,7 +233,7 @@ def _exposure(sessions, cutoff, half_life, coverage, zone):
     return total, covered and not missing, selected, missing
 
 
-def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None, prepared=None):
+def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None, prepared=None, apply_recent_activity_penalty=True):
     """Pure calculation: dates after the observation never enter references."""
     zone = ZoneInfo(zone_name)
     p = parameters(config)
@@ -358,9 +365,47 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
                      'hours_since_end':round((cutoff-s['end']).total_seconds()/3600,2)} for s in selected]})
     inputs['recovery'] = recovery
     recovery_complete = recovery['coverage_complete'] and all(d['remaining_hours'] is not None for d in recovery['sessions'])
+    # Assigned demand latches until completed real sleep, regardless of the
+    # countdown crossing 24 h or the activity aging out of the timer's 96 h view.
+    # Never attribute a pre-workout or future Garmin snapshot to the session.
+    hard_sessions = []
+    from .recovery_estimate import session_recovery
+    for session in sessions:
+        if not apply_recent_activity_penalty:
+            break
+        ended = session.get('end')
+        if not ended or ended > recovery_at:
+            continue
+        slept = any(stamp(r.get('period_start')) and stamp(r.get('period_end'))
+                    and r.get('metric_type') == 'sleep_duration' and r.get('unit') == 's'
+                    and _positive(r.get('value')) and r['value'] <= 86400
+                    and r.get('source_name') != 'projection'
+                    and ended <= stamp(r['period_start']) < stamp(r['period_end']) <= recovery_at
+                    for r in rows)
+        if slept:
+            continue
+        snapshots = [r for r in [*series.get('recovery_time', {}).values(),*coverage.get('high_recovery_observations',[])]
+                     if stamp(r['recorded_at']) and ended <= stamp(r['recorded_at']) <= recovery_at
+                     and r['value'] > 24 * 60]
+        snapshot = max(snapshots, key=lambda r: r['value']) if snapshots else None
+        demand = session_recovery(session,recovery_at,series,p)
+        assigned = demand.get('assigned_hours', 0.)
+        if snapshot or assigned > 24:
+            hard_sessions.append({'id': demand['id'], 'ended_at': ended.isoformat(),
+                                  'recovery_hours': snapshot['value'] / 60 if snapshot else assigned,
+                                  'source': 'Garmin post-activity snapshot' if snapshot else demand['method']})
+    recent_heavy = bool(hard_sessions)
+    # Fixed user-selected deductions use the assigned hours, never the current
+    # countdown. Multiple unslept sessions use the highest tier once.
+    recent_deduction = max((60 if s['recovery_hours']>48 else 45 if s['recovery_hours']>36 else 35 for s in hard_sessions),default=0)
+    recovery['recent_high_recovery_sessions'] = hard_sessions
+    if recent_heavy:
+        warnings.append('recent_high_recovery_activity_without_sleep')
     group('recovery', p['recovery_weight'],
           [clip(recovery['remaining_hours']/72) if recovery_complete else None],
-          {'remaining_hours':recovery['remaining_hours'], 'estimated':True})
+          {'remaining_hours':recovery['remaining_hours'], 'estimated':True,
+           'normal_budget':p['recovery_weight'], 'assigned_recovery_hours':max((s['recovery_hours'] for s in hard_sessions),default=None),
+           'recent_heavy_penalty':recent_heavy, 'activity_deduction':recent_deduction, 'qualifying_activity_ids':[s['id'] for s in hard_sessions]})
     # Sleep debt/quality history is averaged separately from last night's sleep.
     recent_q = [reading('sleep_score', i) for i in range(3)]
     recent_q = [r for r in recent_q if r]
@@ -391,6 +436,13 @@ def calculate(day, zone_name, rows, activity_rows, coverage, config, *, now=None
     for key_name in ('penalty_min','penalty_max'):
         groups[2][key_name] = round(max(0.,groups[2][key_name]-load_credit),2)
     groups[2]['overlap_credit'] = round(load_credit,2)
+    # The user's post-activity tier is additional fatigue, independent of the
+    # regular recovery factor and its workload/sleep overlap credits.
+    if recent_deduction:
+        group('post_activity',recent_deduction,[1.],{
+            'assigned_recovery_hours':max(s['recovery_hours'] for s in hard_sessions),
+            'qualifying_activity_ids':[s['id'] for s in hard_sessions],
+            'description':'Additional post-activity deduction, latched until completed sleep; forecasts exclude it.'})
     lower = max(0,round(100-sum(g['penalty_max'] for g in groups)))
     upper = min(100,round(100-sum(g['penalty_min'] for g in groups)))
     ready = all(g['complete'] for g in groups)
@@ -437,6 +489,9 @@ def _load(c, start, end):
     for r in c.execute("SELECT calendar_date,payload_json,updated_at FROM garmin_sync_payloads WHERE data_type IN ('supplementary_metrics','training_load_history') AND calendar_date BETWEEN ? AND ? ORDER BY updated_at",(start.isoformat(),end.isoformat())):
         walk(json.loads(r['payload_json']),r['calendar_date'],r['updated_at'])
     coverage['load_history'] = anchors
+    # Older running databases may not have applied the new migration yet.
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='recovery_time_observations'").fetchone():
+        coverage['high_recovery_observations']=[dict(r) for r in c.execute('SELECT recorded_at,value,source_name FROM recovery_time_observations WHERE substr(recorded_at,1,10) BETWEEN ? AND ?',((start-timedelta(days=2)).isoformat(),(end+timedelta(days=1)).isoformat()))]
     return rows, activities, coverage
 
 
@@ -454,10 +509,13 @@ def readiness_history(end_date=None, days=14, timezone_name='UTC', path: Path | 
     start = end_date-timedelta(days=days-1)
     with connect(path) as c:
         c.execute('BEGIN')
-        row = c.execute('SELECT * FROM readiness_configs WHERE version=?',(version,)).fetchone()
-        if row is None or row['formula_version'] != FORMULA_VERSION:
-            raise ValueError('Unknown or unsupported readiness formula version')
-        config = json.loads(row['parameters_json'])
+        if version == settings['config_version']:
+            config = settings['parameters']
+        else:
+            row = c.execute('SELECT * FROM readiness_configs WHERE version=?',(version,)).fetchone()
+            if row is None or row['formula_version'] != FORMULA_VERSION:
+                raise ValueError('Unknown or unsupported readiness formula version')
+            config = json.loads(row['parameters_json'])
         lookback = max(84,config['baseline_days']+7,config['load_reference_days']+7)
         rows,activities,coverage = _load(c,start-timedelta(days=lookback),end_date)
     # Observations do not vary between day/sensitivity calculations. Parse retained payloads once.
@@ -492,6 +550,11 @@ def readiness_history(end_date=None, days=14, timezone_name='UTC', path: Path | 
             saved=c.execute('SELECT id,calculated_at FROM readiness_calculations WHERE calendar_date=? AND timezone=? AND config_version=? AND input_hash=?',(result['date'],timezone_name,version,digest)).fetchone()
             if saved:result.update(calculation_id=saved['id'],calculated_at=saved['calculated_at'],cache_status='stored')
             else:pending.append((result,digest,canonical(result)))
+    from .chat_access import READ_ONLY
+    if pending and READ_ONLY.get():
+        for result,_,_ in pending:
+            result.update(calculation_id=None,calculated_at=now.isoformat(),cache_status='not_stored')
+        pending=[]
     if pending:
         try:
             with connect(path) as c:

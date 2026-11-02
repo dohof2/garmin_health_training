@@ -41,12 +41,39 @@ def history(path=None):
     with connect(path) as c:
         ids=[r[0] for r in c.execute("SELECT id FROM garmin_publication_jobs WHERE status!='preview' ORDER BY created_at DESC LIMIT 20")]
         pending=[dict(r) for r in c.execute("SELECT id,title,completion_status FROM planned_workouts WHERE publish_status='update_needed'")]
-    return {'jobs':[view(identifier,path) for identifier in ids],'pending_updates':pending}
+        local=[dict(r) for r in c.execute("""SELECT w.id,w.title,w.sport,w.scheduled_for,w.definition_json
+            FROM planned_workouts w JOIN training_plans p ON p.id=w.training_plan_id
+            WHERE w.publish_status='local' AND w.completion_status='planned'
+              AND p.deleted_at IS NULL AND p.status IN ('active','accepted')
+              AND NOT EXISTS (SELECT 1 FROM garmin_publication_items i JOIN garmin_publication_jobs j ON j.id=i.job_id WHERE i.workout_id=w.id AND j.status!='preview')
+            ORDER BY w.scheduled_for,w.id LIMIT 21""")]
+    for row in local:
+        reasons=[]
+        try:
+            definition=json.loads(row.pop('definition_json'))
+            if row['sport']=='strength':
+                from .garmin_strength import mapping_blockers
+                reasons=mapping_blockers(definition)
+            if not reasons:workout_payload(definition,'local-eligibility-check')
+        except (ValueError,TypeError,KeyError,AttributeError) as error:reasons=[str(error)]
+        row.update(state='blocked' if reasons else 'not_queued',blocked_reasons=reasons,
+                   message='No approved publication job exists for this session. A local plan is not a Garmin send.')
+    return {'jobs':[view(identifier,path) for identifier in ids],'pending_updates':pending,'local_workouts':local}
 
 
 def preview(arguments,path=None,client_factory=load_client,now=None):
     now=now or utcnow();tz=arguments.get('timezone') or 'UTC';ZoneInfo(tz)
     identifiers=arguments.get('workout_ids') or [];definition=arguments.get('definition')
+    if arguments.get('next_workouts') is not None:
+        if type(arguments['next_workouts']) is not int or arguments['next_workouts']!=7 or identifiers or definition:raise ValueError('Choose the next seven saved workouts without explicit IDs or a standalone definition')
+        from .rolling_publication import window
+        from .active_training import review
+        review(path,tz,now,trigger='manual')
+        with connect(path) as c:
+            program=c.execute("SELECT plan_id FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+            if not program:raise ValueError('Activate a program before publishing its next workouts')
+            identifiers=window(c,program['plan_id'],tz,now,include_pending=False)
+        if not identifiers:return {'status':'blocked','blocked':[],'items':[],'message':'There are no upcoming planned workouts to publish.'}
     if not isinstance(identifiers,list) or len(identifiers)>21 or len(set(identifiers))!=len(identifiers):raise ValueError('Choose up to 21 distinct saved sessions')
     if bool(identifiers)==bool(definition):raise ValueError('Choose saved sessions or one standalone workout')
     schedule=arguments.get('schedule',True)
@@ -73,7 +100,7 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
         with connect(path) as c:
             program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
             if not program:raise ValueError('Activate a program before enabling rolling publication')
-            if set(identifiers)!=set(window(c,program['plan_id'],tz,now,include_pending=False)):raise ValueError('Review the whole next-seven-day window before enabling automatic publication')
+            if set(identifiers)!=set(window(c,program['plan_id'],tz,now,include_pending=False)):raise ValueError('Review the next seven workouts before enabling daily automatic publication')
             rolling_root=program['plan_id']
     candidates=[]
     for snapshot in snapshots:
@@ -105,7 +132,7 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
             c.execute('INSERT INTO garmin_publication_items(id,job_id,account_key,identity_key,workout_id,workout_revision,snapshot_json,payload_json,payload_hash,scheduled_date,action,remote_workout_id,remote_schedule_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (str(uuid.uuid4()),job_id,key,snapshot['identity'],snapshot['workout_id'],snapshot['revision'],encoded(snapshot),encoded(payload),payload_hash,target_date,action,link['remote_workout_id'] if link else None,link['remote_schedule_id'] if link else None))
         if not c.execute('SELECT 1 FROM garmin_publication_items WHERE job_id=?',(job_id,)).fetchone():raise ValueError('These sessions are not scheduled in Garmin; nothing needs sending or removing.')
-    return {**view(job_id,path),'blocked':blocked,'message':'Review exactly what will be sent. Garmin has not been changed.'+(' Approving also enables automatic maintenance of this program’s next seven days on app sync, including app-managed workout updates and calendar moves/removals. Unrelated Garmin workouts are preserved.' if rolling else '')}
+    return {**view(job_id,path),'blocked':blocked,'message':'Review exactly what will be sent. Garmin has not been changed.'+(' Approving also enables daily publication of this program’s next seven workouts while the app is open with current sync evidence. Existing app-owned workouts are updated instead of duplicated; unrelated Garmin workouts are preserved.' if rolling else '')}
 
 
 def approve(job_id,path=None,client_factory=load_client,now=None):

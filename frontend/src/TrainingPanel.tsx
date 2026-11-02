@@ -38,7 +38,7 @@ function nextMonday(timezone: string) {
   const value = new Date(`${today}T12:00:00Z`); value.setUTCDate(value.getUTCDate() + ((8 - value.getUTCDay()) % 7));
   return value.toISOString().slice(0, 10);
 }
-export default function TrainingPanel({ timezone }: { timezone: string }) {
+export default function TrainingPanel({ timezone, refreshToken }: { timezone: string; refreshToken?:string }) {
   const [context, setContext] = useState<Context | null>(null);
   const [answers, setAnswers] = useState<Answers>(initial);
   const [history, setHistory] = useState<History>({ plans: [], workouts: [] });
@@ -54,6 +54,12 @@ export default function TrainingPanel({ timezone }: { timezone: string }) {
     }).catch(error => { if (active) setMessage(error.message); });
     return () => { active = false; };
   }, []);
+  useEffect(()=>{
+    if(!refreshToken)return;
+    let cancelled=false;
+    Promise.allSettled([api('/api/training?compact=true'),api('/api/training/context')]).then(([historyResult,contextResult])=>{if(cancelled)return;if(historyResult.status==='fulfilled')setHistory(historyResult.value as History);if(contextResult.status==='fulfilled')setContext(contextResult.value as Context);if(historyResult.status==='rejected'||contextResult.status==='rejected')setMessage('Some training context could not refresh. Available updated workout statuses remain visible.');});
+    return()=>{cancelled=true;};
+  },[refreshToken]);
   const perform = async (action: () => Promise<void>) => {
     setBusy(true); setMessage(null);
     try { await action(); } catch (error) { setMessage(error instanceof Error ? error.message : "Training change failed."); }
@@ -65,11 +71,11 @@ export default function TrainingPanel({ timezone }: { timezone: string }) {
     setEditing(workout); setEdit({ template_id: workout.definition.template_id, duration_minutes: workout.definition.duration_minutes, completion_status: workout.completion_status, effort: workout.feedback?.effort?.toString() ?? "", soreness: workout.feedback?.soreness?.toString() ?? "", pain_or_illness: Boolean(workout.feedback?.pain_or_illness), notes: workout.feedback?.notes ?? "", activity_id: workout.feedback?.activity_id ?? "" });
   };
   return <SortableCards id="training:cards" className="training-panel" pageSections>
-    <section><h2>Training coach</h2><p>Use the chat in the overview for coaching, plan changes and ride follow-ups.</p><button type="button" onClick={()=>window.dispatchEvent(new CustomEvent('open-unified-chat',{detail:{role:'trainer'}}))}>Open training chat in overview</button></section>
+    <section><h2>Training coach</h2><p>Use the shared chat for coaching, plan changes and ride follow-ups.</p><button type="button" onClick={()=>window.dispatchEvent(new CustomEvent('open-unified-chat',{detail:{role:'trainer'}}))}>Open training chat</button></section>
     <ActiveTrainingPlan timezone={timezone} revision={JSON.stringify([history.plans.map(p=>[p.id,p.status]),history.workouts.map(w=>[w.id,w.revision])])} onChanged={()=>{void api('/api/training?compact=true').then(setHistory).catch(e=>setMessage(e.message));}} onEdit={id=>{void api('/api/training?compact=true').then((h:History)=>{setHistory(h);const workout=h.workouts.find(w=>w.id===id);if(workout){openEdit(workout);setTimeout(()=>document.getElementById('training-session-editor')?.scrollIntoView({behavior:'smooth',block:'start'}),0);}}).catch(e=>setMessage(e.message));}}/>
     <div className="section-heading"><div><p>Personal training</p><h2 id="training-title">Your training</h2></div></div>
     {message && <p role="status" className="training-message">{message}</p>}
-    <TodayWorkout timezone={timezone}/><GarminPublicationHistory timezone={timezone}/>
+    <TodayWorkout timezone={timezone}/><details className="training-publication-link"><summary>Garmin publication</summary><GarminPublicationHistory timezone={timezone}/></details>
     <TrainingCoachPanel timezone={timezone} week={week} onWeekChange={setWeek} plans={history.plans} onDraftSaved={() => { void api("/api/training?compact=true").then(setHistory).catch(e=>setMessage(e.message)); }} />
     {context && <>
 

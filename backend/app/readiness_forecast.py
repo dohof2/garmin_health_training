@@ -6,7 +6,7 @@ from .database import connect
 from .readiness import _load, _series, _sessions, calculate, get_readiness_settings, stamp
 from .time_utils import timezone_info
 
-VERSION='readiness-forecast-v5'
+VERSION='readiness-forecast-v6'
 KINDS=('hrv_last_night_average','sleep_duration','sleep_score','resting_heart_rate','average_stress')
 
 
@@ -50,7 +50,7 @@ def project(as_of, zone_name, rows, activities, coverage, config, *, prepared_se
     if coverage.get('coverage_end','')>=day.isoformat():projected_coverage['coverage_end']=target.isoformat()
     known_ids={row['id'] for row in known_activities}
     prepared=(_series(available+synthetic,zone),[s for s in sessions if s['id'] in known_ids])
-    result=calculate(target,zone_name,available+synthetic,known_activities,projected_coverage,config,now=wake.astimezone(timezone.utc),prepared=prepared)
+    result=calculate(target,zone_name,available+synthetic,known_activities,projected_coverage,config,now=wake.astimezone(timezone.utc),prepared=prepared,apply_recent_activity_penalty=False)
     return result,inputs,missing
 
 
@@ -92,6 +92,7 @@ def forecast(timezone_name='UTC',path=None,now=None):
     response={'date':(today+timedelta(days=1)).isoformat(),'as_of':now.isoformat(),'timezone':timezone_name,'model_version':VERSION,'config_version':settings['config_version'],
               'status':'insufficient_data','score':None,'range':None,'inputs':inputs,'missing_metrics':missing,'validation':None,
               'assumptions':['No additional workouts before tomorrow morning; only recorded completed workouts are included.',
+                             'The extra until-sleep penalty for an activity assigned over 24 hours recovery is excluded from forecasts; normal recovery demand still applies.',
                              'Projected inputs blend 50% latest measurement, 25% recent-three median and 25% up-to-28-day personal median. Future sleep and stress are assumptions, not measurements.',
                              'Recovery counts down to tomorrow’s assumed wake time; predicted sleep supplies one bounded adjustment. The acute/chronic trajectory evolves both loads toward the 1.3 threshold.',
                              'Today’s incomplete daily RHR and stress are excluded from the completed-day reference. RHR is context only and has no score budget.'],
@@ -122,7 +123,7 @@ def forecast(timezone_name='UTC',path=None,now=None):
         evening=datetime.combine(target-timedelta(days=1),time(23,59),zone).astimezone(timezone.utc)
         actual_at=datetime.combine(target,time(12),zone).astimezone(timezone.utc)
         # Evaluate a morning label, not today's later workouts/current timer.
-        actual=calculate(target,timezone_name,rows,activities,coverage,config,now=actual_at+timedelta(days=1),prepared=prepared)
+        actual=calculate(target,timezone_name,rows,activities,coverage,config,now=actual_at+timedelta(days=1),prepared=prepared,apply_recent_activity_penalty=False)
         if actual['score'] is None:continue
         historical,h_inputs,_=project(evening,timezone_name,rows,activities,coverage,config,prepared_sessions=sessions)
         if historical and historical['score'] is not None:

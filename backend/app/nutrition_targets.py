@@ -86,9 +86,12 @@ def recorded_context(day, path=None):
 
 
 def propose(arguments, day, path=None):
-    allowed = {'goal', 'target_weight_kg', 'age', 'height_cm', 'weight_kg', 'equation_sex', 'activity_factor', 'rate_kg_week', 'special_circumstances'}
+    allowed = {'goal', 'target_weight_kg', 'age', 'height_cm', 'weight_kg', 'equation_sex', 'activity_factor', 'rate_kg_week', 'special_circumstances', 'calories_kcal'}
     if not isinstance(arguments, dict) or set(arguments)-allowed:
         raise ValueError('Unsupported nutrition target inputs')
+    requested_calories = arguments.get('calories_kcal')
+    if requested_calories is not None:
+        number(requested_calories, 'Requested daily calories', 1, 20000)
     data = recorded_context(day, path)
     goal = arguments.get('goal')
     result = {'status': 'needs_input', 'request': arguments, 'effective_from': day, 'context': data, 'questions': [], 'sources': SOURCES, 'saved': False}
@@ -146,8 +149,17 @@ def propose(arguments, day, path=None):
         # Use the requested rate only to make the default gentler, never larger.
         adjustment = (-1 if goal == 'lose_weight' else 1 if goal == 'gain_muscle' else 0)*min(abs(adjustment), rate*7700/7)
     calories = round(max(resting, 1500 if sex == 'male' else 1200, maintenance+adjustment))
+    calculated_calories = calories
     if maintenance < (1500 if sex == 'male' else 1200) or goal == 'lose_weight' and calories >= maintenance:
         return {**result, 'status': 'needs_professional_review', 'questions': ['The maintenance estimate is too low to support an automatic deficit within this planner’s safeguards. Review the measurements and target with a dietitian.']}
+    if requested_calories is not None:
+        # An explicit preference must never be silently replaced by the default.
+        floor = math.ceil(max(resting, 1500 if sex == 'male' else 1200))
+        if requested_calories < floor:
+            return {**result, 'status': 'needs_professional_review', 'questions': [f'You requested {requested_calories:g} kcal/day. That is below this planner’s {floor} kcal lower bound based on the recorded measurements. Review that target with a dietitian, or choose a higher target. Nothing has been saved.']}
+        if goal == 'lose_weight' and requested_calories >= maintenance or goal == 'gain_muscle' and requested_calories <= maintenance:
+            return {**result, 'questions': [f'You requested {requested_calories:g} kcal/day, compared with estimated maintenance of {maintenance:.0f} kcal/day. That points in the opposite direction to your goal. Should we change the goal or calorie target?']}
+        calories = requested_calories
     protein_factor = 1.6 if goal != 'maintain' or (data['activity']['weekly_exercise_minutes'] or 0) >= 150 else 1.2
     protein = round(weight*protein_factor)
     fat = round(calories*.25/9)
@@ -158,6 +170,8 @@ def propose(arguments, day, path=None):
                 'No activity calories are added on top of this target: the maintenance estimate already includes exercise.',
                 'For long or demanding training days, discuss additional fueling rather than chasing a fixed deficit.',
                 'Adult general guidance; pregnancy, breastfeeding and clinician-managed conditions need individualized targets.']
+    if requested_calories is not None and abs(calories-maintenance) > abs(calculated_calories-maintenance):
+        warnings.append(f'Your requested {calories:g} kcal target is more aggressive than the calculated starting target of {calculated_calories} kcal. Review the larger adjustment against recovery, hunger and training needs before saving.')
     if goal == 'gain_muscle':
         warnings.append('A small surplus supports a muscle-gain goal alongside progressive resistance training; scale-weight gain is not all muscle.')
     if not data['weight']['recorded_at'] and not arguments.get('weight_kg'):
@@ -168,6 +182,9 @@ def propose(arguments, day, path=None):
     height_source = 'User supplied correction (cm)' if arguments.get('height_cm') is not None else data['height_source']
     preview = {'effective_from': day, 'calories_kcal': calories, 'protein_grams': protein, 'fat_grams': fat, 'carbohydrate_grams': carbs,
                'assumptions': {'method': 'adaptive_adult', 'goal': goal, 'target_weight_kg': target, 'weight_kg': weight, 'height_cm': height, 'age': age, 'equation_sex': sex, 'resting_kcal': round(resting), 'maintenance_kcal': round(maintenance), 'maintenance_method': method, 'activity_factor': factor, 'garmin_complete_days_used': len(full) if method.startswith('Mean Garmin') else 0, 'adjustment_kcal': calories-round(maintenance), 'protein_g_per_kg': protein_factor, 'fat_energy_percent': 25, 'exercise_policy': 'Exercise is already included. Garmin activity calories are not added again.', 'policy': 'Conservative app defaults: up to 10%/300 kcal deficit or 5%/250 kcal surplus; not a clinical prescription.', 'input_sources': {'height': height_source, 'weight': weight_source, 'activity': data['activity']}, 'sources': SOURCES}, 'warnings': warnings}
+    if requested_calories is not None:
+        preview['assumptions'].update(calorie_target_source='User requested daily calories', requested_calories_kcal=requested_calories, calculated_calories_kcal=calculated_calories)
+        preview['assumptions']['policy'] += ' Explicit user calorie targets are kept when they pass the planner’s lower bound and macro checks; larger adjustments are flagged for review.'
     fingerprint = hashlib.sha256(encoded({'preview': preview, 'revision': data['target_revision'], 'request': arguments}).encode()).hexdigest()
     return {**result, 'status': 'proposal', 'questions': [], 'preview': preview, 'fingerprint': fingerprint, 'expected_revision': data['target_revision']}
 

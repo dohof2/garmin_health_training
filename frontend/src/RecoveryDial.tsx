@@ -11,7 +11,7 @@ export default function RecoveryDial({timezone,refreshToken}:{timezone:string;re
     const controller=new AbortController();setError('');
     void fetch(`/api/readiness?days=1&timezone=${encodeURIComponent(timezone)}`,{signal:controller.signal,cache:'no-store'})
       .then(async response=>{if(!response.ok)throw new Error('Recovery estimate could not be loaded.');return response.json() as Promise<{latest:{formula_version:string;inputs:{recovery?:Recovery}}}>;})
-      .then(data=>{if(!controller.signal.aborted){setRecovery(data.latest.inputs.recovery??null);setOutdated(data.latest.formula_version!=='readiness-v5');}})
+      .then(data=>{if(!controller.signal.aborted){setRecovery(data.latest.inputs.recovery??null);setOutdated(data.latest.formula_version!=='readiness-v7');}})
       .catch(error=>{if(!controller.signal.aborted){setRecovery(null);setError(error.message);}});
     return()=>controller.abort();
   },[timezone,refreshToken,tick]);

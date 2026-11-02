@@ -279,11 +279,11 @@ class ReadinessPersistenceTests(unittest.TestCase):
             c.execute("INSERT INTO readiness_configs(version,formula_version,parameters_json) VALUES('legacy-v3','readiness-v3',?)",(json.dumps(old_parameters),))
             c.execute("INSERT INTO readiness_settings(id,config_version) VALUES(1,'legacy-v3')")
         updated=get_readiness_settings(self.path)
-        self.assertEqual(updated['formula_version'],'readiness-v5')
+        self.assertEqual(updated['formula_version'],'readiness-v7')
         self.assertEqual(updated['parameters']['sleep_target_hours'],9)
         with connect(self.path) as c:self.assertEqual(c.execute("SELECT formula_version FROM readiness_configs WHERE version='legacy-v3'").fetchone()[0],'readiness-v3')
         result=self.history()
-        self.assertEqual(result['latest']['formula_version'],'readiness-v5')
+        self.assertEqual(result['latest']['formula_version'],'readiness-v7')
         self.assertEqual(result['latest']['inputs']['rhr']['wake_date'],DAY.isoformat())
 
     def test_parameter_versions_preserve_old_formula_and_portability(self):

@@ -31,7 +31,7 @@ def history_summary(
                    distance_meters, calories_kcal, source_name, timezone
             FROM activities
             WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
-            ORDER BY started_at DESC
+            ORDER BY julianday(started_at) DESC, started_at DESC, id DESC
             LIMIT 1
             """
         ).fetchone()
@@ -161,7 +161,7 @@ def list_activities(
         FROM activities
         WHERE deleted_at IS NULL AND source_name != 'synthetic_fixture'
     """
-    query += " ORDER BY started_at DESC"
+    query += " ORDER BY julianday(started_at) DESC, started_at DESC, id DESC"
 
     with connect(path) as connection:
         rows = connection.execute(query).fetchall()
@@ -241,6 +241,11 @@ def get_activity(
     ).isoformat()
     result["timezone_used"] = timezone_used
     result["sample_summary"] = dict(samples)
+    peak=result['sample_summary']['maximum_speed_mps']
+    # A review flag, never a replacement value or a physiological speed limit.
+    result['data_quality_warnings']=([
+        f'Recorded sample maximum speed is {peak*3.6:.1f} km/h. This unusually high value needs source/device review; raw samples have been preserved and it should not be used as evidence of improved performance.'
+    ] if peak is not None and peak>150/3.6 and any(kind in result['activity_type'].lower() for kind in ('cycl','bik','run','walk')) else [])
     result['activity_metrics'] = [dict(row) for row in metrics]
     return result
 

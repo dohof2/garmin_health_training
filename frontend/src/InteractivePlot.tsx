@@ -2,7 +2,7 @@ import { memo, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ChartResult } from './GraphCanvas';
 
 const label = (id: string) => id.replace('activity_', 'Activity ').replace('vo2_', 'VO₂ max · ').replaceAll('_', ' ');
-const seriesColours = ['#356799', '#d16b22', '#27836b', '#8258b6', '#ba4768', '#767221', '#397f97', '#6c5060'];
+const seriesColours = ['#2f6fed', '#ad7626', '#27836b', '#8258b6', '#ba4768', '#767221', '#397f97', '#6c5060'];
 const elapsedLabel = (seconds: number) => { const total = Math.max(0, Math.round(seconds)); const minutes = Math.floor(total / 60), remainder = String(total % 60).padStart(2, '0'); return minutes >= 60 ? `${Math.floor(minutes / 60)}:${String(minutes % 60).padStart(2, '0')}:${remainder}` : `${minutes}:${remainder}`; };
 type View = { minX: number; maxX: number; minY: number; maxY: number };
 type Pixel = { x: number; y: number };
@@ -10,7 +10,7 @@ type Pixel = { x: number; y: number };
 function InteractivePlot({ result: originalResult, width, height, onReset, resetAvailable=false }: { result: ChartResult; width: number; height: number; onReset?:()=>void; resetAvailable?:boolean }) {
   const result = useMemo(() => {
     const styles: Record<string,{label:string;colors:string[]}> = {
-      'stream:power': {label:'Power',colors:['#356799','#234b76','#6092bf','#173553']},
+      'stream:power': {label:'Power',colors:['#2f6fed','#234b76','#6092bf','#173553']},
       'stream:speed': {label:'Speed',colors:['#27836b','#185c4c','#50a58e','#123e34']},
       'stream:heart_rate': {label:'Heart rate',colors:['#c44550','#94303d','#dc7580','#6c2330']},
       'stream:cadence': {label:'Cadence',colors:['#8258b6','#61418c','#a284cb','#432b66']},

@@ -56,6 +56,22 @@ class LongRideTargets(unittest.TestCase):
         targets,_,_=self.targets(workouts)
         self.assertEqual(targets,{'4':96})  # 264 - 60 - 60 - 48
 
+    def test_observed_week_replaces_missed_plans_and_reserves_unplanned_actual_rides(self):
+        workouts=rows();workouts[1]['completion_status']='completed'
+        self.estimate['effective_ceiling_minutes']=210
+        self.estimate['long_session_minutes']=99
+        targets,_,_=_cycling_review_targets(workouts,self.answers,self.estimate,date(2026,10,22),TZ,observed_completed_minutes=137)
+        self.assertEqual(targets,{'4':73,'6':0})
+        self.assertEqual(137+sum(targets.values()),210)
+
+    def test_explicit_two_hour_friday_and_raised_allowance_are_honored(self):
+        self.answers['week_schedule'][4]['activities'][0]['min_minutes']=120
+        self.answers['weekly_minutes']['cycling']=330
+        self.estimate.update(effective_ceiling_minutes=330,long_session_minutes=99,explicit_weekly_range={'range_min_minutes':300,'max_minutes':330})
+        targets,_,_=_cycling_review_targets(rows(),self.answers,self.estimate,date(2026,10,22),TZ,observed_completed_minutes=137)
+        self.assertEqual(targets,{'4':120,'6':60})
+        self.assertLessEqual(137+sum(targets.values()),330)
+
     def test_manual_duration_is_not_expanded(self):
         workouts=rows();definition=json.loads(workouts[2]['definition_json'])
         definition.update(duration_minutes=40,user_adjusted=True)
@@ -164,6 +180,20 @@ class PersistedLongRideReview(unittest.TestCase):
         guidance=friday['definition']['duration_guidance']
         self.assertEqual(guidance['allocated_minutes'],84)
         self.assertEqual(guidance['recovery_adjustment']['reasons'],['Recovery concern'])
+
+    def test_future_friday_keeps_long_kind_and_slot_through_volume_reconciliation(self):
+        self.run_review()
+        with connect(self.path) as c:
+            row=next(w for w in _program_workouts(c,self.root) if w['sport']=='cycling' and w['scheduled_for'][:10]=='2026-10-30')
+            d=json.loads(row['definition_json']);d.update(workout_kind='endurance',duration_minutes=90)
+            d.pop('schedule_slot_id',None);d.pop('planning_policy_version',None)
+            c.execute('UPDATE planned_workouts SET definition_json=? WHERE id=?',(encoded(d),row['id']))
+            c.execute('DELETE FROM training_review_gate')
+        self.run_review()
+        with connect(self.path) as c:d=json.loads(_snapshot(c,row['id'])['definition_json'])
+        self.assertEqual(d['workout_kind'],'long_endurance')
+        self.assertEqual(d['schedule_slot_id'],'4')
+        self.assertIn('training_block',d)
 
     def test_weekly_reference_is_stable_within_program_week(self):
         from app.training import training_context

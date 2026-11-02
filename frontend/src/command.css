@@ -1,0 +1,189 @@
+/* Command: white workspace, neutral interface, colour reserved for plotted data. */
+:root { color-scheme: light; --workspace-surface:#fff; --workspace-soft:#fafafa; --workspace-text:#25282c; --workspace-muted:#6b7078; --surface-soft:#fafafa; }
+html, body, #root { background:#fff; color:#25282c; }
+.command-app { --ink:#25282c; --muted:#6b7078; --line:#e8e9ec; --accent:#25282c; --plot-ocean:#2f6fed; --plot-comparison:#ad7626; width:calc(100% - 48px); max-width:1760px; margin:auto; padding:0 0 36px; }
+.command-app [hidden] { display:none !important; }
+.command-app .app-topbar { padding:22px 0 18px; border-bottom:0; }
+.command-app .app-brand { color:var(--ink); font-size:1rem; gap:10px; }
+.command-app .brand-mark { background:#25282c; color:#fff; border-radius:50%; width:38px; height:38px; font-size:1rem; }
+.command-app .brand-subtitle { color:var(--muted); font-size:.73rem; }
+.command-app .connection { color:var(--muted); font-size:.76rem; }
+.command-app .connection > span { background:#525760; box-shadow:none; }
+.command-app .app-navigation { position:static; display:flex; flex-wrap:wrap; gap:6px; padding:0 0 20px; border:0; background:#fff; box-shadow:none; }
+.command-app .app-navigation a { padding:9px 15px; border-radius:999px; border:1px solid transparent; background:#fff; color:var(--muted); font-size:.83rem; }
+.command-app .app-navigation a[aria-current=page] { color:var(--ink); background:#f1f2f3; border-color:#e5e6e9; box-shadow:none; }
+.command-workspace { display:grid; grid-template-columns:minmax(290px,340px) minmax(0,1fr); gap:26px; align-items:start; }
+.command-content, .command-chat { min-width:0; }
+.command-chat { position:sticky; top:16px; }
+.command-app .command-chat .overview-chat { display:flex; flex-direction:column; position:relative; height:calc(100dvh - 32px); max-height:1050px; min-height:540px; padding:20px; margin:0; gap:10px; background:#fff; border:1px solid var(--line); border-radius:24px; box-shadow:0 8px 30px #151a2405; }
+.command-app .assistant-heading { display:flex; flex-wrap:wrap; align-items:start; gap:8px; margin:0; }
+.command-app .assistant-heading p { color:var(--muted); font-size:.68rem; margin:0 0 4px; letter-spacing:0; text-transform:none; }
+.command-app .assistant-heading h2 { font-size:1rem; margin:0; }
+.command-app .assistant-provider { margin:0; padding:0; border:0; background:#fff; color:var(--muted); font-size:.65rem; }
+.command-app .assistant-provider strong { font-size:.68rem; color:var(--ink); }
+.command-app .command-chat label { display:flex; align-items:center; gap:8px; color:var(--muted); font-size:.75rem; }
+.command-app .command-chat label select { flex:1; width:0; }
+.command-app .command-chat .info-popover { position:absolute; right:18px; top:72px; }
+.command-app .command-chat .info-popover + label { padding-right:28px; }
+.command-app .command-chat .info-popover:has(.assistant-privacy) { top:112px; }
+.command-app .command-chat .chat-shell { display:flex; flex-direction:column; flex:1; min-height:0; padding:0; margin:0; border:0; border-radius:0; box-shadow:none; background:#fff; }
+.command-app .chat-messages, .command-app .chat-empty { min-height:0; max-height:none; flex:1; overflow:auto; padding:12px 0; margin:0; overscroll-behavior:contain; }
+.command-app .chat-empty { background:#fff; border:0; border-radius:0; }
+.command-app .chat-empty > strong { display:block; font-size:.9rem; margin:8px 0 12px; }
+.command-app .chat-suggestions { display:flex; flex-wrap:wrap; gap:7px; }
+.command-app .chat-suggestions button { text-align:left; padding:8px 10px; font-size:.73rem; }
+.command-app .chat-message { margin:0 0 12px; padding:12px; background:#f6f6f7; border:0; border-radius:16px; min-height:0; color:var(--ink); overflow-wrap:anywhere; }
+.command-app .chat-message--user { background:#ededee; }
+.command-app .chat-message > p { white-space:pre-wrap; margin:8px 0 0; font-size:.84rem; line-height:1.65; }
+.command-app .chat-message > span { color:var(--muted); font-size:.68rem; }
+.command-app .chat-composer { flex:none; padding:12px 0 0; margin:0; border-top:1px solid var(--line); background:#fff; gap:7px; }
+.command-app .chat-composer > label { font-size:.75rem; }
+.command-app .chat-composer textarea { width:100%; min-height:78px; max-height:160px; border-radius:16px; resize:vertical; }
+.command-app .chat-composer small { font-size:.65rem; color:var(--muted); }
+.command-app .chat-actions { align-items:center; gap:8px; }
+.command-app .chat-actions > span { font-size:.65rem; color:var(--muted); }
+.command-app .command-content > * { margin-top:0; margin-bottom:24px; min-width:0; }
+.command-app .page-heading { display:flex; align-items:center; gap:10px; margin:0 0 22px; padding:8px 0 0; }
+.command-app .page-heading h1 { font-size:1.85rem; line-height:1.2; letter-spacing:-.055em; margin:0; max-width:none; color:var(--ink); }
+.command-app .section-heading { align-items:center; gap:12px; margin:0 0 18px; }
+.command-app .section-heading h2, .command-app .command-content > section > h2 { font-size:1.2rem; letter-spacing:-.025em; line-height:1.4; margin:0; color:var(--ink); }
+.command-app .section-heading p { font-size:.72rem; color:var(--muted); letter-spacing:0; text-transform:none; margin:0 0 4px; }
+.command-app :is(.graph-card,.nutrition-card,.coach-panel,.settings-panel,.maintenance-form,.training-plan,.export-panel,.sync-panel,.sync-settings,.coverage-row,.activity-row,.card-editor,.cards > article,.import-results > article,.goal-editor,.training-editor,.training-panel fieldset,.nutrition-panel fieldset,.nutrition-notice,.nutrition-table,.training-workout,.training-availability > div,.readiness-contributors > div,.course-progress,.evidence-criteria,.maintenance-table,.settings-proposal) { background:#fff; color:var(--ink); border:1px solid var(--line); border-radius:22px; box-shadow:0 6px 22px #151a2404; }
+.command-app :is(.graph-builder,.weight-entry,.readiness-card,.coach-roadmap article,.training-week-card,.nutrition-meal,.training-week,.coach-guidance,.assistant-intro,.assistant-privacy,.plot-analysis,.plot-toolbar,.graph-meta,.graph-heading) { background:#fff; color:var(--ink); border-color:var(--line); }
+.command-app :is(.nutrition-panel,.training-panel,.maintenance-panel,.profile,.settings,.activities,.sync,.foundation) { margin-top:0; padding-top:0; }
+.command-app :is(.intro,.section-intro,.graph-meta,.graph-heading p) { color:var(--muted); font-size:.78rem; line-height:1.6; }
+.command-app button { border:1px solid #e3e4e7; border-radius:999px; background:#fff; color:var(--ink); padding:8px 13px; font-size:.76rem; line-height:1.4; box-shadow:none; }
+.command-app button:hover:not(:disabled) { background:#f2f2f3; color:var(--ink); border-color:#c9ccd1; }
+.command-app button:is([type=submit],.primary-button,.sync-button,.import-action,.primary-export-action) { background:#25282c; color:#fff; border-color:#25282c; padding:10px 17px; }
+.command-app button:is([type=submit],.primary-button,.sync-button,.import-action,.primary-export-action):hover:not(:disabled) { background:#42474e; color:#fff; }
+.command-app button:disabled { opacity:.48; cursor:not-allowed; }
+.command-app :is(a,button,input,select,textarea,summary):focus-visible { outline:2px solid #555b64; outline-offset:3px; }
+.command-app a { color:inherit; }
+.command-app input:not([type=checkbox]):not([type=radio]):not([type=range]), .command-app select, .command-app textarea { background:#fff; color:var(--ink); border:1px solid #e0e2e6; border-radius:13px; font-family:inherit; max-width:100%; min-width:0; }
+.command-app input:is([type=checkbox],[type=radio],[type=range]) { accent-color:#25282c; }
+.command-app :is(h3,h4,strong) { color:var(--ink); }
+.command-app .graph-grid { grid-template-columns:repeat(2,minmax(0,1fr)); gap:20px; }
+.command-app .graph-slot { min-width:0; }
+.command-app .graph-slot--full, .command-app .graph-slot:has(.graph-card--full) { grid-column:1/-1; }
+.command-app .graph-card { padding:20px; height:100%; min-width:0; }
+.command-app .graph-heading { flex-wrap:wrap; }
+.command-app .graph-heading h3 { font-size:1rem; line-height:1.4; }
+.command-app .graph-actions { display:flex; flex-wrap:wrap; gap:7px; }
+.command-app .graph-builder { border:1px solid var(--line); padding:22px; border-radius:22px; margin:18px 0; }
+.command-app .plot-line { stroke:var(--plot-ocean); }
+.command-app .plot-point, .command-app .plot-bar { fill:var(--plot-ocean); }
+.command-app .plot-frame { background:#fff; }
+.command-app .card-drag-handle { border-radius:999px; color:var(--muted); background:#fff; }
+.command-app .nutrition-date-controls { flex-wrap:wrap; }
+.command-app .nutrition-date-picker { display:flex; align-items:center; gap:6px; margin-top:6px; }
+.command-app .nutrition-date-picker input { width:auto; min-width:0; margin:0; }
+.command-app .nutrition-date-picker button { padding:4px 12px; min-height:40px; font-size:24px; line-height:1; }
+.command-app .nutrition-partial-explanation { color:#825119; font-size:.875rem; line-height:1.5; }
+.command-app .nutrition-editor-scroll { overflow-x:auto; margin:16px 0; }
+.command-app .nutrition-editor-table { width:100%; border-collapse:collapse; table-layout:fixed; }
+.command-app .nutrition-editor-table :is(th,td) { border:0; text-align:left; padding:8px 6px; vertical-align:top; }
+.command-app .nutrition-editor-table th { color:var(--muted); font-size:.75rem; font-weight:500; }
+.command-app .nutrition-editor-table th:first-child { width:46%; }
+.command-app .nutrition-editor-table th:nth-child(2) { width:14%; }
+.command-app .nutrition-editor-table th:nth-child(3) { width:14%; }
+.command-app .nutrition-editor-table input,.command-app .nutrition-editor-table select { width:100%; min-width:0; margin:0; padding:8px; border:0; border-radius:8px; background:transparent; box-shadow:none; font-size:.875rem; }
+.command-app .nutrition-editor-table :is(input,select):is(:hover,:focus-visible) { background:#f3f5f7; }
+.command-app .nutrition-editor-table :is(input,select):focus-visible { outline:2px solid #6a94b6; outline-offset:1px; }
+.command-app .nutrition-editor-table small { display:block; padding:0 8px; font-size:.75rem; }
+.command-app .nutrition-editor-actions { white-space:nowrap; }
+.command-app .nutrition-editor-actions button { padding:8px 5px; border:0; box-shadow:none; background:transparent; font-size:.75rem; }
+.command-app .nutrition-editor-actions button:hover { background:#f3f5f7; }
+.command-app .nutrition-editor-details { padding:12px; background:#f7f8fa; border-radius:12px; }
+@media(max-width:650px) { .command-app .nutrition-editor-table { min-width:500px; } }
+.command-app .nutrition-meal { padding:16px; margin:12px 0; }
+.command-app .nutrition-meal h4 { font-size:.9rem; }
+.command-app .nutrition-meal > button { margin:8px 8px 0 0; }
+.command-app :is([role=alert],.preview-data-banner) { color:var(--ink); background:#f5f5f6; border:1px solid #afb3bb; border-left:4px solid #555b64; border-radius:14px; padding:12px; }
+.info-popover { display:inline-flex; vertical-align:middle; }
+.command-app button.info-button { display:inline-grid; place-items:center; width:25px; height:25px; padding:0; border-radius:50%; font-family:Georgia,serif; font-style:italic; font-size:.85rem; flex:none; }
+.info-dialog, .nutrition-delete-dialog { color:#25282c; background:#fff; width:min(520px,calc(100vw - 32px)); max-height:80dvh; padding:24px; margin:auto; border:1px solid #e8e9ec; border-radius:24px; box-shadow:0 24px 100px #11182726; }
+.info-dialog::backdrop, .nutrition-delete-dialog::backdrop { background:#151a2440; backdrop-filter:blur(3px); }
+.info-dialog-heading { display:flex; justify-content:space-between; align-items:center; gap:18px; }
+.command-app .info-dialog-heading h2 { font-size:1.1rem; margin:0; }
+.info-dialog-body { font-size:.9rem; line-height:1.7; }
+.command-app .info-dialog-body :is(.assistant-intro,.assistant-privacy) { padding:0; margin:16px 0 0; font-size:.9rem; }
+@media(min-width:1500px) { .command-workspace { grid-template-columns:360px minmax(0,1fr); gap:32px; } }
+@media(max-width:1180px) { .command-app .graph-grid, .command-app .nutrition-meal-groups { grid-template-columns:1fr; } .command-app .builder-fields { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:850px) { .command-app { width:calc(100% - 28px); } .command-workspace { grid-template-columns:1fr; gap:24px; } .command-chat { position:static; } .command-app .command-chat .overview-chat { height:560px; min-height:0; max-height:75dvh; } .command-app .app-navigation { gap:3px; } .command-app .app-navigation a { padding:8px 11px; } }
+@media(max-width:480px) { .command-app .builder-fields, .command-app .settings-fields { grid-template-columns:1fr; } .command-app .graph-card { padding:14px; } .command-app .graph-actions button { min-height:40px; } .command-app .page-heading h1 { font-size:1.6rem; } }
+.command-app .assistant-provider span, .command-app .assistant-provider--ready span { color:var(--muted); }
+.command-app .chart-line { stroke:var(--plot-ocean); }
+.command-app .chart-mark { fill:var(--plot-ocean); }
+.command-app .chart-trend { stroke:var(--plot-comparison); }
+.command-app .graph-canvas > .section-heading > div { display:flex; align-items:center; flex-wrap:wrap; gap:8px; }
+.command-app .graph-canvas > .section-heading > div > p { flex-basis:100%; }
+.command-app .readiness-modal { background:#fff; color:var(--ink); border:1px solid var(--line); border-radius:24px; }
+.command-app .readiness-info-button { color:var(--muted); background:#fff; font-family:Georgia,serif; font-style:italic; }
+.command-app .nutrition-panel .section-heading h2 { font-size:1.2rem; }
+.command-app .card-drag-handle { background:#f5f5f6!important; color:#737881!important; border-radius:999px; }
+.command-app .card-drag-handle:focus-visible, .command-app .sortable-card--target { outline-color:#555b64; }
+.command-app .command-content > .sortable-card:has(> .card-drag-handle) { padding-top:32px; }
+.command-app .graph-slot > .graph-card { padding-top:38px; }
+.command-app .graph-slot > .card-drag-handle { top:10px; left:14px; }
+.command-app :is(.assistant-intro,.assistant-privacy,.training-notice,.nutrition-notice,.settings-notice,.readiness-compact-meta,.card-number) { color:var(--muted); }
+/* Leave room for the top navigation so the composer is visible on first load. */
+.command-app .command-chat .overview-chat { height:calc(100dvh - 196px); min-height:400px; max-height:calc(100dvh - 32px); }
+@media(max-width:850px) { .command-app .command-chat .overview-chat { height:560px; min-height:0; max-height:75dvh; } }
+@media(max-height:650px) and (min-width:851px) { .command-app .command-chat .overview-chat { min-height:320px; } }
+/* Workout cards are content panels, so they do not inherit pill button shapes. */
+.command-app .training-week { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.command-app .training-week > .training-day-card { border:1px solid var(--line); border-radius:22px; padding:14px; }
+.command-app button.workout-day { border-radius:16px; border:1px solid var(--line); padding:16px 12px; min-height:210px; background:#fff; color:var(--ink); }
+.command-app button.workout-day:hover { background:#f7f7f8; }
+.command-app button.workout-day.workout-day--completed { border-color:#c9cdd3; background:#f5f5f6; }
+.command-app button.workout-day[aria-expanded=true] { outline:2px solid #555b64; }
+.command-app .workout-completion-icon { color:var(--ink); }
+.command-app .dashboard-nutrition { padding:22px; margin:0 0 24px; border:1px solid var(--line); border-radius:24px; background:#fff; }
+.dashboard-nutrition-heading { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:20px; }
+.command-app .dashboard-nutrition-heading h2 { display:flex; align-items:center; gap:8px; font-size:1.15rem; margin:0; }
+.dashboard-nutrition-heading a { font-size:.78rem; text-decoration:none; }
+.nutrition-calorie-label { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:8px; margin-bottom:10px; font-size:.85rem; }
+.nutrition-calorie-label > span { color:var(--muted); }
+.nutrition-calorie-track { height:12px; border-radius:999px; background:#eff1f4; overflow:hidden; }
+.nutrition-calorie-track > div { height:100%; border-radius:inherit; background:var(--plot-ocean); transition:width .25s ease; }
+.nutrition-macro-dials { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:14px; margin-top:20px; }
+.nutrition-mini-dial { display:flex; flex-direction:column; align-items:center; min-width:0; gap:4px; }
+.nutrition-mini-dial svg { width:90px; max-width:100%; height:auto; }
+.nutrition-mini-dial circle { fill:none; stroke-width:8; }
+.nutrition-dial-track { stroke:#eff1f4; }
+.nutrition-dial-value { stroke:var(--plot-ocean); stroke-linecap:round; }
+.nutrition-mini-dial text { fill:var(--ink); font:600 19px system-ui; }
+.nutrition-mini-dial .nutrition-dial-unit { font-size:12px; font-weight:400; }
+.nutrition-mini-dial > strong { font-size:.8rem; }
+.nutrition-mini-dial > span, .nutrition-summary-note { color:var(--muted); font-size:.72rem; }
+@media(max-width:1180px) { .command-app .training-week { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:480px) { .command-app .training-week { grid-template-columns:1fr; } .command-app .dashboard-nutrition { padding:16px; } .nutrition-macro-dials { gap:6px; } }
+/* Keep the chat surface for messages; occasional controls live in one menu. */
+.command-app .simple-chat-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; padding-bottom:10px; border-bottom:1px solid var(--line); }
+.command-app .simple-chat-heading h2 { margin:0; font-size:1rem; }
+.command-app .chat-options { position:relative; padding:0; margin:0; border:0; background:#fff; }
+.command-app .chat-options > summary { display:grid; place-items:center; list-style:none; cursor:pointer; width:30px; height:30px; border-radius:50%; font-size:1.5rem; line-height:1; color:var(--muted); }
+.command-app .chat-options > summary::-webkit-details-marker { display:none; }
+.command-app .chat-options > summary:hover { background:#f2f2f3; }
+.command-app .chat-options-panel { position:absolute; top:38px; right:0; z-index:8; width:250px; max-width:calc(100vw - 90px); display:flex; flex-direction:column; gap:14px; padding:18px; border:1px solid var(--line); border-radius:18px; background:#fff; box-shadow:0 12px 40px #151a241a; }
+.command-app .chat-options-panel > small, .command-app .chat-provider-detail { font-size:.72rem; color:var(--muted); margin:0; }
+.command-app .command-chat .chat-options .info-popover { position:static; }
+.command-app .chat-options-panel > label { padding:0; flex-direction:column; align-items:stretch; }
+.command-app .chat-options-panel > label select { width:100%; }
+.command-app .simple-chat-empty { display:flex; align-items:center; justify-content:center; text-align:center; }
+.command-app .simple-chat-empty > p { color:var(--muted); font-size:.9rem; }
+.command-app .command-chat .chat-composer { display:flex; flex-direction:column; gap:8px; }
+.command-app .chat-actions { display:flex; justify-content:flex-end; }
+.command-app .chat-actions > span:empty { display:none; }
+.command-app .chat-actions > span:not(:empty) { flex:1; }
+.command-app .chat-setup-notice { color:var(--muted); font-size:.75rem; margin:0; }
+.command-app .visually-hidden { position:absolute!important; width:1px!important; height:1px!important; padding:0!important; margin:-1px!important; overflow:hidden!important; clip-path:inset(50%)!important; white-space:nowrap!important; border:0!important; }
+/* Keep the chat frame; the message input itself has no border. */
+.command-app .chat-composer textarea { border:0; background:#f6f6f7; box-shadow:none; }
+/* Focus stays quiet while typing: no enclosing ring around the message field. */
+.command-app .chat-composer textarea:focus,
+.command-app .chat-composer textarea:focus-visible { outline:none; box-shadow:none; background:#f0f0f2; }
+.command-app .training-publication-link { margin:16px 0 24px; border:0; padding:0; background:#fff; }
+.command-app .training-publication-link > summary { display:inline-block; cursor:pointer; color:var(--muted); font-size:.82rem; text-decoration:underline; text-underline-offset:3px; list-style:none; }
+.command-app .training-publication-link > summary::-webkit-details-marker { display:none; }
+.command-app .training-publication-link[open] > summary { margin-bottom:18px; color:var(--ink); }

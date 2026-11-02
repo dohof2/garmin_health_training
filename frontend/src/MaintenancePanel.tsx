@@ -1,3 +1,4 @@
+import InfoPopover from './InfoPopover';
 import SortableCards from './SortableCards';
 import {coalescedFetch} from './request';
 import { useEffect, useRef, useState } from "react";
@@ -135,7 +136,7 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
   return <SortableCards id="maintenance:cards" className="maintenance" pageSections>
     <div className="section-heading"><div><p>Maintenance and replacements</p><h2 id="maintenance-title">Keep your equipment history</h2></div>
       <a className="export-link" href="/api/maintenance/export.csv">Export current history CSV</a></div>
-    <p>Log completed work here or in chat. Equipment labels are created as needed. Costs and manual usage are optional.</p>
+    <InfoPopover title="Equipment history"><p>Log completed work here or in chat. Equipment labels are created as needed. Costs and manual usage are optional.</p></InfoPopover>
     {message && <p role="status" className="maintenance-message">{message}</p>}
     {lastAction && <button type="button" disabled={busy} onClick={() => void perform(async () => {
       await mutate(`/api/maintenance/operations/${encodeURIComponent(lastAction)}/undo`, {}); setLastAction(null); setRevisions(null);

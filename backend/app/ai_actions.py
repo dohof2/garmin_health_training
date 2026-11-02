@@ -84,7 +84,14 @@ def get_training_context(arguments: dict[str, object], path: Path | None = None)
     from .training import training_context
     settings = get_settings(path)
     from .active_training import read_active
+    from .training_load_focus import read_load_focus
+    from datetime import datetime,timezone
+    from .time_utils import timezone_info
+    tz=arguments.get('timezone') or 'UTC'
+    with connect(path) as c:
+        focus=read_load_focus(c,datetime.now(timezone.utc).astimezone(timezone_info(tz)).date())
     from .training_coach import read_brief
     return {'active_plan':read_active({},path),'tool': 'get_training_context', 'profile': settings['profile'], 'goals': settings['goals'],
             'training': training_context(path),'coaching_brief':read_brief(path),
+            'load_focus':focus,'cycling_ability':{'status':'unavailable','reason':'No verified Cycling Ability source mapping is available; load-focus ranges are not ability scores.'},
             'limitations': ['User goals are context, not evidence of the intent of a particular session. Draft and save training preferences in the Training screen; the assistant does not change the schedule.']}

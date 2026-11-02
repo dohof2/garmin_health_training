@@ -12,7 +12,7 @@ type Group = {
   exposure?: number; reference_mornings?: number; percentile?: number | null;
   sessions?: Array<{ id: string; ended_at: string; load: number | null; hours_since_end: number }>;
   missing_activity_ids?: string[];
-  remaining_hours?:number;overlap_credit?:number;days?:number;average?:number|null;
+  recent_heavy_penalty?:boolean;activity_deduction?:number;remaining_hours?:number;overlap_credit?:number;days?:number;average?:number|null;
 };
 type Result = {
   date: string; cutoff: string; status: string; score: number | null; band: string | null;
@@ -27,6 +27,7 @@ type Response = {
   latest: Result; trend: Result[]; settings: { parameters: Record<string, number> }; reconstruction: string;
 };
 const flags: Record<string, string> = {
+  recent_high_recovery_activity_without_sleep: "An activity was assigned over 24 hours of recovery, with no completed sleep afterward. The full deduction remains even when the countdown falls below 24 hours.",
   stress_history_insufficient: "At least two completed days of recent stress observations are needed.",
   recovery_coverage_incomplete: "Recovery demand has incomplete activity coverage or session evidence; the score remains a range.",
   load_ratio_baseline_unstable: "Recent inactivity or a small chronic baseline makes ratio timing unreliable; individual session demand remains visible.",
@@ -45,7 +46,7 @@ const flags: Record<string, string> = {
   morning_observation_not_finished: "The morning cutoff has not passed yet. Check again after your recorded sleep ends.",
   band_sensitive_to_provisional_parameters: "Reasonable changes to the prototype parameters change this day's band. Treat the band cautiously.",
 };
-const titles: Record<string, string> = { autonomic: "HRV status", sleep: "Last night's sleep", workload: "Load trend", recovery:"Estimated recovery demand",sleep_history:"Sleep history",stress:"Stress history" };
+const titles: Record<string, string> = { autonomic: "HRV status", sleep: "Last night's sleep", workload: "Load trend", recovery:"Estimated recovery demand",post_activity:"Post-activity fatigue",sleep_history:"Sleep history",stress:"Stress history" };
 const labels: Record<string, string> = {
   sleep_target_hours: "Sleep target (hours)", load_half_life_hours: "Load half-life (hours)",
   autonomic_weight: "HRV budget (RHR is context only)", sleep_weight: "Sleep budget", workload_weight: "Load trend budget",
@@ -136,10 +137,10 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
   const rhr=result?.inputs.rhr_selection?result.inputs.rhr:result?.inputs.rhr??result?.inputs.rhr_previous_day;
   const rhrSelection=result?.inputs.rhr_selection;
   const rhrLabel=rhrSelection?.kind==='same_day'?'Same-day resting heart rate':rhrSelection?.kind==='projected'?'Projected resting heart rate':rhrSelection?.kind==='missing'?'Resting heart rate unavailable':'Previous-day resting heart rate (fallback)';
-  if(result&&result.formula_version!=='readiness-v5')return <section className="readiness-today"><h3>Readiness update ready</h3><p>Quit and reopen the app to load the new readiness calculation and forecast.</p></section>;
+  if(result&&result.formula_version!=='readiness-v7')return <section className="readiness-today"><h3>Readiness update ready</h3><p>Quit and reopen the app to load the new readiness calculation and forecast.</p></section>;
   return <>
     <div className="readiness-overview"><section className="readiness-today" aria-label={selectedDate===today?"Today’s measured readiness":"Selected day’s measured readiness"}>
-    <div className="readiness-card-heading"><h3 className="readiness-day-title">{selectedDate===today?"Today’s readiness":"Recorded readiness"}</h3><button type="button" className="readiness-info-button" aria-label="Explain today's readiness" onClick={()=>setExplanation('today')}>!</button></div>
+    <div className="readiness-card-heading"><h3 className="readiness-day-title">{selectedDate===today?"Today’s readiness":"Recorded readiness"}</h3><button type="button" className="readiness-info-button" aria-label="Explain today's readiness" onClick={()=>setExplanation('today')}>i</button></div>
     <p className="readiness-compact-meta">{selectedDate} · App estimate</p>
     {result ? <StatusDial
       value={result.score !== null ? String(result.score) : result.score_range ? `${result.score_range.low}–${result.score_range.high}` : '—'}
@@ -154,7 +155,7 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
     </section>
     {forecastError&&<p role="alert">{forecastError}</p>}
     {forecast&&selectedDate===today&&!loading&&<section className="readiness-forecast" aria-label="Tomorrow’s projected training readiness">
-      <div className="readiness-card-heading"><h3 className="readiness-day-title">Tomorrow’s forecast</h3><button type="button" className="readiness-info-button" aria-label="Explain tomorrow's forecast" onClick={()=>setExplanation('forecast')}>!</button></div>
+      <div className="readiness-card-heading"><h3 className="readiness-day-title">Tomorrow’s forecast</h3><button type="button" className="readiness-info-button" aria-label="Explain tomorrow's forecast" onClick={()=>setExplanation('forecast')}>i</button></div>
       <p className="readiness-compact-meta">{forecast.date} · Projection</p>
       {forecast.score!==null ? <StatusDial value={String(forecast.score)} unit="/ 100 · forecast" bands={readinessBands} position={forecast.score/100} interpretation={forecast.score<50?'Projected recovery focus':forecast.score<80?'Projected ready with care':'Projected favorable recovery signals'}/> : <p>{forecast.reason??'Not enough history to project tomorrow.'}</p>}
       {forecast.range&&<p className="readiness-compact-meta">Expected range: <strong>{forecast.range.low}–{forecast.range.high} / 100</strong></p>}
@@ -206,6 +207,7 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
             <small>Maximum {group.budget} points</small>
             {!!group.overlap_credit&&<small>{group.overlap_credit.toFixed(1)} points of overlapping evidence removed.</small>}
             {group.name==='recovery'&&<small>{group.remaining_hours?.toFixed(1)} estimated hours remaining; individual demand and load settling are combined using the longer window.</small>}
+            {group.name==='recovery'&&group.recent_heavy_penalty&&<small>Additional {group.activity_deduction}-point post-activity deduction until recorded sleep, on top of the normal recovery factor. Countdown changes do not clear it.</small>}
             {group.name==='stress'&&<small>{group.days} completed days · average {group.average?.toFixed(1)??'unavailable'} / 100.</small>}
             {group.name === "autonomic" && <small>Baseline {group.baseline_start}–{group.baseline_end}: {group.hrv_baseline?.count ?? 0} HRV nights, {group.rhr_baseline?.count ?? 0} RHR days. HRV {result.inputs.hrv?.value ?? "missing"} ms; {rhrLabel} {rhr?.value ?? "missing"} bpm{rhr?.wake_date?` · ${rhr.wake_date}`:""}{rhrSelection?.provisional?" · provisional":""}.</small>}
             {group.name === "sleep" && <small>{result.inputs.sleep ? (result.inputs.sleep.value / 3600).toFixed(1) : "Missing"} hours against {group.target_hours} hour target; quality {result.inputs.sleep_score?.value ?? "missing"} / 100.</small>}

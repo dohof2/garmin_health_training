@@ -190,11 +190,11 @@ def roadmap(b,week_start,answers):
         start=week_start+timedelta(weeks=i)
         recovery=(i+1)%4==0
         phase='Establish consistency' if i<2 else 'Consolidate' if i>=n-2 else 'Build specificity'
-        focus={'ftp':'One controlled cycling interval session when experience, workload and recovery permit; easy rides around it.',
+        focus={'ftp':'Aim for two interval rides and one base ride, plus an optional long ride when it fits when workload, recovery and availability permit.',
                'endurance':f"Prioritize a longer conversational {b['goal_sport']} session within confirmed time and volume limits.",
                'race':f"Build {b['goal_sport']} endurance for {b['event_name'] or 'the event'}; review specific demands before selecting workouts.",
                'general':'Maintain manageable, consistent sessions and a mix of the selected sports.'}.get(goal,'Choose a primary goal.')
-        if goal in ('ftp','endurance','race') and phase=='Build specificity':focus+=' Dedicated sprint/anaerobic sessions may replace the weekly quality session after recorded tolerance and recovery checks.'
+        if goal in ('ftp','endurance','race') and phase=='Build specificity':focus+=' Choose threshold, sprint, anaerobic and other interval sessions using recent riding and current Garmin load focus.'
         if b.get('strength_role')=='primary':focus='Prioritize strength development: record actual load, clean repetitions and repetitions in reserve; progress only after tolerated completion. Cycling supports recovery and general aerobic fitness.'
         elif b.get('strength_purpose')=='cycling_support':focus+=' Secondary strength supports squat/hinge/core capacity around key rides.'
         if recovery: phase='Recovery / review';focus='Reduce generated volume and review effort, soreness and completed sessions.'
@@ -210,7 +210,7 @@ def roadmap(b,week_start,answers):
         races=[e for e in b['fixed_events'] if e.get('is_race')]
         if any(start<=date.fromisoformat(e['date'])<=start+timedelta(days=6) for e in races):phase='Race week';focus+=' Prioritize freshness around the fixed race.'
         from .training_prescriptions import cycling_mix
-        objectives={'cycling_mix':cycling_mix(b),'volume_ceiling_minutes':sum(answers.get('weekly_minutes',{}).values()),'long_session_available_minutes':max((a['minutes'] for a in answers.get('availability',[])),default=0),'quality_session_limit':0 if recovery or phase in ('Race week','Freshen up','Post-event recovery') else 1,'progression':'Reassess completed sport-specific work and tolerated feedback; build only within confirmed limits.'}
+        objectives={'cycling_mix':cycling_mix(b),'volume_ceiling_minutes':sum(answers.get('weekly_minutes',{}).values()),'long_session_available_minutes':max((a['minutes'] for a in answers.get('availability',[])),default=0),'quality_session_limit':0 if recovery or phase in ('Race week','Freshen up','Post-event recovery') else 2,'progression':'Reassess completed sport-specific work and tolerated feedback; build only within confirmed limits.'}
         rows.append({'week':i+1,'starts_on':start.isoformat(),'phase':phase,'focus':focus,'objectives':objectives})
     return rows
 
@@ -230,13 +230,13 @@ def _scheduled(day,clock,tz):
     return local.isoformat()
 
 
-def _cycling_allocations(caps,budget,long_slot_id=None):
+def _cycling_allocations(caps,budget,long_slot_id=None,minimums=None):
     """Aim for hour-long regular rides; omit unsupported slots instead of adding leftover fillers."""
     caps={key:int(value) for key,value in caps.items() if value>=20}
-    selected=list(caps);budget=max(0,int(budget))
-    minimum={key:min(60,value) for key,value in caps.items()}
+    minimum={key:(minimums or {}).get(key,min(60,value)) for key,value in caps.items()}
+    selected=[key for key in caps if caps[key]>=minimum[key]];budget=max(0,int(budget))
     if long_slot_id in minimum and caps[long_slot_id]>60:
-        minimum[long_slot_id]=61
+        minimum[long_slot_id]=max(minimum[long_slot_id],61)
     while selected and sum(minimum[key] for key in selected)>budget:
         removable=[key for key in selected if key!=long_slot_id]
         selected.remove(removable[-1] if removable else selected[-1])
@@ -322,7 +322,6 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
     anchors=[e for e in b['fixed_events'] if week_start.isoformat()<=e['date']<=(week_start+timedelta(days=6)).isoformat() and not (e['date']<today.isoformat() and any(json.loads(w['definition_json']).get('event_id')==e['id'] for w in existing))]
     # Adjacent commitments also protect recovery across week boundaries.
     protected={};occupied=set();sessions=[];allocated={s:0 for s in answers.get('sports',[])}
-    hard=False
     for w in active:
         other=datetime.fromisoformat(w['scheduled_for'])
         if not other.tzinfo:
@@ -332,7 +331,6 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
             questions.append('An existing workout has an unknown duration; review it.');continue
         if week_start<=day<=week_start+timedelta(days=6):
             if w['sport'] in allocated: allocated[w['sport']]+=minutes
-            if definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals' or definition.get('fixed_commitment') and 'hard' in definition.get('effort_target',{}).get('description',''): hard=True
         if minutes>=90 or definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals':
             for offset in (-1,1): protected[(day+timedelta(days=offset)).isoformat()]='Recovery around an existing demanding session.'
     for e in b['fixed_events']:
@@ -350,30 +348,35 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
         if e.get('is_race') and e['effort']=='unknown':e['effort']='hard'
         if e['effort']=='unknown': questions.append(f"{e['title']} on {e['date']}: is the expected effort easy, moderate or hard?")
         if e['sport'] not in allocated or e['sport'] in answers.get('blocked_sports',[]): questions.append('The fixed commitment sport must be selected and not excluded.');continue
-        allocated[e['sport']]+=e['duration_minutes'];hard=hard or e['effort'] in ('hard','unknown')
+        allocated[e['sport']]+=e['duration_minutes']
         definition={'version':VERSION,'template_id':'fixed_commitment','sport':e['sport'],'title':e['title'],'duration_minutes':e['duration_minutes'],
                     'fixed_commitment':True,'event_id':e['id'],'distance_km':e.get('distance_km'),'elevation_gain_meters':e.get('elevation_gain_meters'),'is_race':e.get('is_race',False),'duration_estimated':e.get('duration_estimated',False),'effort_target':{'method':'user_reported','description':e['effort']+' effort, as specified by you.'},'rationale':['Preserved fixed commitment; time and duration come from your brief.'],'steps':[{'type':'fixed','duration_seconds':e['duration_minutes']*60,'effort':e['effort']}]}
         if e['start_time'] is None:definition.update(scheduled_date=e['date'],time_unspecified=True,schedule_timezone=tz)
         sessions.append({'sport':e['sport'],'title':e['title'],'scheduled_for':_scheduled(e['date'],e['start_time'],tz),'definition':definition})
     for sport,total in allocated.items():
-        if total>answers.get('weekly_minutes',{}).get(sport,0): questions.append(f"Fixed and existing {sport} sessions total {total} minutes, above the confirmed weekly limit. Review the manageable volume in Training preferences; the trip is not shortened.")
+        if total>answers.get('weekly_minutes',{}).get(sport,0):
+            estimate=context.get('volume_estimates',{}).get(sport,{})
+            cap=estimate.get('optional_cap_minutes')
+            limit='confirmed weekly cap' if cap is not None and total>cap else 'current history/recovery-based allowance'
+            questions.append(f"Fixed and existing {sport} allocations total {total} planned minutes, above the {limit}. Review the available time and recorded workload; these allocations are not measured workout duration, and the trip is not shortened.")
     program_start=date.fromisoformat(b['program_start']) if b['program_start'] else week_start
     phases=roadmap(b,program_start,answers)
     block=next((phase for phase in phases if date.fromisoformat(phase['starts_on'])<=week_start<date.fromisoformat(phase['starts_on'])+timedelta(days=7)),None)
     if block is None:questions.append('The reviewed week is outside the chosen training duration')
     block=block or {'phase':'Outside plan','objectives':{'quality_session_limit':0}}
     reduced=block['phase'] in ('Recovery / review','Freshen up','Post-event recovery','Race week')
-    if block['objectives']['quality_session_limit']==0:hard=True
     from .active_training import capability
     from pathlib import Path
     db_path=Path(c.execute('PRAGMA database_list').fetchone()['file'])
     capacity=capability(db_path,today,tz)
+    focus=capacity['load_focus']
+    if focus['status']=='current':
+        positions=', '.join(f"{category.replace('_',' ')} {values['position']} its recorded range" for category,values in focus['categories'].items())
+        warnings.append(f"Garmin load focus ({focus['date']}): {positions}. Device/account scope is not confirmed as cycling-only; use alongside the goal and recovery, not as a quota or automatic intensity ban.")
+    elif focus['status'] in ('stale','ambiguous'):
+        warnings.append('Garmin load-focus context is '+focus['status']+'; no missing or conflicting category is treated as zero.')
     adverse_feedback=any((f['effort'] or 0)>=8 or (f['soreness'] or 0)>=5 or re.search(r'\b(too hard|exhausted|too tired)\b',f['notes'] or '',re.I) for f in context['recent_feedback'])
-    if adverse_feedback: hard=True;warnings.append('Recent feedback limits added intensity; the coming week stays easy.')
-    if capacity['activity_count']>=6 and capacity['aerobic_effect'] is not None and capacity['aerobic_effect']>=4:
-        hard=True;warnings.append('Recent Garmin aerobic training effects are high; preserve endurance work without adding intensity.')
-    if capacity['activity_count']>=6 and capacity['anaerobic_effect'] is not None and capacity['anaerobic_effect']>=3:
-        hard=True;warnings.append('Recent Garmin anaerobic stimulus is substantial; no additional interval session is added.')
+    if adverse_feedback:warnings.append('Recent feedback limits added intensity; the coming week stays easy.')
 
     for sport_context in capacity.get('sports',[]):
         for observed in sport_context.get('difficulty',{}).get('demanding_sessions',[]):
@@ -400,16 +403,6 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
         legacy=sum(sport==slot['sport'] and not definition.get('schedule_slot_id') for sport,definition in entries)
         peers=slots_for(schedule_days,slot['weekday'],slot['sport']);rank=next((index for index,peer in enumerate(peers) if peer['slot_id']==slot['slot_id']),0)
         return legacy>rank
-    from .training_prescriptions import advanced_cycling_eligible,cycling_quality_kind
-    advanced_ready=advanced_cycling_eligible(c,now,answers.get('experience',{}).get('cycling'),week_index,block['phase'],recovery_context['quality_allowed'] and not hard and not priority_strength)
-    if advanced_ready and cycling_quality_kind(week_index,True,b) in ('sprint','anaerobic'):
-        volume=context['volume_estimates'].get('cycling',{})
-        baseline=int(volume.get('baseline_minutes',cycling_weekly_cap))
-        cycling_weekly_cap=min(cycling_weekly_cap,baseline)
-        answers['weekly_minutes']['cycling']=cycling_weekly_cap
-        context['planning_limits']['cycling']=cycling_weekly_cap
-        context['volume_estimates']['cycling']={**volume,'increment_minutes':0,'estimate_minutes':baseline,'effective_ceiling_minutes':cycling_weekly_cap,'intensity_progression_volume_hold':True}
-        warnings.append('Dedicated sprint/anaerobic work replaces the quality session; cycling volume is held at the recent baseline rather than increased at the same time.')
     # First weekly draft is a starting week; each later draft is reassessed, never automatically intensified.
     if context['ready'] and not questions:
         slots=[{'weekday':row['weekday'],'start_time':None,'minutes':slot['max_minutes'],'priority':index,**slot} for row in schedule_days if row['mode']=='training' for index,slot in enumerate(row['activities'])]
@@ -419,15 +412,21 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
         longest=max((slot['minutes'] for slot in cycling_slots),default=0)
         preferred=[slot for slot in cycling_slots if slot['minutes']==longest]
         long_slot_id=preferred[0]['slot_id'] if len(preferred)==1 else None
-        cycling_caps={}
+        cycling_caps={};cycling_minimums={}
         for candidate in sorted(slots,key=lambda slot:(slot['weekday'],slot['priority'])):
             if candidate['sport']!='cycling':continue
             candidate_day=week_start+timedelta(days=(candidate['weekday']-week_start.weekday())%7)
             if candidate_day<today or candidate_day.isoformat() in occupied or slot_taken(candidate,candidate_day.isoformat()):continue
-            ceiling=min(candidate['minutes'],context.get('volume_estimates',{}).get('cycling',{}).get('long_session_minutes',60),max(0,day_limit(schedule_days,candidate['weekday'])-used_on(candidate_day.isoformat())))
-            if answers.get('experience',{}).get('cycling')=='new' or candidate_day.isoformat() in protected:ceiling=min(ceiling,30)
+            volume=context.get('volume_estimates',{}).get('cycling',{})
+            session_ceiling=volume.get('long_session_minutes',60)
+            if volume.get('explicit_weekly_range') and not reduced and not adverse_feedback:
+                session_ceiling=max(session_ceiling,candidate.get('min_minutes') or 0)
+                if candidate.get('min_minutes'):cycling_minimums[candidate['slot_id']]=candidate['min_minutes']
+            ceiling=min(candidate['minutes'],session_ceiling,max(0,day_limit(schedule_days,candidate['weekday'])-used_on(candidate_day.isoformat())))
+            if answers.get('experience',{}).get('cycling')=='new' or candidate_day.isoformat() in protected:
+                ceiling=min(ceiling,30);cycling_minimums.pop(candidate['slot_id'],None)
             cycling_caps[candidate['slot_id']]=ceiling
-        cycling_targets=_cycling_allocations(cycling_caps,max(0,cycling_weekly_cap-allocated.get('cycling',0)),long_slot_id)
+        cycling_targets=_cycling_allocations(cycling_caps,max(0,cycling_weekly_cap-allocated.get('cycling',0)),long_slot_id,cycling_minimums)
         if len(cycling_targets)<len(cycling_caps):warnings.append('The cycling budget cannot support every available day as a purposeful session; omitted days remain rest rather than receiving leftover minutes.')
         for slot in sorted(slots,key=lambda slot:(slot['slot_id']!=long_slot_id,slot['weekday'],slot['priority'])):
             day=week_start+timedelta(days=(slot['weekday']-week_start.weekday())%7);key=day.isoformat()
@@ -443,7 +442,9 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                 if b['goal']=='race' and b['target_date'] and (date.fromisoformat(b['target_date'])-day).days<=14: minutes=min(minutes,30)
                 template={'cycling':'cycling_easy','running':'running_easy','strength':'strength_foundation','hiking':'hiking_easy','other':'other_easy'}[sport]
                 estimate=context.get('volume_estimates',{}).get(sport,{})
-                minutes=min(minutes,estimate.get('long_session_minutes',slot['minutes']))
+                session_ceiling=estimate.get('long_session_minutes',slot['minutes'])
+                if sport=='cycling' and estimate.get('explicit_weekly_range') and not reduced and not adverse_feedback:session_ceiling=max(session_ceiling,slot.get('min_minutes') or 0)
+                minutes=min(minutes,session_ceiling)
                 if sport=='cycling':minutes=min(minutes,cycling_targets.get(slot['slot_id'],0))
                 if protected_day:minutes=min(minutes,30)
                 if reduced:minutes=min(minutes,30) if sport=='cycling' else round(minutes*.7)
@@ -455,24 +456,17 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                 definition=workout_definition(template,minutes,answers)
                 from .training_prescriptions import endurance, strength
                 if sport=='strength':
-                    try:definition=strength(definition,{**b,'strength_performance':strength_performance},answers,week_index,tolerated)
+                    try:definition=strength(definition,{**b,'strength_performance':strength_performance},answers,week_index,tolerated,now)
                     except ValueError as error:questions.append(str(error));continue
                 elif sport=='cycling':
                     kind='endurance'
-                    long_already=any(s['sport']=='cycling' and s['definition']['duration_minutes']>=90 for s in sessions)
-                    if slot['slot_id']==long_slot_id and minutes>=60 or minutes>=90 and not long_already:
-                        kind='climbing_endurance' if any((e.get('elevation_gain_meters') or 0)>=1000 for e in b['fixed_events']) else 'long_tempo' if tolerated and week_index%3==2 and not hard else 'long_endurance'
-                        if kind=='long_tempo':hard=True
-                    elif long_already:minutes=min(minutes,60)
-                    if slot['slot_id']!=long_slot_id and (b['goal'] in ('ftp','general') or b['goal'] in ('endurance','race') and b['goal_sport']=='cycling') and not priority_strength and answers.get('experience',{}).get(sport,'regular')!='new' and not hard and recovery_context['quality_allowed'] and not slots_for(schedule_days,(day.weekday()+1)%7,'strength') and minutes>=45 and answers['weekly_minutes'][sport]>=120:
-                        kind=cycling_quality_kind(week_index,advanced_ready,b);minutes=min(minutes,60);hard=True
-                        requested_quality=cycling_quality_kind(week_index,True,b)
-                        if requested_quality!=kind:warnings.append(f'{requested_quality.title()} deferred: dedicated advanced work needs the build phase, experienced cycling, two tolerated completed quality sessions and recovery clearance. Controlled short efforts are used instead.')
-                        protected[(day+timedelta(days=1)).isoformat()]='Recovery after a quality cycling session.'
+                    if slot['slot_id']==long_slot_id and minutes>=60:kind='long_endurance'
                     if reduced or protected_day:kind='recovery'
                     from .cycling_variants import select
                     variant,variant_evidence=select(c,kind,today,tz,recovery_context['quality_allowed'] and not reduced)
                     definition=endurance(kind,minutes,b,sport,today=today,variant=variant)
+                    from .training_load_focus import adjust_workout
+                    definition=adjust_workout(definition,focus)
                     definition['variant_selection']=variant_evidence
                     if slot['slot_id']==long_slot_id:definition['rationale'].append('Your longest available cycling day is prioritized for the long ride before allocating shorter rides; history and recovery still cap its duration.')
                     definition['rationale'].append(f'Building-block week {week_index+1}; sustained endurance for the selected event/direction.')
@@ -489,6 +483,19 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                 definition['rationale'].append('Goal: '+GOALS[b['goal']]+'. Fixed commitments count toward the confirmed weekly budget.')
                 if slot['start_time'] is None:definition.update(scheduled_date=key,time_unspecified=True,schedule_timezone=tz)
                 sessions.append({'sport':sport,'title':definition['title'],'scheduled_for':_scheduled(key,slot['start_time'],tz),'definition':definition});allocated[sport]+=minutes;break
+    from .cycling_week import assignments,apply_definition
+    from .readiness import readiness_history
+    from .training_load_charts import daily_rows
+    readiness=readiness_history(today,1,tz,db_path,now=now)['latest']
+    loads=[row for row in daily_rows(db_path) if (today-timedelta(days=2)).isoformat()<=row['date']<=today.isoformat()]
+    recovery_context=recovery_policy(readiness,loads[-1] if loads else None,history_feedback,capacity,today)
+    entries=[{'id':str(i),'sport':s['sport'],'day':datetime.fromisoformat(s['scheduled_for']).astimezone(ZoneInfo(tz)).date(),'definition':s['definition'],'mutable':not s['definition'].get('fixed_commitment')} for i,s in enumerate(sessions)]
+    entries += [{'id':w['id'],'sport':w['sport'],'day':datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date(),'definition':json.loads(w['definition_json']),'mutable':False,'status':w['completion_status']} for w in active]
+    targets,mix_evidence=assignments(c,entries,week_start,today,now,tz,b,block,recovery_context,focus,priority_strength)
+    for i,session in enumerate(sessions):
+        if str(i) in targets:
+            session['definition']=apply_definition(c,session['definition'],targets[str(i)],b,today,tz,focus,mix_evidence)
+            session['title']=session['definition']['title']
     sessions.sort(key=lambda session:session['scheduled_for'])
     for index,session in enumerate(sessions):session['candidate_index']=index
     changes=session_changes or []
@@ -517,7 +524,7 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
             from .training_prescriptions import endurance,strength
             if session['sport']=='strength':
                 base=workout_definition('strength_foundation',minutes,answers)
-                session['definition']=strength(base,b,answers,week_index,tolerated)
+                session['definition']=strength(base,b,answers,week_index,tolerated,now)
             else:session['definition']=endurance(session['definition'].get('workout_kind','endurance'),minutes,b,session['sport'],today=today)
             if 'title' not in change:session['title']=session['definition']['title']
         if 'exercises' in change:
@@ -576,7 +583,7 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
             'protected_days':[{'date':day,'reason':reason} for day,reason in sorted(protected.items()) if week_start.isoformat()<=day<=(week_start+timedelta(days=6)).isoformat()],
             'weekly_minutes':allocated,'capability_context':capacity,'recorded_history':{'start':(today-timedelta(days=28)).isoformat(),'end':today.isoformat(),'note':'Recorded history provides context; it does not automatically increase volume.','sports':[{'activity_type':r['activity_type'],'activity_count':r['activities'],'recorded_minutes':r['minutes'] or 0} for r in recorded]},'expected_preference_revision':context['revision'],
             'fingerprint':fingerprint,'replace_plan_id':replace_plan_id,'replaces_session_count':len(replaceable),
-            'rationale':['Fixed commitments retain their requested date, time and duration.','Generated volume stays within confirmed manageable weekly limits.','Demanding or long commitments protect the surrounding days.','At most one added controlled interval session; a hard fixed commitment uses that slot.','Review the multi-week direction each week using completion, effort and soreness; future readiness is not forecast.'],
+            'rationale':['Fixed commitments retain their requested date, time and duration.','Generated volume stays within confirmed manageable weekly limits.','Demanding or long commitments protect the surrounding days.','Aim for two separated interval rides and one base ride, plus a desirable optional long ride; recorded hard rides and fixed commitments count toward the interval target.','Review the multi-week direction each week using completion, effort and soreness; future readiness is not forecast.'],
             'advisory':'This is a reviewed starting plan. Phase lengths, recovery buffers and interval doses are provisional planning defaults; no FTP improvement or race result is promised.'}
 
 

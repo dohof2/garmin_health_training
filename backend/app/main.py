@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import uuid
+
 from contextlib import asynccontextmanager
 from datetime import date, datetime
 from pathlib import Path
@@ -20,7 +22,7 @@ from .dashboard import dashboard_card_layout, save_dashboard_card_layout
 from .readiness import readiness_history, get_readiness_settings, save_readiness_settings
 from .training import training_context, save_preferences, draft_week, list_training, accept_plan, update_workout, progression_proposal
 from .training_coach import read_brief, save_brief, preview as coach_preview, create_draft as coach_draft, parse_request
-from .nutrition import food_search, preview_meal, save_meal, remove_meal, daily_status, save_library, list_library, scale_library, target_preview, save_target, target_history
+from .nutrition import food_search, preview_meal, save_meal, remove_meal,delete_meal, daily_status, save_library, list_library, scale_library, target_preview, save_target, target_history
 from .food_vision import analyze_photo, analyze_text
 from .database import migrate, schema_status
 from .extended_archive_import import (
@@ -90,7 +92,17 @@ async def lifespan(_: FastAPI):
     recover_interrupted_sync_jobs()
     from .garmin_training_publish import recover
     recover()
-    yield
+    from .telegram_bot import TelegramWorker
+    telegram_worker = TelegramWorker()
+    telegram_worker.start()
+    from .rolling_publication import DailyPublicationWorker
+    publication_worker=DailyPublicationWorker()
+    publication_worker.start()
+    try:
+        yield
+    finally:
+        telegram_worker.stop()
+        publication_worker.stop()
 
 
 app = FastAPI(
@@ -99,8 +111,12 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+from .telegram_routes import router as telegram_router
+app.include_router(telegram_router)
+
 
 class GarminPublicationPreview(BaseModel):
+    next_workouts: int | None = Field(default=None,strict=True,ge=7,le=7)
     enable_rolling: bool = False
     model_config={'extra':'forbid'}
     workout_ids: list[str] = Field(default_factory=list,max_length=21)
@@ -273,6 +289,11 @@ class NutritionLibrarySave(NutritionDraft):
     expected_revision: int | None = Field(default=None, strict=True, ge=1)
 
 
+class NutritionDelete(BaseModel):
+    model_config = {"extra": "forbid"}
+    expected_revision: int = Field(strict=True, ge=1)
+
+
 class NutritionRemoval(BaseModel):
     model_config = {"extra": "forbid"}
     expected_revision: int = Field(strict=True, ge=1)
@@ -285,6 +306,7 @@ class FoodDescription(BaseModel):
 
 
 class NutritionConversation(FoodDescription):
+    operation_id: str = Field(default_factory=lambda:str(uuid.uuid4()),min_length=1,max_length=120)
     day: date
     timezone: str = Field(max_length=100)
     history: list[dict[str, str]] = Field(default_factory=list, max_length=12)
@@ -338,6 +360,11 @@ def nutrition_edit(identifier: str, body: NutritionSave):
     return nutrition_call(save_meal,body.payload,body.operation_id,identifier,body.expected_revision)
 
 
+@app.delete('/api/nutrition/meals/{identifier}')
+def nutrition_delete(identifier: str, body: NutritionDelete):
+    return nutrition_call(delete_meal,identifier,body.expected_revision)
+
+
 @app.patch('/api/nutrition/meals/{identifier}/removed')
 def nutrition_remove(identifier: str, body: NutritionRemoval):
     return nutrition_call(remove_meal,identifier,body.expected_revision,body.removed)
@@ -386,7 +413,7 @@ def nutrition_assistant(body: FoodDescription):
 @app.post('/api/nutrition/chat')
 def nutrition_conversation(body: NutritionConversation):
     from .nutrition_chat import chat
-    return nutrition_call(chat, body.message, body.day.isoformat(), body.timezone, body.history, body.draft_items, body.meal_type, pending_target=body.pending_target, pending_foods=body.pending_foods)
+    return nutrition_call(chat, body.message, body.day.isoformat(), body.timezone, body.history, body.draft_items, body.meal_type, pending_target=body.pending_target, pending_foods=body.pending_foods,auto_log=True,operation_id=body.operation_id)
 
 
 @app.post('/api/nutrition/targets/suggestion/save')
@@ -510,6 +537,8 @@ class AIChatMessage(BaseModel):
 
 
 class AIChatRequest(BaseModel):
+    section_context: list[dict[str, object]] | None = Field(default=None,max_length=2)
+    role_histories: dict[Literal['trainer','assistant','nutrition'], list[AIChatMessage]] | None = None
     chat_role: Literal['auto','trainer','assistant','nutrition'] = 'auto'
     previous_role: Literal['trainer','assistant','nutrition'] | None = None
     nutrition_context: dict[str, object] | None = None
@@ -643,7 +672,9 @@ def ai_chat(payload: AIChatRequest) -> StreamingResponse:
             plot_context=payload.plot_context,
             ride_context=payload.ride_context,
             coaching_context=payload.coaching_context,
+            section_context=payload.section_context,
             chat_role=payload.chat_role,previous_role=payload.previous_role,nutrition_context=payload.nutrition_context,
+            role_histories={role:[item.model_dump() for item in turns] for role,turns in payload.role_histories.items()} if payload.role_histories else None,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},

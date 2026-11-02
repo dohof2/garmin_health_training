@@ -1,4 +1,4 @@
-type Step={name?:string;type:string;effort:string;target?:{type:string;lower:number;upper:number;unit:string};power_reference_fractions?:{lower:number;upper:number}};
+type Step={name?:string;type:string;effort?:string;target?:{type:string;lower:number;upper:number;unit:string};power_reference_fractions?:{lower:number;upper:number}};
 export type FtpReference={watts:number;measurement_date?:string|null;source?:string;status:string;advisory_only:boolean};
 type PowerWorkout={sport?:string;template_id?:string;reference_ftp?:FtpReference;reference_ftp_watts?:number;steps?:Step[];effort_target?:{description:string}};
 
@@ -16,7 +16,7 @@ export function displayPower<T extends PowerWorkout>(definition:T):T {
     const lower=Math.round(ftp*fractions.lower),upper=Math.round(ftp*fractions.upper);changed=true;
     return {...step,target:{type:'power',lower,upper,unit:'W (estimate)'},effort:`${lower}–${upper} W (estimate)`};
   });
-  return changed?{...definition,steps,reference_ftp_watts:ftp,effort_target:{...definition.effort_target,description:steps.map(step=>`${step.name??step.type}: ${step.effort}`).join('; ')}}:definition;
+  return changed?{...definition,steps,reference_ftp_watts:ftp,effort_target:{...definition.effort_target,description:steps.map(step=>`${step.name??step.type}: ${step.effort??''}`).join('; ')}}:definition;
 }
 
 export function workoutEffortText(definition:PowerWorkout):string {

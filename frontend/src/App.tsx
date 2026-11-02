@@ -1,4 +1,11 @@
-import {coalescedFetch} from './request';
+import {plainChatText} from './chatText';
+import DashboardNutrition from './DashboardNutrition';
+import InfoPopover from './InfoPopover';
+import {chatDay as currentChatDay,pendingDraft,newDayNutrition,persistPendingDraft} from './dailyChat';
+import {coalescedFetch,invalidateReadRequests} from './request';
+import {refreshReadViews,syncViewRevision,watchSyncStatus} from './syncRefresh';
+import {formatChatDurations} from './chatDuration';
+import {mergeNutritionContext, mergeNutritionEntry, roleHistories} from './chatContext';
 import RetainedPage from './RetainedPage';
 import SortableCards from './SortableCards';
 import WeightEntryDialog from './WeightEntryDialog';
@@ -10,6 +17,7 @@ import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
 import GraphCanvas, { api, AssistantPlots, type ChartResult, type ChartSpec } from "./GraphCanvas";
 import TrainingPanel from "./TrainingPanel";
 import NutritionPanel from "./NutritionPanel";
+import TelegramSettings from './TelegramSettings';
 import { ReadinessCard } from "./ReadinessCard";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import MaintenancePanel, { type MaintenanceResult } from "./MaintenancePanel";
@@ -69,6 +77,7 @@ type Activity = {
 };
 
 type ActivityDetail = Activity & {
+  data_quality_warnings?:string[];
   activity_metrics: {metric_type: string; value: number; unit: string; source_method: string; source_field: string}[];
   sample_summary: {
     sample_count: number;
@@ -188,6 +197,7 @@ type SyncStatus = {
   supports_updated_since: boolean;
   checkpoints: SyncCheckpoint[];
   verified_empty_intervals: number;
+  last_successful_sync_at?: string | null;
   additional_data?: {date: string; successful_endpoints: string[]; failures: Record<string,string>; unsupported: string[]; unavailable: Record<string,string>} | null;
   last_job: null | {
     id: string;
@@ -197,6 +207,9 @@ type SyncStatus = {
     finished_at: string | null;
     error_message?: string | null;
     checkpoint?: {
+      data_revision?:number;
+      qc?:{status:string;issues:Array<{data_type:string;status:string;missing:string[];detail:string}>;retry_attempted:string[]};
+      training_load_refresh?:{status:string;fetched_dates:string[];failed_dates:string[]};
       trigger?: string;
       totals?: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
       failures?: Array<{ data_type: string; date: string; error: string }>;
@@ -294,7 +307,10 @@ function proposalRows(proposal: SettingsProposal) {
   });
 }
 
+type SectionReference={activity_id:string;start_seconds:number;end_seconds:number};
+
 type ChatEvidence = {
+  sections?:Array<{start_seconds:number;end_seconds:number}>;
   activity_id?:string;
   activity?:{id:string};
   nutrition?:Record<string,unknown>;
@@ -374,6 +390,7 @@ type ChatEvidence = {
 type ChatRole='trainer'|'assistant'|'nutrition';
 type ChatMessage = {
   chat_role?:ChatRole;
+  chat_roles?:ChatRole[];
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -381,7 +398,7 @@ type ChatMessage = {
 };
 
 type ChatStreamEvent =
-  | { type: "start"; provider: AiProviderName; model: string; chat_role?:ChatRole }
+  | { type: "start"; provider: AiProviderName; model: string; chat_role?:ChatRole;chat_roles?:ChatRole[] }
   | { type: "tool"; evidence: ChatEvidence }
   | { type: "delta"; text: string }
   | { type: "complete"; provider: AiProviderName; model: string; evidence: ChatEvidence[] }
@@ -506,6 +523,14 @@ const formatLongDate = (value: string) =>
     month: "short",
     day: "numeric",
   }).format(new Date(`${value.slice(0, 10)}T00:00:00`));
+
+const formatSyncTime = (value: string) => {
+  const timestamp = value.replace(' ', 'T');
+  const date = new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(timestamp) ? timestamp : `${timestamp}Z`);
+  return Number.isNaN(date.getTime()) ? 'Time unavailable' : new Intl.DateTimeFormat(undefined, {
+    year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit',
+  }).format(date);
+};
 
 const shiftDate = (value: string, days: number) => {
   const date = new Date(`${value.slice(0, 10)}T00:00:00Z`);
@@ -649,12 +674,14 @@ function DateRangeFilter({
 
 function ActivityDetailPanel({
   activity,
+  refreshToken,
   distanceUnit, timezone, onRemoved,
 }: {
   activity: ActivityDetail;
   distanceUnit: "km" | "mi";
   timezone: string;
   onRemoved: () => void;
+  refreshToken?:number;
 }) {
   const summary = activity.sample_summary;
   const details = [
@@ -705,6 +732,7 @@ function ActivityDetailPanel({
 
   return (
     <div className="activity-detail">
+      {activity.data_quality_warnings?.map(warning=><p key={warning} role="note" className="training-notice">{warning}</p>)}
       <div className="activity-detail-grid">
         {details.map(([label, value]) => (
           <div key={label}>
@@ -715,7 +743,7 @@ function ActivityDetailPanel({
           </div>
         ))}
       </div>
-      <FullActivityStats activity={activity} timezone={timezone} footer={<RemoveActivity activity={activity} onChanged={onRemoved}/>}/>
+      <FullActivityStats activity={activity} timezone={timezone} refreshToken={refreshToken} footer={<RemoveActivity activity={activity} onChanged={onRemoved}/>}/>
     </div>
   );
 }
@@ -749,6 +777,8 @@ export default function App() {
   const [activityRange, setActivityRange] = useState({ start: "", end: "" });
   const [activityOffset, setActivityOffset] = useState(0);
   const lastActivityQuery=useRef('');
+  const lastActivityScope=useRef('');
+  const syncedReadRequest=useRef(0);
   const [activityRevision,setActivityRevision]=useState(0);
   const [activityNotice,setActivityNotice]=useState('');
   const [activityHasMore, setActivityHasMore] = useState(false);
@@ -775,32 +805,40 @@ export default function App() {
   const [settingsMessage, setSettingsMessage] = useState<string | null>(null);
   const [isSavingSettings, setIsSavingSettings] = useState(false);
   const [chatInput, setChatInput] = useState("");
-  const [initialRouting]=useState<{role?:ChatRole;nutrition?:Record<string,unknown>}>(()=>{try{return JSON.parse(sessionStorage.getItem('garmin-shared-routing-v1')||'{}');}catch{return {};}});
+  const [chatDate,setChatDate]=useState(()=>currentChatDay(browserTimeZone));
+  const chatDateRef=useRef(chatDate);
+  const [previousChatDate]=useState(()=>{try{return sessionStorage.getItem('garmin-shared-chat-day-v1');}catch{return null;}});
+  const [initialRouting]=useState<{role?:ChatRole;nutrition?:Record<string,unknown>}>(()=>{try{const saved=JSON.parse(sessionStorage.getItem('garmin-shared-routing-v1')||'{}');return {...saved,nutrition:saved.nutrition??JSON.parse(localStorage.getItem('garmin-pending-nutrition-drafts-v1')||'{}')};}catch{return {};}});
   const [chatRole,setChatRole]=useState<'auto'|ChatRole>('auto');
-  const lastChatRole=useRef<ChatRole>(initialRouting.role??'assistant');
-  const nutritionChatContext=useRef<Record<string,unknown>>(initialRouting.nutrition??{});
+  const lastChatRole=useRef<ChatRole>(previousChatDate&&previousChatDate!==chatDate?'assistant':initialRouting.role??'assistant');
+  const nutritionChatContext=useRef<Record<string,unknown>>(previousChatDate&&previousChatDate!==chatDate||!previousChatDate&&(initialRouting.nutrition?.chat_day??initialRouting.nutrition?.day)&&(initialRouting.nutrition?.chat_day??initialRouting.nutrition?.day)!==chatDate?newDayNutrition(initialRouting.nutrition??{},chatDate):initialRouting.nutrition??{});
   const chatMessagesFrame=useRef<HTMLDivElement>(null);
   const pendingAnswerStart=useRef<string|null>(null);
-  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(()=>{try{const saved=JSON.parse(sessionStorage.getItem('garmin-shared-chat-v1')||'[]');return Array.isArray(saved)?saved.filter(item=>item&&typeof item.id==='string'&&['user','assistant'].includes(item.role)&&typeof item.content==='string'&&Array.isArray(item.evidence)).slice(-40):[];}catch{return [];}});
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>(()=>{try{if(previousChatDate&&previousChatDate!==chatDate)return [];const saved=JSON.parse(sessionStorage.getItem('garmin-shared-chat-v1')||'[]');return Array.isArray(saved)?saved.filter(item=>item&&typeof item.id==='string'&&['user','assistant'].includes(item.role)&&typeof item.content==='string'&&Array.isArray(item.evidence)).slice(-120):[];}catch{return [];}});
   useLayoutEffect(()=>{
-    if(page!=='dashboard'||!pendingAnswerStart.current)return;
+    if(!pendingAnswerStart.current)return;
     const frame=chatMessagesFrame.current;
     const answer=document.getElementById(`chat-message-${pendingAnswerStart.current}`);
     if(!frame||!answer)return;
     pendingAnswerStart.current=null;
-    frame.scrollIntoView({behavior:'instant',block:'nearest'});
     frame.scrollTo({top:frame.scrollTop+answer.getBoundingClientRect().top-frame.getBoundingClientRect().top-22,behavior:'instant'});
   },[chatMessages,page]);
-  useEffect(()=>{try{sessionStorage.setItem('garmin-shared-chat-v1',JSON.stringify(chatMessages.slice(-40)));}catch{/* Continue in memory if browser storage is full or disabled. */}},[chatMessages]);
-  const [initialChatContext] = useState<{plots?: ChartSpec[]; ride?: string; coaching?: ChatEvidence["coaching"]}>(() => {
-    try { return JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
+  useEffect(()=>{const removed=(event:Event)=>{
+    const id=(event as CustomEvent<{deleted_meal_id?:string}>).detail?.deleted_meal_id;
+    if(!id)return;
+    const refs=nutritionChatContext.current.saved_meals;
+    if(Array.isArray(refs))nutritionChatContext.current={...nutritionChatContext.current,saved_meals:refs.filter(ref=>ref?.id!==id)};
+  };window.addEventListener('nutrition-log-changed',removed);return()=>window.removeEventListener('nutrition-log-changed',removed);},[]);
+  useEffect(()=>{try{sessionStorage.setItem('garmin-shared-chat-v1',JSON.stringify(chatMessages.slice(-120)));sessionStorage.setItem('garmin-shared-chat-day-v1',chatDate);}catch{/* Continue in memory if browser storage is full or disabled. */}},[chatMessages,chatDate]);
+  const [initialChatContext] = useState<{plots?: ChartSpec[]; ride?: string; coaching?: ChatEvidence["coaching"];sections?:SectionReference[]}>(() => {
+    try { return previousChatDate&&previousChatDate!==chatDate?{}:JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
   });
   const chatContext = useRef(initialChatContext);
   useEffect(()=>{
     const ask=(event:Event)=>{
       const {question,coaching}=(event as CustomEvent<{question:string;coaching:ChatEvidence['coaching']}>).detail;
       if(!question)return;
-      window.location.hash='dashboard';setChatRole('trainer');
+      setChatRole('trainer');
       chatContext.current.coaching=coaching;
       setChatMessages(current=>current.at(-1)?.role==='assistant'&&current.at(-1)?.content===question?current:[...current,{id:crypto.randomUUID(),role:'assistant',content:question,evidence:coaching?[{tool:'preview_training_plan',coaching}]:[]}]);
       window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});
@@ -897,7 +935,8 @@ export default function App() {
     if (page!=='activities' || !activityRange.start || !activityRange.end) return;
     const queryKey=JSON.stringify([activityRange.start,activityRange.end,activityOffset,activityRevision]);
     if(lastActivityQuery.current===queryKey&&activityState.kind==='ready')return;
-    const queryChanged=lastActivityQuery.current!==queryKey;lastActivityQuery.current=queryKey;
+    const scopeKey=JSON.stringify([activityRange.start,activityRange.end,activityOffset]);
+    const queryChanged=lastActivityScope.current!==scopeKey;lastActivityScope.current=scopeKey;lastActivityQuery.current=queryKey;
     if (activityRange.start > activityRange.end) {
       setActivityState({
         kind: "error",
@@ -985,11 +1024,29 @@ export default function App() {
   },[page,connection.kind,dataLoadRevision]);
 
   useEffect(()=>{
-    if(!isSyncing&&!scheduledSyncBusy&&syncStatusValue?.last_job?.status!=='running')return;
-    let cancelled=false,timer:number|undefined;
-    const poll=async()=>{try{const status=await api<SyncStatus>('/api/sync/status');if(!cancelled){setConnection(current=>current.kind==='ready'?{...current,syncStatus:status}:current);if(status.last_job?.status!=='running'&&!isSyncing&&!scheduledSyncBusy)await refreshSyncedData();}}catch{/* The original sync request reports failures. */}finally{if(!cancelled)timer=window.setTimeout(()=>void poll(),2000);}};
-    void poll();return()=>{cancelled=true;if(timer)window.clearTimeout(timer);};
-  },[isSyncing,scheduledSyncBusy,syncStatusValue?.last_job?.status]);
+    if(connection.kind!=='ready')return;
+    const monitor=watchSyncStatus({load:()=>api<SyncStatus>('/api/sync/status'),
+      onStatus:status=>setConnection(current=>current.kind==='ready'?{...current,syncStatus:status}:current),
+      isVisible:()=>document.visibilityState!=='hidden'});
+    const wake=()=>monitor.wake();
+    window.addEventListener('focus',wake);document.addEventListener('visibilitychange',wake);
+    return()=>{monitor.stop();window.removeEventListener('focus',wake);document.removeEventListener('visibilitychange',wake);};
+  },[connection.kind]);
+
+  const syncDataRevision=syncViewRevision(syncStatusValue?.last_job);
+  useEffect(()=>{
+    if(!syncDataRevision)return;
+    void refreshSyncedData().then(warning=>{if(warning)setSyncMessage(warning);});
+  },[syncDataRevision]);
+
+  useEffect(()=>{
+    if(activityDetail.kind!=='ready')return;
+    const id=activityDetail.activity.id,controller=new AbortController();
+    api<ActivityDetail>(`/api/activities/${encodeURIComponent(id)}?timezone=${encodeURIComponent(browserTimeZone)}`,{signal:controller.signal})
+      .then(activity=>{if(!controller.signal.aborted)setActivityDetail(current=>current.kind==='ready'&&current.activity.id===id?{kind:'ready',activity}:current);})
+      .catch(error=>{if(!controller.signal.aborted)setActivityNotice(error.message);});
+    return()=>controller.abort();
+  },[activityRevision,browserTimeZone]);
 
   const activityRemovalChanged=()=>{
     setActivityOffset(0);setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);
@@ -1161,6 +1218,21 @@ export default function App() {
     }
   };
 
+  useEffect(()=>{if(page==='nutrition')setChatRole('nutrition');},[page]);
+  const resetDailyChat=()=>{
+    const day=currentChatDay(browserTimeZone);
+    if(day===chatDateRef.current)return false;
+    chatDateRef.current=day;setChatDate(day);setChatMessages([]);setPlotMessageId(null);
+    chatContext.current={};lastChatRole.current='assistant';
+    nutritionChatContext.current=newDayNutrition(nutritionChatContext.current,day);persistPendingDraft(nutritionChatContext.current);
+    try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({nutrition:nutritionChatContext.current}));}catch{/* Preserve in-memory pending drafts. */}
+    return true;
+  };
+  useEffect(()=>{
+    const check=()=>{if(chatStatus.kind!=='streaming')resetDailyChat();};
+    const timer=window.setInterval(check,60000);window.addEventListener('focus',check);check();
+    return()=>{window.clearInterval(timer);window.removeEventListener('focus',check);};
+  },[chatStatus.kind]);
   const sendChatMessage = async (suggestedMessage?: string, roleOverride?:ChatRole, nutritionOverride?:Record<string,unknown>) => {
     const message = (suggestedMessage ?? chatInput).trim();
     if (!message || chatStatus.kind === "streaming") return;
@@ -1178,11 +1250,13 @@ export default function App() {
       content: "",
       evidence: [],
     };
-    const history = chatMessages
+    const freshDay=resetDailyChat();
+    const dailyMessages=freshDay?[]:chatMessages;
+    const history = dailyMessages
       .filter((item) => item.content.trim())
       .slice(-20)
       .map(({ role, content }) => ({ role, content: content.slice(0, 4000) }));
-    setChatMessages((current) => [...current, userMessage, assistantMessage]);
+    setChatMessages((current) => [...(freshDay?[]:current), userMessage, assistantMessage]);
     setChatInput("");
     setChatStatus({ kind: "streaming", slow: false });
 
@@ -1200,7 +1274,11 @@ export default function App() {
     const showAnswerStart=()=>{if(!answerStarted){answerStarted=true;pendingAnswerStart.current=assistantId;}};
     const applyEvent = (event: ChatStreamEvent) => {
       if (event.type === "start") {
-        if(event.chat_role){lastChatRole.current=event.chat_role;setChatMessages(current=>current.map(item=>item.id===assistantId?{...item,chat_role:event.chat_role}:item));}
+        if(event.chat_role){
+          lastChatRole.current=event.chat_role;
+          setChatMessages(current=>current.map(item=>item.id===assistantId||item.id===userMessage.id?{...item,chat_role:event.chat_role,...(event.chat_roles?{chat_roles:event.chat_roles}:{})}:item));
+          try{sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({role:event.chat_role,nutrition:nutritionChatContext.current}));}catch{/* Continue in memory. */}
+        }
         setChatStatus({
           kind: "streaming",
           provider: event.provider,
@@ -1210,7 +1288,9 @@ export default function App() {
       } else if (event.type === "tool") {
         const ride=event.evidence.activity_id??event.evidence.activity?.id??event.evidence.reference_record?.id;
         if(ride)chatContext.current.ride=ride;
-        if(event.evidence.nutrition){const result=event.evidence.nutrition;nutritionChatContext.current={...nutritionChatContext.current,day:result.context_date,pending_target:(result.target_proposal as {request?:unknown}|undefined)?.request,pending_foods:(result.ingredients as {name:string;grams_low:number;grams_high:number;grams_proposed?:number;question:string;meal_type?:string}[]|undefined)?.map(i=>({name:i.name,grams_low:i.grams_low,grams_high:i.grams_high,grams_proposed:i.grams_proposed,question:i.question,meal_type:i.meal_type}))};}
+        if(event.evidence.activity_id&&event.evidence.sections?.length)chatContext.current.sections=event.evidence.sections.map(section=>({activity_id:event.evidence.activity_id!,start_seconds:section.start_seconds,end_seconds:section.end_seconds}));
+        if(event.evidence.nutrition){const result=event.evidence.nutrition;if(result.target_saved){try{sessionStorage.removeItem('nutrition-target-proposal-v1');}catch{/* Continue with in-memory state. */}}if(result.logged||result.target_saved)window.dispatchEvent(new CustomEvent('nutrition-log-changed',{detail:{day:result.context_date,target_saved:result.target_saved}}));nutritionChatContext.current=mergeNutritionContext(nutritionChatContext.current,result);persistPendingDraft(nutritionChatContext.current);}
+        if(event.evidence.nutrition?.saved_meals)nutritionChatContext.current={...nutritionChatContext.current,saved_meals:event.evidence.nutrition.saved_meals};
         try{sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({role:lastChatRole.current,nutrition:nutritionChatContext.current}));}catch{/* Keep in-memory routing context. */}
         if (event.evidence.coaching) chatContext.current.coaching = event.evidence.coaching;
         if (event.evidence.plots?.length) {
@@ -1252,7 +1332,7 @@ export default function App() {
       const response = await coalescedFetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, chat_role:roleOverride??chatRole,previous_role:lastChatRole.current,nutrition_context:nutritionOverride??nutritionChatContext.current,coaching_context: chatContext.current.coaching,
+        body: JSON.stringify({ message, history, role_histories:roleHistories(dailyMessages), chat_role:roleOverride??chatRole,previous_role:lastChatRole.current,nutrition_context:nutritionOverride??nutritionChatContext.current,coaching_context: chatContext.current.coaching,section_context:chatContext.current.sections,
           plot_context: chatMessages.find(item => item.id === plotMessageId)?.evidence.flatMap(e => e.plots ?? []).map(p => p.spec) ?? chatContext.current.plots,
           ride_context: chatContext.current.ride ?? chatMessages.flatMap(item => item.evidence).filter(e => e.tool === 'find_same_course_rides').at(-1)?.reference_record?.id,
           timezone: browserTimeZone, operation_id: userMessage.id,
@@ -1299,7 +1379,7 @@ export default function App() {
       chatAbortController.current = null;
     }
   };
-  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{message?:string;role?:ChatRole;nutrition?:Record<string,unknown>}>).detail;window.location.hash='dashboard';if(detail?.nutrition)nutritionChatContext.current=detail.nutrition;if(detail?.role)setChatRole(detail.role);if(detail?.message)void sendChatMessage(detail.message,detail.role,detail.nutrition);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
+  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{message?:string;role?:ChatRole;nutrition?:Record<string,unknown>}>).detail;if(detail?.nutrition){nutritionChatContext.current=mergeNutritionEntry(nutritionChatContext.current,detail.nutrition);persistPendingDraft(nutritionChatContext.current);}if(detail?.role)setChatRole(detail.role);if(detail?.message)void sendChatMessage(detail.message,detail.role,nutritionChatContext.current);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
 
 
   const [savingProposal, setSavingProposal] = useState<string | null>(null);
@@ -1547,45 +1627,15 @@ export default function App() {
   };
 
   const refreshSyncedData = async () => {
-    const [summaryResponse, weeklyResponse, statusResponse, planResponse, connectionResponse] =
-      await Promise.all([
-        coalescedFetch(`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`),
-        coalescedFetch(`/api/history/weekly-calories?timezone=${encodeURIComponent(browserTimeZone)}`),
-        coalescedFetch("/api/sync/status"),
-        coalescedFetch("/api/sync/plan"),
-        coalescedFetch("/api/garmin/connection"),
-      ]);
-    if (
-      !summaryResponse.ok ||
-      !weeklyResponse.ok ||
-      !statusResponse.ok ||
-      !planResponse.ok ||
-      !connectionResponse.ok
-    ) {
-      throw new Error("Synced data could not be refreshed.");
-    }
-    const [refreshedSummary, refreshedWeekly, refreshedStatus, refreshedPlan, garminConnection] =
-      await Promise.all([
-        summaryResponse.json() as Promise<HistorySummary>,
-        weeklyResponse.json() as Promise<WeeklyCalories | null>,
-        statusResponse.json() as Promise<SyncStatus>,
-        planResponse.json() as Promise<SyncPlan>,
-        connectionResponse.json() as Promise<GarminConnection>,
-      ]);
-    setConnection((current) =>
-      current.kind === "ready"
-        ? {
-            ...current,
-            summary: refreshedSummary,
-            weeklyCalories: refreshedWeekly,
-            syncStatus: refreshedStatus,
-            syncPlan: refreshedPlan,
-            garminConnection,
-          }
-        : current,
-    );
-
-    setActivityOffset(0);setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);
+    const serial=++syncedReadRequest.current;
+    const {patch,warning}=await refreshReadViews<{summary:HistorySummary;weeklyCalories:WeeklyCalories|null;syncPlan:SyncPlan;garminConnection:GarminConnection}>({
+      summary:`/api/history/summary?timezone=${encodeURIComponent(browserTimeZone)}`,
+      weeklyCalories:`/api/history/weekly-calories?timezone=${encodeURIComponent(browserTimeZone)}`,
+      syncPlan:'/api/sync/plan',garminConnection:'/api/garmin/connection',
+    },()=>{setActivityRevision(v=>v+1);setGraphVersion(v=>v+1);setMaintenanceVersion(v=>v+1);setDataLoadRevision(v=>v+1);});
+    if(serial!==syncedReadRequest.current)return '';
+    setConnection(current=>current.kind==='ready'?{...current,...patch}:current);
+    return warning;
   };
 
   const connectGarmin = async () => {
@@ -1718,10 +1768,11 @@ export default function App() {
         failures?: Array<{data_type: string; error: string}>;
         totals: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
       };
-      await refreshSyncedData();
+      await refreshGarminConnection();
+      const refreshWarning = "";
       if(result.status!=="completed")throw new Error(`Sync needs attention: ${result.failures?.map(f=>`${f.data_type.replaceAll('_',' ')}: ${f.error}`).join('; ')||'Some data could not be refreshed. Retry sync.'}`);
       setSyncMessage(
-        `Synchronization completed: ${result.totals.created.toLocaleString()} new, ${result.totals.updated.toLocaleString()} updated, ${result.totals.unchanged.toLocaleString()} unchanged, and ${(result.totals.detail_samples ?? 0).toLocaleString()} sensor samples imported.`,
+        `Synchronization completed: ${result.totals.created.toLocaleString()} new, ${result.totals.updated.toLocaleString()} updated, ${result.totals.unchanged.toLocaleString()} unchanged, and ${(result.totals.detail_samples ?? 0).toLocaleString()} sensor samples imported.${refreshWarning?' '+refreshWarning:''}`,
       );
     } catch (error: unknown) {
       setSyncMessage(
@@ -1756,10 +1807,11 @@ export default function App() {
           totals?: { created: number; updated: number; unchanged: number; received: number; detail_samples?: number };
         };
         if (!cancelled && result.status !== "skipped") {
-          await refreshSyncedData();
+          await refreshGarminConnection();
+      const refreshWarning = "";
           if(result.status==='failed')throw new Error(`Automatic sync needs attention: ${result.failures?.map(f=>`${f.data_type.replaceAll('_',' ')}: ${f.error}`).join('; ')||'Some data remains pending.'}`);
           setSyncMessage(
-            `Automatic catch-up completed: ${result.totals?.created ?? 0} new, ${result.totals?.updated ?? 0} updated, and ${result.totals?.detail_samples ?? 0} sensor samples imported.`,
+            `Automatic catch-up completed: ${result.totals?.created ?? 0} new, ${result.totals?.updated ?? 0} updated, and ${result.totals?.detail_samples ?? 0} sensor samples imported.${refreshWarning?' '+refreshWarning:''}`,
           );
         }
       } catch (error: unknown) {
@@ -1830,7 +1882,7 @@ export default function App() {
     .map((card) => cardRegistry[card.id]);
 
   return (
-    <SortableCards id={`page:${page}`} as="main" className="app-shell" pageSections>
+    <main className="app-shell command-app">
       <header className="app-topbar">
         <a className="app-brand" href="#dashboard" aria-label="Dotan's training and health space"><span className="brand-mark" aria-hidden="true">D</span><span>Dotan's<span className="brand-subtitle">Training and health space</span></span></a>
         <div className={`connection connection--${connection.kind}`}><span aria-hidden="true" />{statusText}</div>
@@ -1839,68 +1891,42 @@ export default function App() {
         {appPages.map(([id, title]) => <a key={id} href={`#${id}`} aria-current={page === id ? 'page' : undefined}>{title}</a>)}
       </nav>
       {connection.kind==='ready'&&connection.health.preview&&<p role="status" className="preview-data-banner"><strong>TEST PREVIEW — FICTIONAL DATA</strong> · These scores do not describe your Garmin history. Your normal app is on port 8765.</p>}
-      <header className="page-heading">
-        <p className="eyebrow">Personal health workspace</p>
-        <h1>{appPages.find(([id]) => id === page)?.[1]}</h1>
-        <p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p>
-      </header>
-      <WeightEntryDialog showButton={['dashboard','health','profile'].includes(page)} unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} />
-      <section hidden={page !== "dashboard"} className="assistant overview-chat" id="assistant" aria-labelledby="assistant-title">
-        <div className="section-heading assistant-heading">
-          <div>
-            <p>Trainer · Assistant · Nutrition</p>
-            <h2 id="assistant-title">Chat</h2>
-          </div>
-          <div className={`assistant-provider ${activeAiStatus?.available ? "assistant-provider--ready" : "assistant-provider--attention"}`}>
-            <strong>{activeAiProvider === "chatgpt" ? "ChatGPT account" : activeAiProvider === "openai" ? "OpenAI" : "Qwen / Ollama"}</strong>
-            <span>{activeAiStatus?.available ? "Ready" : "Setup needed"}</span>
-          </div>
-        </div>
-        <p className="assistant-intro">Ask about your plan, analyse a ride, explore your health data or describe a meal. The same conversation follows you between roles. Proposed changes stay reviewable.</p>
-        <label>Answering role <select value={chatRole} disabled={chatStatus.kind==='streaming'} onChange={e=>setChatRole(e.target.value as 'auto'|ChatRole)}><option value="auto">Auto · route my question</option><option value="trainer">Trainer · coaching and plan changes</option><option value="assistant">Assistant · data and activity analysis</option><option value="nutrition">Nutrition · food and targets</option></select></label>
-
-        <button type="button" disabled={chatStatus.kind==='streaming'||!chatMessages.length} onClick={()=>{setChatMessages([]);setPlotMessageId(null);chatContext.current={};nutritionChatContext.current={};lastChatRole.current='assistant';setChatRole('auto');try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.removeItem('garmin-shared-routing-v1');}catch{/* In-memory context is already cleared. */}}}>New conversation</button>
-        <p className="assistant-privacy">
+      <div className="command-workspace">
+        <aside className="command-chat" aria-label="Shared chat">
+      <section className="assistant overview-chat" id="assistant" aria-labelledby="assistant-title">
+        <div className="simple-chat-heading">
+          <h2 id="assistant-title">Chat</h2>
+          <details className="chat-options">
+            <summary aria-label="Chat options" title="Chat options">⋯</summary>
+            <div className="chat-options-panel">
+              <small>Today · {chatDate}</small>
+              <label>Answering role <select value={chatRole} disabled={chatStatus.kind==='streaming'} onChange={e=>setChatRole(e.target.value as 'auto'|ChatRole)}><option value="auto">Auto</option><option value="trainer">Trainer</option><option value="assistant">Assistant</option><option value="nutrition">Nutrition</option></select></label>
+        <button type="button" disabled={chatStatus.kind==='streaming'||!chatMessages.length} onClick={()=>{setChatMessages([]);setPlotMessageId(null);chatContext.current={};nutritionChatContext.current={};persistPendingDraft({});lastChatRole.current='assistant';setChatRole('auto');try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.removeItem('garmin-shared-routing-v1');}catch{/* In-memory context is already cleared. */}}}>New conversation</button>
+              <p className="chat-provider-detail">{activeAiProvider === 'chatgpt' ? 'ChatGPT account' : activeAiProvider === 'openai' ? 'OpenAI' : 'Qwen / Ollama'} · {activeAiStatus?.available?'Ready':'Setup needed'}</p>
+        <InfoPopover title="Chat privacy"><p className="assistant-privacy">
           {activeAiProvider === "chatgpt"
             ? "ChatGPT account mode sends your question, recent chat context and relevant tool results to OpenAI using your authorized ChatGPT plan. Plan limits are shared; it never falls back to paid API billing."
             : activeAiProvider === "openai"
             ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
             : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
           {" "}This shared conversation and graph/ride selections stay in this browser tab, including after a refresh.
-        </p>
-
-        <AssistantPlots plots={(chatMessages.find(message => message.id === plotMessageId) ?? chatMessages.filter(message => message.evidence.some(e => e.plots?.length)).at(-1))?.evidence.flatMap(evidence => evidence.plots ?? []) ?? []} profile={settingsDraft?.profile} />
+        </p></InfoPopover>
+            </div>
+          </details>
+        </div>
+        {connection.kind==='ready'&&!activeAiStatus?.available&&<p className="chat-setup-notice">Chat setup needed. <a href="#settings">Open Settings</a></p>}
         {proposalError && <p role="alert">{proposalError}</p>}
         {maintenanceActionError && <p role="alert">{maintenanceActionError}</p>}
         <div className="chat-shell">
           {chatMessages.length === 0 ? (
-            <div className="chat-empty">
-              <strong>{page === 'training' ? 'Your personalized training plan starts here' : 'Start a conversation'}</strong>
-              {page==='training'?<div className="chat-suggestions"><button type="button" onClick={()=>void sendChatMessage('I have 60 minutes today. What should I do according to my plan and recovery?')}>I have 60 minutes today</button><button type="button" onClick={()=>void sendChatMessage('Help me build a cycling and strength plan. Ask only for essential missing preferences, calibration and upcoming events.')}>Build my training plan</button><button type="button" onClick={()=>void sendChatMessage('What are the next seven days in my active plan, and why?')}>Review my week</button><button type="button" onClick={()=>void sendChatMessage('Help me add an upcoming event. Ask its name, activity, distance, ascent, date and race status.')}>Add an upcoming event</button></div>:              <div className="chat-suggestions">
-                <button type="button" onClick={()=>void sendChatMessage('Help me build a cycling and strength plan. Ask only for essential missing preferences.')}>Build my training plan</button>
-                <button type="button" onClick={()=>void sendChatMessage('What are the next seven days in my active plan, and why?')}>Review my training week</button>
-                <button type="button" onClick={()=>void sendChatMessage('Help me review my nutrition targets.')}>Nutrition targets</button>
-                <button type="button" onClick={() => void sendChatMessage("Plot my weight over the last year.")}>Weight over the last year</button>
-                <button type="button" onClick={() => void sendChatMessage("Plot power versus speed across all my cycling rides.")}>Power vs speed</button>
-                <button type="button" onClick={() => void sendChatMessage("Plot resting heart rate versus cycling VO2 max on matching dates.")}>Resting HR vs VO₂ max</button>
-                <button type="button" onClick={() => void sendChatMessage("Summarize my steps and sleep over the last seven days.")}>Last seven days</button>
-                <button type="button" onClick={() => void sendChatMessage("Compare my running volume over the last two four-week periods.")}>Compare running</button>
-                <button type="button" onClick={() => void sendChatMessage("Find rides similar to my latest ride using GPS coordinates and explain the matching criteria.")}>Similar rides (GPS)</button>
-                <button type="button" onClick={() => void sendChatMessage("Find earlier rides on the same GPS course as my latest ride and show how my performance changed.")}>Same course</button>
-                <button type="button" onClick={() => void sendChatMessage("Was my latest ride effective? In what way?")}>Ride effectiveness</button>
-                <button type="button" onClick={() => void sendChatMessage("When did I last replace the rear tire on my road bike?")}>Maintenance history</button>
-                <button type="button" onClick={() => void sendChatMessage("Set my goal to improve cycling endurance.")}>Set a goal</button>
-                <button type="button" onClick={() => void sendChatMessage("What is my training readiness today?")}>Training readiness</button>
-                <button type="button" onClick={() => void sendChatMessage("List my three most recent activities and the heart-rate or power data available for each.")}>Recent activities</button>
-              </div>}
-            </div>
+            <div className="chat-empty simple-chat-empty"><p>How can I help?</p></div>
           ) : (
             <div ref={chatMessagesFrame} className="chat-messages" aria-live="polite">
               {chatMessages.map((message) => (
                 <article id={`chat-message-${message.id}`} className={`chat-message chat-message--${message.role}`} key={message.id}>
                   <span>{message.role === "user" ? "You" : ({trainer:"Trainer",assistant:"Assistant",nutrition:"Nutrition"}[message.chat_role??"assistant"])}</span>
-                  <p>{message.content || (chatStatus.kind === "streaming" ? "Checking your records…" : "No response was returned.")}</p>
-                  {message.evidence.some(e=>e.nutrition)&&<button type="button" onClick={()=>{const result=message.evidence.find(e=>e.nutrition)!.nutrition!;try{sessionStorage.setItem('nutrition-pending-review-v1',JSON.stringify(result));if(result.target_proposal)sessionStorage.setItem('nutrition-target-proposal-v1',JSON.stringify(result.target_proposal));}catch{/* Review can still use the in-memory event. */}window.location.hash='nutrition';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('nutrition-chat-review',{detail:result})));}}>Review food / targets in Nutrition</button>}
+                  {!(message.role==='assistant'&&message.evidence.some(e=>e.training_adjustment?.kind==='adaptation'&&e.training_adjustment.message===message.content))&&<p>{(message.role === 'assistant' ? plainChatText(formatChatDurations(message.content)) : message.content) || (chatStatus.kind === "streaming" ? "Thinking…" : "No response was returned.")}</p>}
+                  {message.evidence.some(e=>e.nutrition)&&<button type="button" onClick={()=>{const result=message.evidence.find(e=>e.nutrition)!.nutrition!;try{if(result.logged||result.target_saved)sessionStorage.removeItem('nutrition-pending-review-v1');else sessionStorage.setItem('nutrition-pending-review-v1',JSON.stringify(result));if(result.target_saved)sessionStorage.removeItem('nutrition-target-proposal-v1');else if(result.target_proposal)sessionStorage.setItem('nutrition-target-proposal-v1',JSON.stringify(result.target_proposal));}catch{/* Review can still use the in-memory event. */}window.location.hash='nutrition';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('nutrition-chat-review',{detail:result})));}}>{message.evidence.find(e=>e.nutrition)?.nutrition?.target_saved?'View saved goal in Nutrition':message.evidence.find(e=>e.nutrition)?.nutrition?.logged?'View logged meal in Nutrition':'Review food / targets in Nutrition'}</button>}
                   {message.evidence.find(e=>e.coaching)?.coaching?.status === 'ready' && <button type="button" onClick={()=>{window.location.hash='training';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)?.coaching})));}}>Review coaching proposal in Training</button>}
                   {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
                   {message.evidence.length > 0 && (
@@ -2021,11 +2047,11 @@ export default function App() {
               void sendChatMessage();
             }}
           >
-            <label htmlFor="chat-question">{page==='training'?'Tell your trainer what you want to work on':'Message'}</label>
+            <label className="visually-hidden" htmlFor="chat-question">Message</label>
             <textarea
               id="chat-question"
               maxLength={4000}
-              placeholder={page==='training'?'For example: Help me build an endurance and strength plan':'For example: How has my running volume changed over the last eight weeks?'}
+              placeholder="Message…"
               value={chatInput}
               onChange={(event) => setChatInput(event.target.value)}
               onKeyDown={(event) => {
@@ -2038,16 +2064,16 @@ export default function App() {
               aria-describedby="chat-keyboard-hint"
               disabled={chatStatus.kind === "streaming"}
             />
-            <small id="chat-keyboard-hint">{page==='training'?'Enter to send':'Enter to ask'} · Shift+Enter for a new line</small>
+            <small className="visually-hidden" id="chat-keyboard-hint">{page==='training'?'Enter to send':'Enter to ask'} · Shift+Enter for a new line</small>
             <div className="chat-actions">
               <span>
                 {chatStatus.kind === "streaming"
                   ? chatStatus.slow
                     ? "Still preparing your answer. You can stop and retry if needed."
-                    : `Using ${chatStatus.model ?? "the selected model"}…`
+                    : "Thinking…"
                   : chatStatus.kind === "error"
                     ? chatStatus.message
-                    : "Missing measurements are never filled with guesses."}
+                    : ""}
               </span>
               {chatStatus.kind === "streaming" ? (
                 <button className="secondary-action" type="button" onClick={stopChatResponse}>Stop</button>
@@ -2059,8 +2085,17 @@ export default function App() {
         </div>
       </section>
 
-      <RetainedPage active={page === 'dashboard'}><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
-      <RetainedPage active={page === 'health'}><GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={`${graphVersion}:${syncStatusValue?.last_job?.finished_at ?? ''}`} /></RetainedPage>
+        </aside>
+        <SortableCards id={`command-page:${page}`} as="div" className="command-content" pageSections>
+      <header className="page-heading">
+
+        <h1>{appPages.find(([id]) => id === page)?.[1]}</h1>
+        <InfoPopover title="This workspace"><p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p></InfoPopover>
+      </header>
+      <WeightEntryDialog showButton={['dashboard','health','profile'].includes(page)} unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} />
+        <AssistantPlots plots={(chatMessages.find(message => message.id === plotMessageId) ?? chatMessages.filter(message => message.evidence.some(e => e.plots?.length)).at(-1))?.evidence.flatMap(evidence => evidence.plots ?? []) ?? []} profile={settingsDraft?.profile} refresh={graphVersion} />
+      <RetainedPage active={page === 'dashboard'}><DashboardNutrition timezone={browserTimeZone} active={page==='dashboard'} refresh={`${graphVersion}`} /><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}`} /></RetainedPage>
+      <RetainedPage active={page === 'health'}><GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={`${graphVersion}`} /></RetainedPage>
 
       <section hidden={page !== "data"} className="sync" id="sync" aria-labelledby="sync-title">{dataLoading&&<p role="status">Loading data and sync details…</p>}{dataLoadError&&<p role="alert">{dataLoadError} <button type="button" onClick={()=>setDataLoadRevision(v=>v+1)}>Retry loading</button></p>}
         <div className="section-heading sync-heading">
@@ -2193,42 +2228,31 @@ export default function App() {
             </button>
           </div>
         )}
-        <div className="sync-checkpoints">
-          {syncStatusValue?.checkpoints.map((checkpoint) => (
-            <div key={checkpoint.data_type}>
-              <span>{checkpoint.data_type.replaceAll("_", " ")}</span>
-              <strong>
-                {checkpoint.coverage_end
-                  ? `Imported through ${formatLongDate(checkpoint.coverage_end)}`
-                  : "No imported coverage"}
-              </strong>
-              <small>
-                {checkpoint.last_success_at
-                  ? `Last online success ${formatLongDate(checkpoint.last_success_at)}`
-                  : "Online verification pending"}
-              </small>
+        <details className={`sync-summary sync-summary--${syncStatusValue?.last_job?.status ?? 'pending'}`}>
+          <summary>
+            <strong>{isSyncing || syncStatusValue?.last_job?.status === 'running'
+              ? 'Syncing…'
+              : syncStatusValue?.last_job && syncStatusValue.last_job.status !== 'completed'
+                ? 'Sync failed'
+                : 'Sync'}</strong>
+            <span>{syncStatusValue?.last_successful_sync_at
+              ? `Last successful sync: ${formatSyncTime(syncStatusValue.last_successful_sync_at)}`
+              : 'No successful sync yet'}</span>
+          </summary>
+          <div className="sync-component-scroll">
+            <div className="sync-checkpoints">
+              {syncStatusValue?.checkpoints.map((checkpoint) => (
+                <div key={checkpoint.data_type}>
+                  <span>{checkpoint.data_type.replaceAll('_', ' ')}</span>
+                  <strong>{checkpoint.last_success_at
+                    ? formatSyncTime(checkpoint.last_success_at)
+                    : 'Not synced yet'}</strong>
+                  {(checkpoint.status === 'failed' || checkpoint.status === 'reconnect_required') && <small>Sync failed</small>}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-        {syncStatusValue?.additional_data && <details>
-          <summary>Additional data collected on {formatLongDate(syncStatusValue.additional_data.date)}</summary>
-          <p>{syncStatusValue.additional_data.successful_endpoints.length} source responses retained, including fields not currently used in charts. These records are included in data exports and backups.</p>
-          {Object.entries(syncStatusValue.additional_data.failures).map(([name, error]) => <p key={name}>{name.replace(/^get_/, '').replaceAll('_', ' ')}: failed — {error}</p>)}
-          {Object.entries(syncStatusValue.additional_data.unavailable).map(([name, reason]) => <p key={name}>{name.replace(/^get_/, '').replaceAll('_', ' ')}: unavailable — {reason}</p>)}
-          {!!syncStatusValue.additional_data.unsupported.length && <p>Unsupported by this Garmin client: {syncStatusValue.additional_data.unsupported.map(name => name.replace(/^get_/, '').replaceAll('_', ' ')).join(', ')}.</p>}
-        </details>}
-        {syncStatusValue?.last_job && (
-          <div className={`sync-last-job sync-last-job--${syncStatusValue.last_job.status}`}>
-            <strong>Last sync: {syncStatusValue.last_job.status}</strong>
-            <span>
-              {syncStatusValue.last_job.progress_current.toLocaleString()} of {syncStatusValue.last_job.progress_total?.toLocaleString() ?? "—"} intervals
-              {syncStatusValue.last_job.checkpoint?.totals
-                ? ` · ${syncStatusValue.last_job.checkpoint.totals.created.toLocaleString()} new · ${syncStatusValue.last_job.checkpoint.totals.updated.toLocaleString()} updated · ${syncStatusValue.last_job.checkpoint.totals.unchanged.toLocaleString()} unchanged · ${(syncStatusValue.last_job.checkpoint.totals.detail_samples ?? 0).toLocaleString()} sensor samples`
-                : ""}
-            </span>
-            {syncStatusValue.last_job.error_message && <small>{syncStatusValue.last_job.error_message}</small>}
           </div>
-        )}
+        </details>
         <p className="sync-note">
           {garminConnectionValue?.status === "connected"
             ? `Every run catches up all missing dates and rechecks the latest ${syncStatusValue?.overlap_days ?? 3} days. Automatic sync rechecks hourly while this app is open, including late overnight uploads.`
@@ -2313,10 +2337,10 @@ export default function App() {
         <SortableCards id="dashboard:summary" className={`preview-grid preview-grid--${previewCards.length}`}>
           {previewCards.map((card) => (
             <article className={`data-card ${card.id === "training_readiness" ? "readiness-dashboard-card" : ""}`} key={card.id}>
-              {card.id === "training_readiness" ? <RetainedPage active={page==='dashboard'}><ReadinessCard timezone={browserTimeZone} refreshToken={`${activityRevision}:${syncStatusValue?.last_job?.finished_at ?? ""}:${summary?.metric_count ?? 0}`} /></RetainedPage> : <>
+              {card.id === "training_readiness" ? <RetainedPage active={page==='dashboard'}><ReadinessCard timezone={browserTimeZone} refreshToken={`${activityRevision}:${summary?.metric_count ?? 0}`} /></RetainedPage> : <>
               <p>
                 {card.label}{" "}
-                <abbr className="info-tip" title={card.tooltip} aria-label={card.tooltip}>i</abbr>
+                <InfoPopover title={card.label}><p>{card.tooltip}</p></InfoPopover>
               </p>
               <h3>{card.value}</h3>
               <span>{card.detail}</span>
@@ -2403,6 +2427,7 @@ export default function App() {
                   {activityDetail.kind === "ready" && activityDetail.activity.id === activity.id && (
                     <ActivityDetailPanel
                       activity={activityDetail.activity}
+                      refreshToken={activityRevision}
                       distanceUnit={preferredDistanceUnit}
                       timezone={browserTimeZone}
                       onRemoved={activityRemovalChanged}
@@ -2418,8 +2443,8 @@ export default function App() {
         </section>
 
 
-      <RetainedPage active={page === "training"}><TrainingPanel timezone={browserTimeZone} /></RetainedPage>
-      <RetainedPage active={page === "nutrition"}><NutritionPanel timezone={browserTimeZone} /></RetainedPage>
+      <RetainedPage active={page === "training"}><TrainingPanel timezone={browserTimeZone} refreshToken={`${graphVersion}`} /></RetainedPage>
+      <RetainedPage active={page === "nutrition"}><NutritionPanel timezone={browserTimeZone} refreshToken={graphVersion} active={page === 'nutrition'} /></RetainedPage>
 
       <RetainedPage active={page === "maintenance"}><MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} /></RetainedPage>
 
@@ -2670,8 +2695,11 @@ export default function App() {
         <div className="section-heading">
           <div>
             <p>Personal settings</p>
-            <h2 id="settings-title">{page === "profile" ? "Profile and training goals" : "Assistant settings"}</h2>
+            <h2 id="settings-title">{page === "profile" ? "Profile and training goals" : "Settings"}</h2>
           </div>
+        </div>
+        <div hidden={page !== 'settings'} className="telegram-settings-section">
+          <TelegramSettings active={page === 'settings'} timezone={browserTimeZone}/>
         </div>
         {!settingsDraft ? (
           <p className="settings-message">Settings are available when the local backend is running.</p>
@@ -3029,6 +3057,8 @@ export default function App() {
           ))}
         </SortableCards>
       </section>
-    </SortableCards>
+        </SortableCards>
+      </div>
+    </main>
   );
 }

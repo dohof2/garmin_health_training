@@ -116,7 +116,10 @@ def _meal(c,identifier):
     row=c.execute('SELECT * FROM meals WHERE id=?',(identifier,)).fetchone()
     if not row: raise ValueError('Meal not found')
     items=[{**dict(r),'detail':json.loads(r['detail_json'])} for r in c.execute('SELECT * FROM meal_items WHERE meal_id=? ORDER BY rowid',(identifier,))]
-    return {**dict(row),'items':items,'totals':totals(items)}
+    meal = {**dict(row),'items':items,'totals':totals(items)}
+    from .nutrition_feedback import partial_explanation
+    meal['partial_explanation'] = partial_explanation(meal)
+    return meal
 
 
 def _meal_revision(c,identifier):
@@ -148,48 +151,90 @@ def save_meal(payload,operation_id,identifier=None,expected_revision=None,path=N
     preview=preview_meal(payload);operation_id=text(operation_id,'Operation identity',100)
     with connect(path) as c:
         c.execute('BEGIN IMMEDIATE')
-        if identifier is None:
-            old=c.execute('SELECT id,operation_payload_json FROM meals WHERE operation_id=?',(operation_id,)).fetchone()
-            if old:
-                if old['operation_payload_json']!=encoded(preview):raise ValueError('Operation identity already used for a different meal')
-                return _meal(c,old['id'])
-            identifier='meal-'+str(uuid.uuid4())
-            c.execute('INSERT INTO meals(id,eaten_at,meal_type,notes,operation_id,operation_payload_json) VALUES (?,?,?,?,?,?)',(identifier,preview['eaten_at'],preview['meal_type'],preview['notes'],operation_id,encoded(preview)))
-        else:
-            old=_meal(c,identifier)
-            if type(expected_revision) is not int or old['revision']!=expected_revision:raise ValueError('Meal changed; reload before saving')
-            if old['deleted_at']:raise ValueError('Restore the meal before editing')
-            c.execute('UPDATE meals SET eaten_at=?,meal_type=?,notes=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(preview['eaten_at'],preview['meal_type'],preview['notes'],identifier))
-            c.execute('DELETE FROM meal_items WHERE meal_id=?',(identifier,))
-        for item in preview['items']:
-            c.execute('INSERT INTO meal_items(id,meal_id,name,quantity,unit,calories_kcal,protein_grams,fat_grams,carbohydrate_grams,source,detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
-                      ('item-'+str(uuid.uuid4()),identifier,item['name'],item['quantity'],item['unit'],*[item[k] for k in NUTRIENTS],item['source'],encoded(item['detail'])))
-        _freeze_target(c,preview['local_date'],preview['timezone'])
-        return _meal_revision(c,identifier)
+        return _save_meal(c,preview,operation_id,identifier,expected_revision)
+
+def _save_meal(c,preview,operation_id,identifier=None,expected_revision=None):
+    from .chat_access import authorize_nutrition_write
+    authorize_nutrition_write(c)
+    if identifier is None:
+        if c.execute('SELECT 1 FROM nutrition_deleted_operations WHERE operation_id=?',(operation_id,)).fetchone():
+            raise ValueError('This meal was permanently deleted; start a new food log')
+        old=c.execute('SELECT id,operation_payload_json FROM meals WHERE operation_id=?',(operation_id,)).fetchone()
+        if old:
+            if old['operation_payload_json']!=encoded(preview):raise ValueError('Operation identity already used for a different meal')
+            return _meal(c,old['id'])
+        identifier='meal-'+str(uuid.uuid4())
+        c.execute('INSERT INTO meals(id,eaten_at,meal_type,notes,operation_id,operation_payload_json) VALUES (?,?,?,?,?,?)',(identifier,preview['eaten_at'],preview['meal_type'],preview['notes'],operation_id,encoded(preview)))
+    else:
+        old=_meal(c,identifier)
+        if type(expected_revision) is not int or old['revision']!=expected_revision:raise ValueError('Meal changed; reload before saving')
+        if old['deleted_at']:raise ValueError('Restore the meal before editing')
+        c.execute('UPDATE meals SET eaten_at=?,meal_type=?,notes=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(preview['eaten_at'],preview['meal_type'],preview['notes'],identifier))
+        c.execute('DELETE FROM meal_items WHERE meal_id=?',(identifier,))
+    for item in preview['items']:
+        c.execute('INSERT INTO meal_items(id,meal_id,name,quantity,unit,calories_kcal,protein_grams,fat_grams,carbohydrate_grams,source,detail_json) VALUES (?,?,?,?,?,?,?,?,?,?,?)',
+                  ('item-'+str(uuid.uuid4()),identifier,item['name'],item['quantity'],item['unit'],*[item[k] for k in NUTRIENTS],item['source'],encoded(item['detail'])))
+    _freeze_target(c,preview['local_date'],preview['timezone'])
+    return _meal_revision(c,identifier)
+
+
+def delete_meal(identifier,expected_revision,path=None):
+    """Delete the meal and revision snapshots; retain no restorable food record."""
+    from .chat_access import authorize_nutrition_write
+    with connect(path) as c:
+        c.execute('BEGIN IMMEDIATE')
+        authorize_nutrition_write(c)
+        old=_meal(c,identifier)
+        if type(expected_revision) is not int or old['revision']!=expected_revision:
+            raise ValueError('Meal changed; reload before deleting')
+        operation=c.execute('SELECT operation_id FROM meals WHERE id=?',(identifier,)).fetchone()
+        if operation['operation_id']:
+            c.execute('INSERT OR IGNORE INTO nutrition_deleted_operations(operation_id) VALUES(?)',(operation['operation_id'],))
+        tombstone={'deleted':True,'logged':False,'ingredients':[],'uncertainties':[],'saved_meals':[],
+                   'reply':'This food log was permanently deleted. Send a new message to log it again.'}
+        c.execute("""UPDATE nutrition_chat_operations SET result_json=? WHERE EXISTS (
+            SELECT 1 FROM json_each(result_json,'$.saved_meals') AS ref
+            WHERE json_extract(ref.value,'$.id')=?)""",(encoded(tombstone),identifier))
+        for state in c.execute('SELECT bot_id,conversation_id,context_json FROM telegram_conversation_state').fetchall():
+            context=json.loads(state['context_json'])
+            nutrition=context.get('nutrition',{})
+            refs=nutrition.get('saved_meals',[])
+            if any(ref.get('id')==identifier for ref in refs):
+                nutrition['saved_meals']=[ref for ref in refs if ref.get('id')!=identifier]
+                c.execute('UPDATE telegram_conversation_state SET context_json=? WHERE bot_id=? AND conversation_id=?',
+                          (encoded(context),state['bot_id'],state['conversation_id']))
+        c.execute('DELETE FROM meals WHERE id=?',(identifier,))
+        return {'id':identifier,'deleted':True}
 
 
 def remove_meal(identifier,expected_revision,removed,path=None):
-    if type(removed) is not bool:raise ValueError('Removal must be yes or no')
-    with connect(path) as c:
-        c.execute('BEGIN IMMEDIATE');old=_meal(c,identifier)
-        if type(expected_revision) is not int or old['revision']!=expected_revision:raise ValueError('Meal changed; reload before saving')
-        c.execute('UPDATE meals SET deleted_at=?,revision=revision+1,updated_at=CURRENT_TIMESTAMP WHERE id=?',(datetime.now(timezone.utc).isoformat() if removed else None,identifier))
-        return _meal_revision(c,identifier)
+    # Compatibility for older clients: deletion is permanent and cannot be undone.
+    if removed is not True:raise ValueError('Restoring deleted meals is no longer available')
+    return delete_meal(identifier,expected_revision,path)
 
 
 def daily_status(day,timezone_name,path=None):
     tz=zone(timezone_name)
     with connect(path) as c:
-        meals=[]
-        # UTC storage; local calendar boundaries (including DST) determine intake.
-        for row in c.execute('SELECT id,eaten_at FROM meals ORDER BY eaten_at'):
-            if datetime.fromisoformat(row['eaten_at'].replace('Z','+00:00')).astimezone(tz).date()==day:meals.append(_meal(c,row['id']))
-        active=[m for m in meals if not m['deleted_at']];items=[i for m in active for i in m['items']]
-        logged=totals(items);target=_target_for_day(c,day.isoformat(),timezone_name)
-        remaining={k:round(target[k]-logged[k]['known_total'],3) if target and target[k] is not None and not logged[k]['missing_items'] else None for k in NUTRIENTS}
-        return {'date':day.isoformat(),'timezone':timezone_name,'meals':meals,'totals':logged,'target':target,'remaining':remaining,
-                'estimated_portions':sum(i['detail'].get('portion_basis') in ('estimated','photo_estimate') for i in items),
-                'advisory':'Logged intake only; Garmin expenditure and Garmin intake summaries are not added to these totals. An empty log is not evidence of no intake.'}
+        return _daily_status(c,day,timezone_name)
+
+
+def _daily_status(c,day,timezone_name):
+    tz=zone(timezone_name)
+    meals=[]
+    # UTC storage; local calendar boundaries (including DST) determine intake.
+    for row in c.execute('SELECT id,eaten_at FROM meals ORDER BY eaten_at'):
+        if datetime.fromisoformat(row['eaten_at'].replace('Z','+00:00')).astimezone(tz).date()==day:meals.append(_meal(c,row['id']))
+    active=[m for m in meals if not m['deleted_at']];items=[i for m in active for i in m['items']]
+    logged=totals(items);target=_target_for_day(c,day.isoformat(),timezone_name)
+    remaining={k:round(target[k]-logged[k]['known_total'],3) if target and target[k] is not None and not logged[k]['missing_items'] else None for k in NUTRIENTS}
+    from .nutrition_feedback import meal_feedback,goal_feedback
+    for meal in active:meal['feedback']=meal_feedback(meal)
+    result = {'date':day.isoformat(),'timezone':timezone_name,'meals':meals,'totals':logged,'target':target,'remaining':remaining,
+            'estimated_portions':sum(i['detail'].get('portion_basis') in ('estimated','photo_estimate') for i in items),
+            'advisory':'Logged intake only; Garmin expenditure and Garmin intake summaries are not added to these totals. An empty log is not evidence of no intake.'}
+    result.update(goal_feedback(result))
+    return result
 
 
 def save_library(payload,identifier=None,expected_revision=None,path=None):
@@ -261,15 +306,19 @@ def save_target(payload,expected_revision,path=None):
     return persist_target(preview,expected_revision,path)
 
 
-def persist_target(preview,expected_revision,path=None):
+def persist_target(preview,expected_revision,path=None,*,connection=None):
     """Persist a server-validated manual or computed target, with revision guard."""
-    with connect(path) as c:
-        c.execute('BEGIN IMMEDIATE');revision=c.execute('SELECT COALESCE(MAX(revision),0) FROM nutrition_targets').fetchone()[0]
-        if type(expected_revision) is not int or revision!=expected_revision:raise ValueError('Nutrition targets changed; reload before saving')
-        identifier='target-'+str(uuid.uuid4())
-        c.execute('INSERT INTO nutrition_targets(id,effective_from,calories_kcal,protein_grams,fat_grams,carbohydrate_grams,assumptions_json,revision) VALUES (?,?,?,?,?,?,?,?)',
-                  (identifier,preview['effective_from'],*[preview[k] for k in NUTRIENTS],encoded(preview['assumptions']),revision+1))
-        return {**preview,'id':identifier,'revision':revision+1}
+    if connection is None:
+        with connect(path) as c:
+            c.execute('BEGIN IMMEDIATE')
+            return persist_target(preview,expected_revision,path,connection=c)
+    c=connection
+    revision=c.execute('SELECT COALESCE(MAX(revision),0) FROM nutrition_targets').fetchone()[0]
+    if type(expected_revision) is not int or revision!=expected_revision:raise ValueError('Nutrition targets changed; reload before saving')
+    identifier='target-'+str(uuid.uuid4())
+    c.execute('INSERT INTO nutrition_targets(id,effective_from,calories_kcal,protein_grams,fat_grams,carbohydrate_grams,assumptions_json,revision) VALUES (?,?,?,?,?,?,?,?)',
+              (identifier,preview['effective_from'],*[preview[k] for k in NUTRIENTS],encoded(preview['assumptions']),revision+1))
+    return {**preview,'id':identifier,'revision':revision+1}
 
 
 def target_history(path=None):

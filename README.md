@@ -71,6 +71,12 @@ execute through `POST /api/ai/tools/{tool_name}` with an `arguments` object.
 Only registered operations and fields are accepted; models never receive SQL,
 shell, or filesystem access.
 
+## Telegram text questions
+
+After creating a bot with BotFather, store its token in macOS Keychain under service `garmin-app.telegram`, account `bot-token`. Restart the app and open **Settings → Telegram → Connect saved bot**. Allow Keychain access if prompted, open the private pairing link and tap **Start** in Telegram within ten minutes. Keep the Mac awake with the app running.
+
+Telegram supports text questions/advice and meal logging through the app's shared nutrition chat. Describe consumed foods and portions; they are saved to the same Nutrition log and daily calories/macros. Correct a recently logged food's gram amount in the same conversation. Conversation context and operation receipts survive restarts without repeating a save. Telegram history is separate from browser chat. Plan/target changes, photos, voice and charts still require the browser app. Restart after updates to load the new backend; existing pairing is retained. Use **Disable and unlink** to stop access. See [setup and verification](docs/qa/2026-10-26-telegram-text/REPORT.md).
+
 ## Maintenance history
 
 Use **Maintenance** to log completed work, filter history, edit records, inspect

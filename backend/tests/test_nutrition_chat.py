@@ -128,6 +128,18 @@ class NutritionChatTests(unittest.TestCase):
         self.assertEqual(calculator.call_args.args[0], {'goal':'lose_weight','target_weight_kg':75})
         self.assertEqual(response['reply'], 'Confirm age.')
 
+    def test_provider_estimates_reach_saved_daily_calories(self):
+        nutrients={'calories_kcal':112,'protein_grams':3.8,'fat_grams':.2,'carbohydrate_grams':23.2}
+        response={'reply':'Understood.','uncertainties':[],'target_request':None,'ingredients':[
+            {'name':'Couscous','meal_type':'lunch','grams_low':250,'grams_high':250,'grams_proposed':250,'question':'',
+             'nutrients_per_100g':nutrients,'estimate_assumptions':'Cooked couscous without added oil.'}]}
+        with patch('app.food_vision.get_ai_settings',return_value={'active_provider':'chatgpt','chatgpt_model':'fixture'}),patch('app.food_vision.active_provider') as provider,patch('app.nutrition_chat.search_foods',return_value={'foods':[]}):
+            provider.return_value.generate.return_value=json.dumps(response)
+            result=chat('I ate 250 g couscous','2026-10-21','UTC',path=self.path,auto_log=True)
+        self.assertTrue(result['logged'])
+        self.assertEqual(result['logged_totals']['calories_kcal']['known_total'],280)
+        self.assertEqual(result['ingredients'][0]['nutrients_per_100g'],nutrients)
+
     def test_pending_portion_and_meal_are_given_to_natural_confirmation(self):
         pending = [{'name':'יוגורט','grams_low':150,'grams_high':150,'question':'לאשר 150 גרם?','meal_type':'breakfast'}]
         result = {'reply':'Confirmed','ingredients':[{'name':'יוגורט','grams_low':150,'grams_high':150,'question':'','meal_type':'breakfast'}],'uncertainties':[]}

@@ -83,7 +83,7 @@ class CoachWorkflowTests(unittest.TestCase):
   self.assertTrue(all(w['definition']['duration_minutes']<=30 for w in r['workouts'] if w['scheduled_for'][:10] in ('2026-10-12','2026-10-14')))
   self.assertLessEqual(sum(w['definition']['duration_minutes'] for w in r['workouts']),600)
  def test_fixed_event_is_not_shortened_when_budget_is_impossible(self):
-  self.activate();before=list_training(self.path);b=self.brief(duration_confirmed=True,fixed_events=[{'date':'2026-10-13','title':'Long event','start_time':'06:00','duration_minutes':660,'effort':'hard'}]);old=self.review()['program']['id'];p=preview(b,WEEK,TZ,self.path,NOW,old)
+  self.activate();old=self.review()['program']['id'];before=list_training(self.path);b=self.brief(duration_confirmed=True,fixed_events=[{'date':'2026-10-13','title':'Long event','start_time':'06:00','duration_minutes':660,'effort':'hard'}]);p=preview(b,WEEK,TZ,self.path,NOW,old)
   self.assertEqual(p['status'],'needs_input')
   with self.assertRaises(ValueError):approve(b,WEEK,TZ,p['fingerprint'],self.path,NOW,old)
   self.assertEqual(before,list_training(self.path))
@@ -118,7 +118,12 @@ class CoachWorkflowTests(unittest.TestCase):
   later=NOW+timedelta(days=1);self.review(later);updated=next(a for a in list_training(self.path)['workouts'] if a['id']==w['id'])
   self.assertEqual(updated['completion_status'],'completed');self.assertEqual(updated['feedback']['activity_id'],'actual')
  def test_primary_secondary_strength_are_different_and_bars_supported(self):
-  a={**ANS,'sports':['cycling','strength'],'experience':{'cycling':'experienced','strength':'regular'},'equipment':['bike','pull_up_bar','dip_bars'],'weekly_minutes':{'cycling':240,'strength':120},'availability':[{'weekday':i,'start_time':'18:00','minutes':60} for i in range(7)]};save_preferences(a,1,self.path,NOW)
+  a={**ANS,'sports':['cycling','strength'],'experience':{'cycling':'experienced','strength':'regular'},'equipment':['bike','pull_up_bar','dip_bars'],'weekly_minutes':{'cycling':240,'strength':120},'availability':[{'weekday':i,'start_time':'18:00','minutes':60} for i in range(7)]}
+  # The current multi-sport contract requires explicit sport/day assignments;
+  # generic legacy availability cannot establish which sport belongs to a day.
+  a['week_schedule']=[{'weekday':day,'mode':'rest' if day==5 else 'training','total_limit_minutes':None,
+      'activities':[] if day==5 else [{'slot_id':str(day),'sport':'strength' if day in (1,3) else 'cycling','max_minutes':60}]} for day in range(7)]
+  save_preferences(a,1,self.path,NOW)
   outputs=[]
   for role,purpose in [('primary','strength_development'),('secondary','cycling_support')]:
    p=preview(self.brief(goal='general',strength_role=role,strength_purpose=purpose,strength_capacity={'pull_up_reps':5,'dip_reps':8}),WEEK,TZ,self.path,NOW)

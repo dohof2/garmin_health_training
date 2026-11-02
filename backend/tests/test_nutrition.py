@@ -76,9 +76,47 @@ class NutritionTests(unittest.TestCase):
   with connect(self.path) as c:
    snapshots=c.execute('SELECT snapshot_json FROM meal_revisions WHERE meal_id=? ORDER BY revision',(first['id'],)).fetchall()
   self.assertEqual(json.loads(snapshots[0][0])['items'][0]['calories_kcal'],200)
- def test_remove_restore_preserves_history_and_daily_totals(self):
-  meal=self.save();remove_meal(meal['id'],1,True,self.path);self.assertEqual(self.day()['totals']['calories_kcal']['known_total'],0)
-  self.assertTrue(self.day()['meals'][0]['deleted_at']);remove_meal(meal['id'],2,False,self.path);self.assertEqual(self.day()['totals']['calories_kcal']['known_total'],200)
+ def test_permanent_delete_removes_food_and_revisions_and_cannot_replay(self):
+  meal=self.save()
+  with self.assertRaisesRegex(ValueError,'changed'):remove_meal(meal['id'],2,True,self.path)
+  self.assertEqual(len(self.day()['meals']),1)
+  remove_meal(meal['id'],1,True,self.path)
+  self.assertEqual(self.day()['totals']['calories_kcal']['known_total'],0)
+  self.assertEqual(self.day()['meals'],[])
+  with connect(self.path) as c:
+   for table in ('meals','meal_items','meal_revisions'):
+    self.assertEqual(c.execute(f'SELECT count(*) FROM {table}').fetchone()[0],0)
+  with self.assertRaisesRegex(ValueError,'no longer available'):remove_meal(meal['id'],2,False,self.path)
+  with self.assertRaisesRegex(ValueError,'permanently deleted'):self.save()
+  self.save(operation='new-message');self.assertEqual(len(self.day()['meals']),1)
+ def test_delete_scrubs_receipts_and_telegram_pointers_but_keeps_other_meals(self):
+  meal=self.save();other=self.save(operation='two')
+  with connect(self.path) as c:
+   c.execute('INSERT INTO nutrition_chat_operations VALUES(?,?,?,CURRENT_TIMESTAMP)',('msg','hash',json.dumps({'saved_meals':[{'id':meal['id']},{'id':other['id']}],'reply':'private food'})))
+   c.execute('INSERT INTO telegram_conversation_state(bot_id,conversation_id,context_json) VALUES(?,?,?)',(1,'one',json.dumps({'nutrition':{'saved_meals':[{'id':meal['id']},{'id':other['id']}],'day':'2026-10-10'}})))
+  remove_meal(meal['id'],1,True,self.path)
+  with connect(self.path) as c:
+   result=json.loads(c.execute('SELECT result_json FROM nutrition_chat_operations').fetchone()[0])
+   self.assertTrue(result['deleted']);self.assertFalse(result['logged']);self.assertEqual(result['saved_meals'],[])
+   self.assertNotIn('private food',json.dumps(result))
+   context=json.loads(c.execute('SELECT context_json FROM telegram_conversation_state').fetchone()[0])
+   self.assertEqual(context['nutrition']['saved_meals'],[{'id':other['id']}])
+  self.assertEqual([m['id'] for m in self.day()['meals']],[other['id']])
+ def test_legacy_deleted_rows_are_purged_by_migration(self):
+  removed=self.save();kept=self.save(operation='two')
+  with connect(self.path) as c:
+   c.execute('UPDATE meals SET deleted_at=CURRENT_TIMESTAMP WHERE id=?',(removed['id'],))
+   c.execute("DELETE FROM schema_migrations WHERE version='036_permanent_nutrition_deletion.sql'")
+   c.execute('DROP TABLE nutrition_deleted_operations')
+   c.execute('INSERT INTO nutrition_chat_operations VALUES(?,?,?,CURRENT_TIMESTAMP)',('legacy','hash',json.dumps({'saved_meals':[{'id':removed['id']}],'reply':'old food'})))
+   c.execute('INSERT INTO telegram_conversation_state(bot_id,conversation_id,context_json) VALUES(?,?,?)',(1,'one',json.dumps({'nutrition':{'saved_meals':[{'id':removed['id']},{'id':kept['id']}]}})))
+  migrate(self.path)
+  self.assertEqual([m['id'] for m in self.day()['meals']],[kept['id']])
+  with self.assertRaisesRegex(ValueError,'permanently deleted'):self.save()
+  with connect(self.path) as c:
+   self.assertEqual(c.execute('SELECT count(*) FROM meal_revisions WHERE meal_id=?',(removed['id'],)).fetchone()[0],0)
+   self.assertTrue(json.loads(c.execute('SELECT result_json FROM nutrition_chat_operations').fetchone()[0])['deleted'])
+   self.assertEqual(json.loads(c.execute('SELECT context_json FROM telegram_conversation_state').fetchone()[0])['nutrition']['saved_meals'],[{'id':kept['id']}])
  def test_local_date_and_dst_boundaries(self):
   payload={**MEAL,'eaten_at':'2026-10-10T00:30:00+03:00'};self.save(payload)
   self.assertEqual(len(self.day()['meals']),1);self.assertEqual(len(self.day(date(2026,10,9),'UTC')['meals']),1)
@@ -143,6 +181,31 @@ class NutritionTests(unittest.TestCase):
     self.assertEqual(client.post('/api/nutrition/meals',json={'payload':MEAL,'operation_id':'api','confirmed':False}).status_code,422)
     response=client.post('/api/nutrition/meals',json={'payload':MEAL,'operation_id':'api','confirmed':True});self.assertEqual(response.status_code,200)
     self.assertEqual(client.get('/api/nutrition/day',params={'day':'2026-10-10','timezone':'Asia/Jerusalem'}).json()['totals']['calories_kcal']['known_total'],200)
+ def test_permanent_delete_api_revision_and_no_restore(self):
+  meal=self.save()
+  with patch('app.database.database_path',return_value=self.path):
+   with TestClient(app) as client:
+    route=f"/api/nutrition/meals/{meal['id']}"
+    self.assertEqual(client.request('DELETE',route,json={'expected_revision':2}).status_code,400)
+    self.assertEqual(client.request('DELETE',route,json={'expected_revision':True}).status_code,422)
+    response=client.request('DELETE',route,json={'expected_revision':1})
+    self.assertEqual(response.status_code,200);self.assertTrue(response.json()['deleted'])
+    self.assertEqual(client.patch(route+'/removed',json={'expected_revision':2,'removed':False}).status_code,400)
+  self.assertEqual(self.day()['meals'],[])
+ def test_parallel_startup_migrates_deletion_once(self):
+  from concurrent.futures import ThreadPoolExecutor
+  from threading import Barrier
+  meal=self.save()
+  with connect(self.path) as c:
+   c.execute('UPDATE meals SET deleted_at=CURRENT_TIMESTAMP WHERE id=?',(meal['id'],))
+   c.execute("DELETE FROM schema_migrations WHERE version='036_permanent_nutrition_deletion.sql'")
+   c.execute('DROP TABLE nutrition_deleted_operations')
+  gate=Barrier(4)
+  def run():
+   gate.wait();return migrate(self.path)
+  with ThreadPoolExecutor(max_workers=4) as pool:results=list(pool.map(lambda _:run(),range(4)))
+  self.assertEqual(sum(len(result) for result in results),1)
+  self.assertEqual(self.day()['meals'],[])
  def test_vision_validated_and_no_nutrients_or_writes(self):
   result={'ingredients':[{'name':'Possible rice','grams_low':100,'grams_high':200,'question':'Cooked? Any oil?'}],'uncertainties':['No scale reference']}
   stream=io.BytesIO(json.dumps({'message':{'content':json.dumps(result)}}).encode())

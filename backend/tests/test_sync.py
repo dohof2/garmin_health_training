@@ -126,8 +126,9 @@ class SyncTests(unittest.TestCase):
                     interrupt_after=1,
                 )
             first_status = {item["data_type"]: item for item in sync_status(database)["checkpoints"]}
-            self.assertEqual(first_status["activities"]["coverage_end"], "2026-01-02")
+            self.assertEqual(first_status["activities"]["coverage_end"], "2026-01-01")
             self.assertEqual(first_status["daily_metrics"]["coverage_end"], "2026-01-01")
+            self.assertEqual(first_status["sleep_metrics"]["coverage_end"], "2026-01-04")
 
             result = run_sync(provider, date(2026, 1, 4), database, overlap_days=0)
             self.assertEqual(result["status"], "completed")

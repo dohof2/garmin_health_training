@@ -26,6 +26,18 @@ class FollowthroughTests(unittest.TestCase):
   self.path=Path(self.tmp.name)/'fixture.sqlite';fixture(self.path)
   self.workout=next(w for w in list_training(self.path)['workouts'] if w['scheduled_for'][:10]=='2026-10-19')
   self.set_definition(endurance('threshold',60,DEFAULT,today=NOW.date()))
+ def test_explicit_power_band_widening_preserves_midpoint_on_save(self):
+  from datetime import date
+  brief={**DEFAULT,'ftp_watts':250,'calibration':{'power_access':'both','ftp_confirmed_on':NOW.date().isoformat()}}
+  self.set_definition(endurance('threshold',60,brief,today=NOW.date()))
+  before=self.current()['definition']
+  proposal=propose('widen Monday cycling power range by 20%',self.path,NOW)
+  self.assertEqual(proposal['status'],'proposal',proposal)
+  self.save(proposal)
+  after=self.current()['definition']
+  for a,b in zip(before['steps'],after['steps']):
+   self.assertAlmostEqual(a['target']['lower']+a['target']['upper'],b['target']['lower']+b['target']['upper'])
+   self.assertGreater(b['target']['upper']-b['target']['lower'],a['target']['upper']-a['target']['lower'])
  def set_definition(self,d):
   d={**d,'scheduled_date':'2026-10-19','time_unspecified':True,'training_block':{'phase':'Build specificity'}}
   with connect(self.path) as c:c.execute('UPDATE planned_workouts SET sport=?,definition_json=?,title=? WHERE id=?',(d['sport'],encoded(d),d['title'],self.workout['id']))

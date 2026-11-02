@@ -142,7 +142,7 @@ class ReadinessV5Tests(unittest.TestCase):
         self.assertGreater(by_kind['sleep_duration']['predicted_value'],18000)
         self.assertGreater(by_kind['hrv_last_night_average']['predicted_value'],30)
         self.assertEqual(by_kind['hrv_last_night_average']['observations'],28)
-        self.assertEqual(result['formula_version'],'readiness-v5')
+        self.assertEqual(result['formula_version'],'readiness-v7')
 
     def test_future_recovery_snapshot_cannot_leak(self):
         rows=observations()

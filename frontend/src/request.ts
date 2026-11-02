@@ -1,11 +1,14 @@
 type Pending={promise:Promise<Response>;controller:AbortController;subscribers:number;finished:boolean};
 const pending=new Map<string,Pending>();
 
+// Detach pre-commit reads without interrupting their existing subscribers.
+export function invalidateReadRequests(){pending.clear();}
+
 // Share simultaneous reads, never write actions. Abort belongs to each caller;
 // abort the shared transfer only when no caller still needs it. No stale TTL cache.
 export function coalescedFetch(url:string,options:RequestInit={}):Promise<Response>{
  const method=(options.method??'GET').toUpperCase();
- if(method!=='GET'&&!(method==='POST'&&url==='/api/charts/query'))return fetch(url,options).then(response=>{if(response.ok)pending.clear();return response;});
+ if(method!=='GET'&&!(method==='POST'&&url==='/api/charts/query'))return fetch(url,options).then(response=>{if(response.ok)invalidateReadRequests();return response;});
  const signal=options.signal;
  if(signal?.aborted)return Promise.reject(new DOMException('Request aborted','AbortError'));
  const key=JSON.stringify([url,method,options.body??null,[...new Headers(options.headers).entries()],options.credentials??'same-origin']);
@@ -29,7 +32,9 @@ export function coalescedFetch(url:string,options:RequestInit={}):Promise<Respon
 
 export async function requestJson<T>(url:string,options?:RequestInit):Promise<T>{
  const response=await coalescedFetch(url,options);
- const result=await response.json();
+ let result;
+ try{result=await response.json();}
+ catch{throw new Error(response.ok?'The server returned an unreadable response. Please retry.':`The server could not complete this request (${response.status}). Please retry.`);}
  if(!response.ok)throw new Error(typeof result.detail==='string'?result.detail:'The request could not be completed.');
  return result as T;
 }

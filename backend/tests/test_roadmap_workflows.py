@@ -49,6 +49,38 @@ class RoadmapTests(unittest.TestCase):
   with connect(self.path) as c:c.execute('UPDATE planned_workouts SET revision=revision+1 WHERE id=?',(p['adjustments'][0]['workout_id'],))
   with self.assertRaises(ValueError):save({'message':p['request'],'fingerprint':p['fingerprint']},self.path,NOW)
   self.assertFalse(read_brief(self.path)['brief']['continuous_endurance'])
+ def test_continuous_format_includes_recovery_and_preserves_saved_targets(self):
+  root,rows=self.rows();recovery=rows[0]
+  d=endurance('recovery',30,DEFAULT,today=NOW.date())
+  d.update(scheduled_date='2026-10-19',time_unspecified=True)
+  main=next(s for s in d['steps'] if s['name']=='Gentle recovery')
+  main['target']={'type':'perceived_effort','lower':1,'upper':1.5,'unit':'RPE / 10','source':'user_requested'};main['effort']='Very light, 1–1.5 RPE / 10'
+  with connect(self.path) as c:c.execute('UPDATE planned_workouts SET definition_json=? WHERE id=?',(encoded(d),recovery['id']))
+  p=propose('For base and recovery rides remove warm ups and cool down',self.path,NOW)
+  self.assertEqual(p['status'],'proposal')
+  changed=next(x['changes']['definition'] for x in p['adjustments'] if x['workout_id']==recovery['id'])
+  self.assertEqual(len(changed['steps']),1);self.assertEqual(changed['steps'][0]['target'],main['target']);self.assertEqual(changed['steps'][0]['duration_seconds'],1800)
+  save({'message':p['request'],'fingerprint':p['fingerprint']},self.path,NOW)
+  b=read_brief(self.path)['brief']
+  with connect(self.path) as c:state=json.loads(c.execute('SELECT state_json FROM active_training_program').fetchone()[0])
+  for brief in (b,state['brief']):
+   for kind in ('endurance','long_endurance','recovery'):
+    session=endurance(kind,30,brief,today=NOW.date());self.assertEqual(len(session['steps']),1);self.assertEqual(session['steps'][0]['duration_seconds'],1800)
+   self.assertGreater(len(endurance('threshold',60,brief,today=NOW.date())['steps']),1)
+   self.assertGreater(len(endurance('endurance',30,brief,'running',today=NOW.date())['steps']),1)
+  again=propose(p['request'],self.path,NOW);self.assertEqual(again['adjustments'],[])
+ def test_recovery_only_format_request_and_negation(self):
+  from app.workout_format import requested
+  self.assertTrue(requested('No warmups or cooldowns for recovery rides'))
+  self.assertTrue(requested('Base ride without warm up and cool down'))
+  self.assertFalse(requested('Do not remove warm up and cool down for recovery rides'))
+ def test_continuous_recovery_suggestion_uses_saved_active_preference(self):
+  from app.active_training import suggest_today
+  p=propose('Remove warmups and cooldowns for base and recovery rides',self.path,NOW)
+  save({'message':p['request'],'fingerprint':p['fingerprint']},self.path,NOW)
+  with patch('app.training_prescriptions.recovery_policy',return_value={'level':'recovery','quality_allowed':False,'reasons':['Fictional recovery context']}):
+   result=suggest_today({'minutes':30,'sport':'cycling','timezone':TZ},self.path,NOW)
+  self.assertEqual(result['status'],'suggestion',result);self.assertEqual(result['session']['workout_kind'],'recovery');self.assertEqual(len(result['session']['steps']),1)
  def test_date_only_completion_uses_local_day_and_virtual_rides(self):
   self.add_activity(kind='virtual_ride',seconds=900);root,rows=self.rows()
   with connect(self.path) as c:changes,warnings=reconcile(c,rows,TZ,NOW+timedelta(hours=5))

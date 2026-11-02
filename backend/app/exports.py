@@ -76,6 +76,7 @@ PORTABLE_TABLES = (
     "training_coach_brief",
     "training_coach_brief_revisions",
     "meal_revisions",
+    "nutrition_chat_operations",
     "food_library",
     "food_library_revisions",
     "nutrition_day_targets",
@@ -92,6 +93,7 @@ PORTABLE_TABLES = (
     "activity_metrics",
     "garmin_sync_payloads",
     "metric_readings",
+    "recovery_time_observations",
     "health_samples",
     "hydration_events",
     "abnormal_heart_rate_events",
@@ -113,12 +115,14 @@ PORTABLE_TABLES = (
 )
 
 TABLE_DATE_COLUMNS = {
+    "nutrition_chat_operations": "json_extract(result_json,'$.context_date')",
     "nutrition_day_targets": "calendar_date",
     "readiness_calculations": "calendar_date",
     "garmin_sync_payloads": "calendar_date",
     "activities": "started_at",
     "activity_samples": "recorded_at",
     "metric_readings": "recorded_at",
+    "recovery_time_observations": "recorded_at",
     "health_samples": "recorded_at",
     "hydration_events": "calendar_date",
     "abnormal_heart_rate_events": "calendar_date",

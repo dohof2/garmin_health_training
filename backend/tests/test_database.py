@@ -109,3 +109,14 @@ class DatabaseMigrationTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MigrationReadContentionTests(unittest.TestCase):
+    def test_current_schema_does_not_take_write_lock(self):
+        from app.database import connect
+        with tempfile.TemporaryDirectory() as folder:
+            path=Path(folder)/'db.sqlite'
+            migrate(path)
+            with connect(path) as writer:
+                writer.execute('BEGIN IMMEDIATE')
+                self.assertEqual(migrate(path),[])

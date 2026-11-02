@@ -35,6 +35,8 @@ def activate(c, plan):
 def capability(path, today, tz, mix_days=14):
     start=today-timedelta(days=42)
     with connect(path) as c:
+        from .training_load_focus import read_load_focus
+        load_focus=read_load_focus(c,today)
         coverage_row=c.execute("SELECT coverage_start,coverage_end FROM sync_checkpoints WHERE data_type='activities'").fetchone()
         activity_coverage=dict(coverage_row) if coverage_row else {}
         activities=[]
@@ -90,7 +92,9 @@ def capability(path, today, tz, mix_days=14):
             'aerobic_effect':_mean(measures.get('aerobic_training_effect',[])),
             'anaerobic_effect':_mean(measures.get('anaerobic_training_effect',[])),
             'latest_normalized_power':(measures.get('normalized_power') or [None])[-1],
-            'training_mix':training_mix,'biological':biological,'note':'Recorded workload and training effects describe recent exposure; they do not measure a physiological ceiling or establish FTP.'}
+            'training_mix':training_mix,'biological':biological,'load_focus':load_focus,
+            'cycling_ability':{'status':'unavailable','reason':'No verified Cycling Ability source mapping is available; load-focus ranges are not ability scores.'},
+            'note':'Recorded workload and training effects describe recent exposure; they do not measure a physiological ceiling or establish FTP.'}
 
 
 def _mean(rows):return round(sum(r['value'] for r in rows)/len(rows),1) if rows else None
@@ -105,7 +109,8 @@ def _program_workouts(c,identifier):
 
 
 def _fill(c,program,state,today,now):
-    """Generate only the visible seven-day horizon using accepted constraints."""
+    """Fill the visible week and at least seven upcoming workouts, within the program."""
+    from .training_constraints import day_limit
     context=_context(c,now,brief=state['brief'],timezone_name=state['timezone'])
     if not context['ready']:return ['Upcoming generation needs current training answers: '+', '.join(context['missing']+context['stale'])]+context['blockers']
     from .training_coach import _preview
@@ -113,16 +118,25 @@ def _fill(c,program,state,today,now):
     anchor=date.fromisoformat(state['starts_on'])
     first=anchor+timedelta(weeks=max(0,(today-anchor).days//7))
     last=anchor+timedelta(weeks=max(0,((today+timedelta(days=6))-anchor).days//7))
-    for monday in sorted({first,last}):
+    end=date.fromisoformat(state['ends_on'])
+    for index in range(max(0,(end-first).days//7)+1):
+        monday=first+timedelta(weeks=index)
+        if monday>last and sum(w['completion_status']=='planned' and w['scheduled_for'][:10]>=today.isoformat() for w in _program_workouts(c,program))>=7:break
         if monday.isoformat()>state['ends_on']:continue
         # The preview includes current workouts and fixed commitments in its volume limits.
         brief={**state['brief'],'fixed_events':[e for e in state['brief']['fixed_events'] if e['date']>=today.isoformat() and not any(w['scheduled_for'][:10]==e['date'] and json.loads(w['definition_json']).get('fixed_commitment') for w in _program_workouts(c,program))]}
-        p=_preview(c,brief,monday,state['timezone'],now,None,resolve_ftp=False)
+        continuation_answers=None
+        if state.get('strength_set_policy',{}).get('weekly_allowance_minutes'):
+            from .training import _preferences
+            caps=dict(_preferences(c)['answers'].get('weekly_caps',{}));allowance=state['strength_set_policy']['weekly_allowance_minutes']
+            caps['strength']={'max_minutes':allowance,'range_min_minutes':allowance}
+            continuation_answers={'weekly_caps':caps}
+        p=_preview(c,brief,monday,state['timezone'],now,None,candidate_answers=continuation_answers,resolve_ftp=False)
         if p['status']!='ready':
             if p['status']=='needs_input':warnings.extend(p['questions'])
             continue
         occupied={(w['scheduled_for'][:10],json.loads(w['definition_json']).get('schedule_slot_id'),w['sport']) for w in _program_workouts(c,program)}
-        sessions=[s for s in p['sessions'] if (s['scheduled_for'][:10],s['definition'].get('schedule_slot_id'),s['sport']) not in occupied and today<=datetime.fromisoformat(s['scheduled_for']).date()<=min(today+timedelta(days=6),date.fromisoformat(state['ends_on']))]
+        sessions=[s for s in p['sessions'] if (s['scheduled_for'][:10],s['definition'].get('schedule_slot_id'),s['sport']) not in occupied and today<=datetime.fromisoformat(s['scheduled_for']).date()<=end]
         if not sessions:continue
         child='plan-'+str(uuid.uuid4())
         stored={**p,'program_id':program,'preferences':context,'automatic_continuation':True}
@@ -130,6 +144,12 @@ def _fill(c,program,state,today,now):
         block=next((b for b in state['blocks'] if b['starts_on']==monday.isoformat()),None)
         for session in sessions:
             definition=session['definition']
+            if state.get('strength_set_policy') and session['sport']=='strength':
+                from .strength_adjustments import apply_policy
+                definition=apply_policy(definition,state['strength_set_policy'],block.get('phase') if block else None)
+                if definition['duration_minutes']>day_limit(context['answers']['week_schedule'],datetime.fromisoformat(session['scheduled_for']).weekday()):
+                    warnings.append('Strength progression needs more available time; review the slot before scheduling it.')
+                    continue
             wid='workout-'+str(uuid.uuid4())
             c.execute('INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json) VALUES(?,?,?,?,?,?)',(wid,child,session['sport'],definition['title'],session['scheduled_for'],encoded(definition)))
             _revision(c,_snapshot(c,wid))
@@ -194,15 +214,13 @@ def _reconcile_events(c,program,state,today,now):
         else:
             wid='workout-'+str(uuid.uuid4());c.execute('INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json) VALUES(?,?,?,?,?,?)',(wid,program,fixed['sport'],fixed['title'],fixed['scheduled_for'],encoded(definition)));_revision(c,_snapshot(c,wid))
             changes.append({'workout_id':wid,'title':fixed['title'],'action':'Scheduled upcoming event','reason':'Preserved its stated demands.'})
-    quality_assigned=any(json.loads(w['definition_json']).get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or json.loads(w['definition_json']).get('fixed_commitment') and 'hard' in json.loads(w['definition_json']).get('effort_target',{}).get('description','') for w in _program_workouts(c,program) if w['completion_status']=='planned')
     for w in _program_workouts(c,program):
         d=json.loads(w['definition_json'])
         if w['completion_status']!='planned' or w['publish_status']!='local' or d.get('fixed_commitment') or d.get('user_adjusted') or datetime.fromisoformat(w['scheduled_for'])<now:continue
         if w['sport']=='cycling' and d.get('workout_kind') and (d.get('program_ftp')!=state['brief'].get('ftp_watts') or d.get('program_goal')!=state['brief'].get('goal') or d.get('calibration')!=state['brief'].get('calibration') or d.get('workout_location')!=state['brief'].get('workout_location','outdoor')):
             kind=d['workout_kind'];minutes=d['duration_minutes']
             if d.get('program_goal')!=state['brief'].get('goal'):
-                if state['brief']['goal']=='ftp' and not quality_assigned and minutes>=45:kind='threshold';minutes=min(minutes,60);quality_assigned=True
-                elif state['brief']['goal']!='ftp' and kind in ('threshold','vo2'):kind='endurance'
+                kind='endurance' # Weekly selection below chooses the current goal's interval slots.
             replacement=endurance(kind,minutes,state['brief'],today=today)
             c.execute('UPDATE planned_workouts SET title=?,definition_json=?,revision=revision+1 WHERE id=?',(replacement['title'],encoded(replacement),w['id']));_revision(c,_snapshot(c,w['id']))
             changes.append({'workout_id':w['id'],'title':replacement['title'],'action':'Updated targets','reason':'Use the current program direction and confirmed calibration.'})
@@ -212,6 +230,31 @@ def _reconcile_events(c,program,state,today,now):
     anchor=date.fromisoformat(state['starts_on'])
     for week,sport in {(anchor+timedelta(weeks=(datetime.fromisoformat(w['scheduled_for']).date()-anchor).days//7),w['sport']) for w in rows if w['completion_status'] in ('planned','completed')}:
         selected=[w for w in rows if w['sport']==sport and w['completion_status'] in ('planned','completed') and week<=datetime.fromisoformat(w['scheduled_for']).date()<=week+timedelta(days=6)]
+        if sport=='cycling':
+            # Allocate cycling together, rather than truncating the longest
+            # session first and discarding its schedule/type metadata.
+            other=[w for w in rows if w['sport']!='cycling' and week<=datetime.fromisoformat(w['scheduled_for']).date()<=week+timedelta(days=6)]
+            estimate=_context(c,now,brief={**state['brief'],'_planning_day':week.isoformat()},timezone_name=state['timezone'])['volume_estimates'].get('cycling',{})
+            targets,long_id,slots=_cycling_review_targets(selected,answers,estimate,today,state['timezone'],other,_observed_cycling_minutes(c,selected,week,today,state['timezone']))
+            for w in selected:
+                if w['id'] not in targets:continue
+                d=json.loads(w['definition_json']);target=targets[w['id']]
+                if not target:
+                    c.execute("UPDATE planned_workouts SET completion_status='cancelled',revision=revision+1 WHERE id=?",(w['id'],));_revision(c,_snapshot(c,w['id']))
+                    changes.append({'workout_id':w['id'],'title':w['title'],'action':'Rest within cycling budget','reason':'Reserve actual completed riding and prioritize the long slot instead of adding leftover training.'})
+                    continue
+                kind=d.get('workout_kind','endurance')
+                if w['id']==long_id and target>60 and kind=='endurance':kind='long_endurance'
+                if target==d['duration_minutes'] and kind==d.get('workout_kind'):continue
+                replacement=endurance(kind,target,state['brief'],today=today)
+                replacement.update({key:d[key] for key in ('scheduled_date','time_unspecified','schedule_timezone','training_block','schedule_slot_id','schedule_slot_label','planning_policy_version','long_ride_priority_requested') if key in d})
+                slot=slots[w['id']];replacement.update(schedule_slot_id=slot['slot_id'],schedule_slot_label=slot.get('label','Cycling'))
+                replacement['planning_policy_version']='cycling-dose-v1'
+                replacement['duration_guidance']={**d.get('duration_guidance',{}),'allocated_minutes':target,'weekly_cap_minutes':estimate.get('effective_ceiling_minutes'), 'long_session_reference_minutes':estimate.get('long_session_minutes')}
+                replacement['rationale'].append('Preserve the long-ride slot within the sport-specific weekly budget and observed completed riding.')
+                c.execute('UPDATE planned_workouts SET title=?,definition_json=?,revision=revision+1 WHERE id=?',(replacement['title'],encoded(replacement),w['id']));_revision(c,_snapshot(c,w['id']))
+                changes.append({'workout_id':w['id'],'title':replacement['title'],'action':'Reallocated cycling week','reason':'Prioritize the long ride while preserving its slot and current weekly volume limit.'})
+            continue
         total=sum(json.loads(w['definition_json'])['duration_minutes'] for w in selected);budget=answers.get('weekly_minutes',{}).get(sport,0);excess=total-budget
         for w in sorted(selected,key=lambda w:json.loads(w['definition_json'])['duration_minutes'],reverse=True):
             if excess<=0:break
@@ -228,7 +271,7 @@ def _reconcile_events(c,program,state,today,now):
     return changes,list(dict.fromkeys(notes))
 
 
-def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=()):
+def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=(),observed_completed_minutes=None):
     """Reallocate local generated rides without replacing a plan or published rows."""
     from .training_constraints import slots_for,day_limit
     from .training_coach import _cycling_allocations
@@ -238,7 +281,7 @@ def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=()):
     longest=max((slot['max_minutes'] for slot in primary),default=0)
     preferred=[slot['slot_id'] for slot in primary if slot['max_minutes']==longest]
     long_slot=preferred[0] if len(preferred)==1 else None
-    candidates=[];assigned={};caps={};long_id=None;used_slots=set()
+    candidates=[];assigned={};caps={};minimums={};long_id=None;used_slots=set()
     for row in rows:
         definition=json.loads(row['definition_json'])
         day=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()
@@ -254,15 +297,18 @@ def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=()):
         current=definition['duration_minutes']
         automatic=bool(definition.get('planning_policy_version') or definition.get('workout_kind') in ('long_endurance','climbing_endurance','long_tempo'))
         desired=estimate.get('long_session_minutes',current) if automatic and slot['slot_id']==long_slot else max(60,current) if automatic else current
+        session_ceiling=estimate.get('long_session_minutes',desired)
+        if estimate.get('explicit_weekly_range') and slot.get('min_minutes'):
+            desired=max(desired,slot['min_minutes']);session_ceiling=max(session_ceiling,slot['min_minutes']);minimums[row['id']]=slot['min_minutes']
         if slot['slot_id']==long_slot:long_id=row['id']
         # Preserve recovery sessions, novice limits, and recovery/taper weeks.
         if definition.get('workout_kind')=='recovery' or answers.get('experience',{}).get('cycling')=='new' or estimate.get('progression',{}).get('recovery_week'):
-            desired=min(current,30)
+            desired=min(current,30);minimums.pop(row['id'],None)
         if definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic'):
             desired=min(desired,60)
         other_minutes=sum(json.loads(peer['definition_json'])['duration_minutes'] for peer in other_rows
                           if peer['completion_status'] in ('planned','completed') and datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date()==day)
-        caps[row['id']]=min(desired,slot['max_minutes'],estimate.get('long_session_minutes',desired),max(0,day_limit(days,day.weekday())-other_minutes))
+        caps[row['id']]=min(desired,slot['max_minutes'],session_ceiling,max(0,day_limit(days,day.weekday())-other_minutes))
     candidate_ids={row['id'] for row in candidates}
     daily_remaining={}
     for row in sorted(candidates,key=lambda row:(assigned[row['id']]['slot_id']!=long_slot,row['scheduled_for'],row['id'])):
@@ -277,12 +323,36 @@ def _cycling_review_targets(rows,answers,estimate,today,tz,other_rows=()):
     # their minutes twice just because a published ride is before today.
     reserved=sum(json.loads(row['definition_json'])['duration_minutes'] for row in rows
                  if row['id'] not in candidate_ids and row['completion_status'] in ('planned','completed'))
+    if observed_completed_minutes is not None:
+        # With verified current-week coverage, actual rides replace past planned
+        # guesses. Keep future protected/published commitments reserved separately.
+        reserved=observed_completed_minutes+sum(json.loads(row['definition_json'])['duration_minutes'] for row in rows
+                 if row['id'] not in candidate_ids and row['completion_status']=='planned' and row['scheduled_for'][:10]>=today.isoformat())
     ceiling=min(answers.get('weekly_minutes',{}).get('cycling',0),estimate.get('effective_ceiling_minutes',0))
-    targets=_cycling_allocations(caps,max(0,ceiling-reserved),long_id)
+    targets=_cycling_allocations(caps,max(0,ceiling-reserved),long_id,minimums)
     return {row['id']:targets.get(row['id'],0) for row in candidates},long_id,assigned
 
 
-REVIEW_POLICY='training-review-v7-multiweek-edits'
+def _observed_cycling_minutes(c,rows,window,today,tz):
+    checkpoint=c.execute("SELECT coverage_start,coverage_end,status FROM sync_checkpoints WHERE data_type='activities'").fetchone()
+    if window>today or not checkpoint or checkpoint['status']!='synced' or (checkpoint['coverage_start'] or '9999')>window.isoformat() or (checkpoint['coverage_end'] or '')<today.isoformat():return None
+    from .training_volume import sport_of
+    recorded=[]
+    for activity in c.execute("SELECT id,activity_type,started_at,duration_seconds FROM activities WHERE deleted_at IS NULL AND source_name!='synthetic_fixture' AND started_at>=?",((window-timedelta(days=1)).isoformat(),)):
+        day=datetime.fromisoformat(activity['started_at'].replace('Z','+00:00')).astimezone(ZoneInfo(tz)).date()
+        if sport_of(activity['activity_type'])=='cycling' and window<=day<=min(today,window+timedelta(days=6)) and activity['duration_seconds']:
+            recorded.append((activity['id'],day,activity['duration_seconds']/60))
+    total=sum(r[2] for r in recorded);identifiers={r[0] for r in recorded}
+    for row in rows:
+        if row['completion_status']!='completed':continue
+        feedback=c.execute('SELECT activity_id FROM training_feedback WHERE workout_id=?',(row['id'],)).fetchone()
+        if feedback and feedback['activity_id'] in identifiers:continue
+        day=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date();minutes=json.loads(row['definition_json'])['duration_minutes']
+        if not any(r[1]==day and abs(r[2]-minutes)<=max(10,minutes*.15) for r in recorded):total+=minutes
+    return total
+
+
+REVIEW_POLICY='training-review-v11-two-interval-week'
 
 def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
     timezone_info(timezone_name);now=now or datetime.now(timezone.utc)
@@ -366,7 +436,8 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
                     week_context=_context(c,now,brief={**state['brief'],'_planning_day':window.isoformat()},timezone_name=tz)
                     estimate=week_context['volume_estimates'].get('cycling',{})
                     other_rows=[row for row in all_program if row['sport']!='cycling' and window<=datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(tz)).date()<window+timedelta(days=7)]
-                    targets,long_id,assigned=_cycling_review_targets(rows,week_context['answers'],estimate,today,tz,other_rows)
+                    observed_minutes=_observed_cycling_minutes(c,rows,window,today,tz)
+                    targets,long_id,assigned=_cycling_review_targets(rows,week_context['answers'],estimate,today,tz,other_rows,observed_minutes)
                     weekly_targets.update(targets);cycling_slots.update(assigned)
                     if long_id:long_rides.add(long_id)
                     week_estimates.update({row['id']:estimate for row in rows})
@@ -423,7 +494,7 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
                             planned_block=next((block for block in state['blocks'] if date.fromisoformat(block['starts_on'])<=day<date.fromisoformat(block['starts_on'])+timedelta(days=7)),{})
                             stage=max(0,(day-date.fromisoformat(state['starts_on'])).days//7)
                             if not advanced_cycling_eligible(c,now,answers.get('experience',{}).get('cycling'),stage,planned_block.get('phase'),adaptation['quality_allowed']):
-                                kind='endurance';action='Deferred advanced intensity';why='Sprint/anaerobic work needs a build phase, experienced cycling, tolerated completed quality sessions and current recovery clearance.'
+                                kind='endurance';action='Deferred advanced intensity';why='Sprint/anaerobic work is deferred by recovery or the current recovery/taper block.'
                         if kind in KINDS and (minutes!=original['duration_minutes'] or kind!=original.get('workout_kind') or original.get('duration_guidance')!=guidance or original.get('planning_policy_version')!='cycling-dose-v1' or not original.get('reference_ftp') or any('power_reference_fractions' not in step for step in original.get('steps',[]))):
                             definition=endurance(kind,minutes,state['brief'],'cycling',today=today)
                             definition.update(schedule_metadata);definition['duration_guidance']=guidance;definition['planning_policy_version']='cycling-dose-v1'
@@ -444,12 +515,29 @@ def review(path=None,timezone_name='UTC',now=None,trigger='auto'):
                         definition.update(schedule_metadata);action='Changed to easy recovery';why='; '.join(adaptation['reasons'])
                 elif program['status']=='active' and protected and demanding and day<=today+timedelta(days=1) and adaptation['level']=='recovery':
                     definition['review_hold']={'date':today.isoformat(),'reason':'; '.join(adaptation['reasons'])};action='Review required';why='; '.join(adaptation['reasons'])
+                if program['status']=='active' and not protected and w['sport']=='strength' and not definition.get('review_hold'):
+                    from .garmin_strength import mapping_blockers
+                    if mapping_blockers(definition):
+                        from .training_prescriptions import strength
+                        try:
+                            definition=strength(workout_definition('strength_foundation',definition['duration_minutes'],answers),{**state['brief'],'strength_performance':review_context['recent_strength_performance']},answers,tolerated=False,observed_at=now)
+                            definition.update(schedule_metadata)
+                            action='Updated Garmin exercise repertoire';why='Use exact Garmin exercises within saved equipment, movement and capacity constraints; no progression increase.'
+                        except ValueError as error:
+                            definition['review_hold']={'date':today.isoformat(),'reason':str(error)}
+                            action='Review required';why=str(error)
                 if definition!=original:
                     c.execute('UPDATE planned_workouts SET title=?,definition_json=?,revision=revision+1 WHERE id=?',(definition['title'],encoded(definition),w['id']));_revision(c,_snapshot(c,w['id']))
                 report['changes'].append({'workout_id':w['id'],'title':definition['title'],'action':action,'reason':why})
             from .training_completion import adapt_missed_stimulus
             stimulus_changes,stimulus_warnings=adapt_missed_stimulus(c,_program_workouts(c,program['plan_id']),state,today,now,adaptation,answers) if program['status']=='active' else ([],[])
             report['changes'].extend(stimulus_changes);report['warnings'].extend(stimulus_warnings)
+            if program['status']=='active':
+                from .cycling_week import reconcile
+                report['changes'].extend(reconcile(c,_program_workouts(c,program['plan_id']),state,today,now,adaptation,capabilities['load_focus'],answers))
+                from .training_coach import roadmap
+                state['blocks']=roadmap(state['brief'],date.fromisoformat(state['starts_on']),answers)
+                c.execute('UPDATE active_training_program SET state_json=? WHERE id=1',(encoded(state),))
             if readiness['score'] is None:report['warnings'].append('A complete current readiness score is unavailable; no readiness-based increase is made.')
             report['warnings'].append('Review thresholds are provisional app rules. Garmin training effects describe recent stimulus, not aerobic or anaerobic capacity tests.')
             c.execute('INSERT INTO training_program_reviews(plan_id,fingerprint,review_json) VALUES(?,?,?)',(program['plan_id'],fingerprint,encoded(report)))
@@ -702,7 +790,7 @@ def suggest_today(arguments,path=None,now=None):
             stage=max(0,(today-date.fromisoformat(program['state']['starts_on'])).days//7) if program else 0
             block=next((row for row in program['state']['blocks'] if date.fromisoformat(row['starts_on'])<=today<date.fromisoformat(row['starts_on'])+timedelta(days=7)),{}) if program else {}
             with connect(path) as intensity_connection:eligible=advanced_cycling_eligible(intensity_connection,now,context['answers'].get('experience',{}).get('cycling'),stage,block.get('phase'),adaptation['quality_allowed'])
-            if not eligible:kind='endurance';reason='Advanced intensity is deferred until the build phase, completed quality-session tolerance and recovery support it.'
+            if not eligible:kind='endurance';reason='Interval work is deferred by recovery or the current recovery/taper block.'
         requested_kind=kind
         definition=endurance(kind,definition['duration_minutes'],b,today=today)
         if requested_kind in ('sprint','anaerobic') and definition['workout_kind']!=requested_kind:reason='Available time is too short for the full warm-up and recoveries; use easy endurance instead.'

@@ -581,6 +581,9 @@ class GarminConnectProvider:
                 payload = self.client.get_sleep_data(day.isoformat())
                 if not isinstance(payload, dict):
                     raise SyncError('Garmin sleep response is malformed')
+                daily=payload.get('dailySleepDTO')
+                if isinstance(daily,dict) and daily.get('calendarDate') and str(daily['calendarDate'])!=day.isoformat():
+                    raise SyncError('Garmin sleep response date did not match the requested date')
                 payloads.append(source_payload(payload))
                 metrics.extend(_normalise_sleep(payload, day.isoformat()))
                 day = date.fromordinal(day.toordinal() + 1)
@@ -619,6 +622,10 @@ class GarminConnectProvider:
                 raise SyncError('Additional Garmin endpoints failed: ' + '; '.join(f"{name}: {error}" for name,error in payload['failures'].items()))
             return normalized_metrics(payload, start_date.isoformat())
         raise SyncError(f"Unsupported Garmin data type: {data_type}")
+
+    def fetch_training_load(self, day: date):
+        """Fast daily load read, independent of the broad supplementary crawl."""
+        return self.client.get_daily_training_status(day.isoformat())
 
     def fetch_activity_detail(self, source_record_id: str) -> bytes:
         """Download Garmin's original FIT bundle for sensor-level samples."""

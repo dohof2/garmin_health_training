@@ -26,6 +26,21 @@ class ActivityStreamChartTests(unittest.TestCase):
             for second, power in samples:
                 c.execute('INSERT INTO activity_samples(activity_id,recorded_at,power_watts,heart_rate_bpm,cadence_rpm,speed_mps) VALUES(?,?,?,?,?,?)', (identifier, (origin + timedelta(seconds=second)).isoformat(), power, 120, 80, 10))
 
+    def test_minute_scatter_pairs_all_stream_axes(self):
+        self.add('minutes', [(0,100),(30,200),(60,300),(90,None),(180,500)])
+        for x, y, expected in [('power','heart_rate',150),('speed','cadence',36),('cadence','power',80)]:
+            result=chart_data({'metric':'stream:'+y,'x_metric':'stream:'+x,'kind':'scatter','activity_ids':['minutes'],'bin_seconds':60},self.path)
+            self.assertEqual(len(result['points']),3)
+            self.assertEqual(result['points'][0]['x'],expected)
+            self.assertEqual(result['points'][0]['sample_count'],2)
+            self.assertEqual(result['points'][-1]['elapsed_seconds'],180)
+
+    def test_monthly_max_is_peak_not_mean(self):
+        result=chart_data({'metric':'activity_max_heart_rate','kind':'scatter','x_metric':'date','aggregation':'monthly_max','start':'2026-10-01','end':'2026-11-01','trend_line':True},self.path)
+        self.assertEqual(len(result['points']),1)
+        self.assertEqual(result['points'][0]['y'],120)
+        self.assertTrue(result['spec']['trend_line'])
+
     def test_overlay_aligns_separate_recordings_and_preserves_zero(self):
         result = chart_data(self.spec, self.path)
         self.assertEqual([s['id'] for s in result['series']], ['a', 'b'])

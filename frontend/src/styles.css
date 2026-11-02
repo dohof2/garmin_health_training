@@ -1637,6 +1637,7 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .section-heading h2 { font-size: 1.35rem; letter-spacing: -.025em; }
 .section-heading p { color: #5d7fa5; }
 .settings-layout { grid-template-columns: 1fr; }
+.telegram-settings-section { margin-bottom: 20px; }
 .settings-panel { background: #fff; border-color: #dce4ef; }
 .data-card { background: #fff; border: 1px solid #dce4ef; border-radius: 12px; }
 .graph-canvas button,.assistant-plots button,.weight-entry button,.nutrition-panel button { border: 1px solid #d7e1ee; background: #fff; color: #365272; padding: 8px 11px; border-radius: 7px; font-size: .78rem; }
@@ -1877,6 +1878,12 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .workout-day-duration { font-size:clamp(1.4rem,2.4vw,1.9rem); line-height:1.15; letter-spacing:-.03em; }
 .workout-day-action { display:flex; justify-content:space-between; gap:8px; margin-top:auto; font-size:.8rem; color:#52647b; }
 .workout-day:hover { background:#edf3fa; }
+.workout-day.workout-day--completed { border-color:#b6d8c2; border-left-color:#287349; background:#f0f8f2; }
+.workout-day.workout-day--completed:hover { background:#e6f3ea; }
+.workout-completion-icon { width:38px; height:38px; flex-shrink:0; color:#287349; }
+.workout-completion-label { color:#24623e; font-size:.85rem; font-weight:700; }
+.training-day-completion { display:flex; align-items:center; gap:6px; color:#24623e; font-size:.8rem; font-weight:600; }
+.training-day-completion .workout-completion-icon { width:20px; height:20px; }
 .workout-day[aria-expanded=true] { outline:3px solid #477fb5; outline-offset:2px; }
 .workout-day.recovery { border-left-color:#55a8a1; }.workout-day.endurance { border-left-color:#559552; }.workout-day.tempo { border-left-color:#d19333; }.workout-day.threshold,.workout-day.vo2,.workout-day.sprint,.workout-day.anaerobic { border-left-color:#cc5555; }.workout-day.strength { border-left-color:#9866ad; }.workout-day.run { border-left-color:#bd6c35; }
 .training-rest-day { flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:10px; min-height:180px; border-radius:12px; background:#f5f7fa; color:#65758b; text-align:center; }
@@ -1945,5 +1952,15 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .activity-trace-scroll:focus-visible { outline: 2px solid #356799; outline-offset: 3px; }
 
 .overview-chat .chat-messages { height: min(60vh, 620px); max-height: none; overflow-anchor: none; scroll-behavior: auto; }
-/* Keep the newest answer's beginning in view, even while it is still short. */
-.overview-chat .chat-message--assistant:last-child { min-height: calc(min(60vh, 620px) - 44px); box-sizing: border-box; }
+
+.sync-summary {
+  margin-top: 16px;
+  border: 1px solid rgba(104, 211, 145, 0.25);
+  border-radius: 10px;
+  padding: 14px;
+}
+.sync-summary--failed { border-color: rgba(228, 135, 107, 0.5); }
+.sync-summary > summary { cursor: pointer; }
+.sync-summary > summary strong { margin-right: 14px; }
+.sync-summary > summary span { font-size: 0.85rem; }
+.sync-component-scroll { max-height: 320px; overflow-y: auto; margin-top: 14px; }
