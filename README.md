@@ -200,7 +200,17 @@ Add `--live` to use the saved Garmin session for missing live activity summaries
 
 The dashboard includes a provisional morning readiness card with personal HRV/RHR references, sleep adequacy and decayed workout load. Expand it for exact deductions, data gaps, a 14-morning trend, and editable versioned parameters. Missing inputs yield a range or insufficient data. Ask the assistant for training readiness to get the same advisory result. The prototype never changes a workout automatically; its weights are not prospectively validated. See [T12 verification](docs/status/t12-verification.md).
 
+## One assistant with focused skills
+
+Chat uses one conversational agent with the selected provider/model and its existing reasoning configuration. A hierarchical catalog covers 32 skills across training, activities/analysis, health, nutrition, profile/preferences, Garmin, maintenance, and app data. The model discovers and loads focused instructions/tools as needed; there is no separate role router, classifier call, or previous-agent workflow switch.
+
+Skill descriptions are in `backend/app/skills/catalog.json`; each leaf has a versioned Markdown instruction file beside it. Update the relevant skill/catalog entry and its regression cases when behavior needs correction. General conversation needs no skill. Training edits use exact session references and existing review/save validators. Long-term planning retains briefs and decisions between turns and receives a larger per-turn allowance. Turn usage is visible in chat. See [implementation and verification](docs/qa/single-agent/REPORT.md). Sync, publication, imports/restores, library authoring and dashboard configuration retain their existing app controls; a workflow link does not claim those actions ran.
+
+Restart the app after updating. Existing provider/model selection, plans, logs, and saved records are preserved. Prior conversation task summaries and pending nutrition context are migrated. Historical task/receipt tables remain as audit records; they have no executable agent workflow attached.
+
 ## Training plans
+
+In **Next 7 days**, drag a planned workout to an empty day to move it, or onto another workout to swap dates. A day with several sessions offers a placement choice. Manual placements are one-time exceptions and preserve your recurring weekly availability. Existing Move/Swap controls provide a keyboard alternative. Recovery checks and protected-session rules still apply; republish previously sent sessions to update Garmin.
 
 Open **Training** to save sports, availability, equipment, experience and restrictions. Only missing/stale answers require confirmation. Create a Monday draft, review its sessions and context, then explicitly accept it. Edit templates/duration and record completion, effort, soreness or missed sessions. Review next-week volume separately; saving limits leaves the existing calendar unchanged. Goals are optional. Foundation templates are local; Garmin publishing is T8. See [rules and limits](docs/planning/training-rules.md) and [verification](docs/status/t7-verification.md).
 

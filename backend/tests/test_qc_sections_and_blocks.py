@@ -8,7 +8,6 @@ from app.training_prescriptions import endurance
 from app.training_coach import DEFAULT
 from app.workout_edits import edit,EditError
 from app.activity_section_analysis import analyze,conversational_selection
-from app.ai_chat import chat_stream
 
 POLICY={'level':'normal','quality_allowed':True}
 NOW=datetime(2026,10,27,10,tzinfo=timezone.utc)
@@ -91,14 +90,6 @@ class RecordedSectionsTests(unittest.TestCase):
   with connect(self.path) as c:c.execute("UPDATE activity_samples SET raw_json='{}' WHERE activity_id='ride'")
   result=self.run_section({'kind':'distance','start':.6,'end':.9})
   self.assertTrue(result['needs_clarification']);self.assertEqual(result['selections'][0]['candidate_count'],0)
- def test_shared_chat_retains_activity_and_exact_section_on_followup_without_model(self):
-  context=[{'activity_id':'ride','start_seconds':60,'end_seconds':90}]
-  with patch('app.ai_chat._chatgpt_stream',side_effect=AssertionError('No model needed')):
-   events=[json.loads(e) for e in chat_stream('What was the average power in that section?',path=self.path,ride_context='ride',section_context=context)]
-  self.assertEqual(events[-1]['type'],'complete',events)
-  self.assertIn('100 W',''.join(e.get('text','') for e in events))
-  self.assertIsNone(conversational_selection('there is a chunk of uphill',context,'ride'))
-  self.assertEqual(conversational_selection('Compare minutes 1-2 and minutes 2-3',None,'ride'),[{'kind':'time','start':60,'end':120},{'kind':'time','start':120,'end':180}])
  def test_read_only_tool_is_available_without_exporting_other_records(self):
   from app.chat_access import questions_only
   from app.ai_tools import execute_tool
@@ -106,8 +97,3 @@ class RecordedSectionsTests(unittest.TestCase):
    result=execute_tool('analyze_activity_sections',{'activity_id':'ride','sections':[{'kind':'time','start':60,'end':90}]},self.path)
   self.assertEqual(result['activity_id'],'ride')
   self.assertNotIn('raw_json',result)
- def test_comparing_climbs_uses_general_analysis_instead_of_single_climb_interceptor(self):
-  with patch('app.ai_chat.get_ai_settings',return_value={'active_provider':'chatgpt','chatgpt_model':'fixture'}),patch('app.ai_chat._chatgpt_stream',return_value=iter([json.dumps({'type':'complete'})])) as model:
-   events=[json.loads(e) for e in chat_stream('Compare the first climb with the last climb',path=self.path,ride_context='ride')]
-  self.assertEqual(events[-1]['type'],'complete')
-  self.assertEqual(model.call_args.args[5]['ride'],'ride')

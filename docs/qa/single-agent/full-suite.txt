@@ -1,0 +1,511 @@
+......................................................F......................................................F....F.......F..F..............................................................................................................................................................................................................................................................................................................................................skill_agent_turn_failed RuntimeError
+.................................................................FF......F...F.....................................................................F......FFEEFEE..FEEEEEEEE.F.FFF.........F......FFFF..........FEFE.....................F.................................
+======================================================================
+ERROR: test_date_filtered_exports_limit_feedback_and_workout_revisions (test_training.TrainingTests.test_date_filtered_exports_limit_feedback_and_workout_revisions)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 178, in test_date_filtered_exports_limit_feedback_and_workout_revisions
+    self.save();history=self.draft();update_workout(history['workouts'][0]['id'],1,{'effort':5},self.path)
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_draft_balances_sports_obeys_time_and_needs_explicit_accept (test_training.TrainingTests.test_draft_balances_sports_obeys_time_and_needs_explicit_accept)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 71, in test_draft_balances_sports_obeys_time_and_needs_explicit_accept
+    self.save();history=self.draft();plan=history['plans'][0]
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_feedback_preserved_revisions_without_silent_rewrite (test_training.TrainingTests.test_feedback_preserved_revisions_without_silent_rewrite)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 118, in test_feedback_preserved_revisions_without_silent_rewrite
+    self.save();history=self.draft();workout=history['workouts'][0]
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_full_availability_reserves_a_day_and_restore_checks_conflicts (test_training.TrainingTests.test_full_availability_reserves_a_day_and_restore_checks_conflicts)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 109, in test_full_availability_reserves_a_day_and_restore_checks_conflicts
+    self.save(answers);history=self.draft()
+                               ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_portability_preserves_preferences_sessions_and_feedback (test_training.TrainingTests.test_portability_preserves_preferences_sessions_and_feedback)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 133, in test_portability_preserves_preferences_sessions_and_feedback
+    self.save();history=self.draft();update_workout(history['workouts'][0]['id'],1,{'completion_status':'skipped'},self.path)
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_priority_and_recovery_across_week_boundaries (test_training.TrainingTests.test_priority_and_recovery_across_week_boundaries)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 99, in test_priority_and_recovery_across_week_boundaries
+    first=self.draft()['workouts'][0]
+          ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_progression_needs_two_complete_weeks_and_explicit_review (test_training.TrainingTests.test_progression_needs_two_complete_weeks_and_explicit_review)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 155, in test_progression_needs_two_complete_weeks_and_explicit_review
+    history=draft_week(start,'UTC',training_context(self.path,cnow)['revision'],self.path,now=cnow)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_recent_pain_feedback_needs_explicit_reconfirmation (test_training.TrainingTests.test_recent_pain_feedback_needs_explicit_reconfirmation)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 170, in test_recent_pain_feedback_needs_explicit_reconfirmation
+    self.save();history=self.draft();workout=history['workouts'][0]
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_repeat_draft_conflict_rolls_back_and_existing_profile_not_required (test_training.TrainingTests.test_repeat_draft_conflict_rolls_back_and_existing_profile_not_required)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 80, in test_repeat_draft_conflict_rolls_back_and_existing_profile_not_required
+    self.save();self.draft()
+                ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_session_edits_cannot_exceed_constraints_or_missing_equipment (test_training.TrainingTests.test_session_edits_cannot_exceed_constraints_or_missing_equipment)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 126, in test_session_edits_cannot_exceed_constraints_or_missing_equipment
+    self.save();history=self.draft();workout=history['workouts'][0]
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_stale_profile_blocks_draft_and_accept_after_changed_preferences (test_training.TrainingTests.test_stale_profile_blocks_draft_and_accept_after_changed_preferences)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 94, in test_stale_profile_blocks_draft_and_accept_after_changed_preferences
+    self.save();history=self.draft();self.save({**ANSWERS,'priority':'general'})
+                        ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_strength_has_recovery_day_and_draft_dates_validated (test_training.TrainingTests.test_strength_has_recovery_day_and_draft_dates_validated)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 89, in test_strength_has_recovery_day_and_draft_dates_validated
+    self.save(answers);history=self.draft();dates=[date.fromisoformat(w['scheduled_for'][:10]) for w in history['workouts']]
+                               ~~~~~~~~~~^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 32, in draft
+    def draft(self,**kwargs):return draft_week(WEEK,'Asia/Jerusalem',training_context(self.path,NOW)['revision'],self.path,now=NOW,**kwargs)
+                                    ~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training.py", line 226, in draft_week
+    return create_draft(brief,week_start,timezone_name,proposal['fingerprint'],path,now)
+  File "/Users/dotanhofman/Documents/garmin_app/backend/app/training_coach.py", line 599, in create_draft
+    if not isinstance(fingerprint,str) or fingerprint!=p['fingerprint']: raise ValueError('Planning context changed; preview the week again before saving')
+                                                                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+ValueError: Planning context changed; preview the week again before saving
+
+======================================================================
+ERROR: test_date_only_preview_edit_and_schedule_patch_preserve_optional_clock (test_training_date_only.DateOnlyTests.test_date_only_preview_edit_and_schedule_patch_preserve_optional_clock)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_date_only.py", line 44, in test_date_only_preview_edit_and_schedule_patch_preserve_optional_clock
+    saved=self.activate();workout=next(workout for workout in saved['workouts'] if workout['scheduled_date']=='2026-10-18')
+                                  ~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+StopIteration
+
+======================================================================
+ERROR: test_optional_time_today_is_not_discarded_because_internal_anchor_passed (test_training_date_only.DateOnlyTests.test_optional_time_today_is_not_discarded_because_internal_anchor_passed)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_date_only.py", line 65, in test_optional_time_today_is_not_discarded_because_internal_anchor_passed
+    today=next(session for session in result['sessions'] if session['scheduled_date']=='2026-10-18')
+StopIteration
+
+======================================================================
+FAIL: test_catalog_exposes_only_scoped_read_only_tools (test_ai_tools.AIToolTests.test_catalog_exposes_only_scoped_read_only_tools)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_ai_tools.py", line 101, in test_catalog_exposes_only_scoped_read_only_tools
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        [item["name"] for item in definitions],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<30 lines>...
+        ],
+        ^^
+    )
+    ^
+AssertionError: Lists differ: ['get[669 chars]etup', 'propose_training_event', 'analyze_acti[142 chars]log'] != ['get[669 chars]etup']
+
+First list contains 7 additional elements.
+First extra element 29:
+'propose_training_event'
+
+Diff is 1064 characters long. Set self.maxDiff to None to see it.
+
+======================================================================
+FAIL: test_long_slots_generate_more_than_two_hours (test_coach_remediation.CoachWorkflowTests.test_long_slots_generate_more_than_two_hours)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_coach_remediation.py", line 113, in test_long_slots_generate_more_than_two_hours
+    self.assertGreater(max(s['definition']['duration_minutes'] for s in p['sessions']),120)
+    ~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 60.0 not greater than 120
+
+======================================================================
+FAIL: test_recovery_adapts_dose_preserving_goal_and_block (test_coach_remediation.CoachWorkflowTests.test_recovery_adapts_dose_preserving_goal_and_block)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_coach_remediation.py", line 72, in test_recovery_adapts_dose_preserving_goal_and_block
+    self.assertTrue(any('HRV' in reason for reason in poor['review']['reasons']))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_numeric_ftp_laps_and_exact_total (test_coach_remediation.PrescriptionTests.test_numeric_ftp_laps_and_exact_total)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_coach_remediation.py", line 32, in test_numeric_ftp_laps_and_exact_total
+    self.assertEqual(len(work),2);self.assertEqual(work[0]['target']['lower'],237.5);self.assertEqual(work[0]['target']['upper'],250)
+                                  ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 225.0 != 237.5
+
+======================================================================
+FAIL: test_new_tools_dispatch_without_missing_registry_entries (test_coach_remediation.RegistryTests.test_new_tools_dispatch_without_missing_registry_entries)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_coach_remediation.py", line 15, in test_new_tools_dispatch_without_missing_registry_entries
+    with self.assertRaisesRegex(ValueError,'Accept a training plan'):execute_tool('propose_training_adjustment',{'message':'Move my ride tomorrow'},p)
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: ValueError not raised
+
+======================================================================
+FAIL: test_catches_up_two_ten_and_thirty_day_gaps_including_empty_days (test_sync.SyncTests.test_catches_up_two_ten_and_thirty_day_gaps_including_empty_days) (gap_days=2)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_sync.py", line 93, in test_catches_up_two_ten_and_thirty_day_gaps_including_empty_days
+    self.assertEqual(status["verified_empty_intervals"], gap_days * 2 + 5)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 10 != 9
+
+======================================================================
+FAIL: test_catches_up_two_ten_and_thirty_day_gaps_including_empty_days (test_sync.SyncTests.test_catches_up_two_ten_and_thirty_day_gaps_including_empty_days) (gap_days=10)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_sync.py", line 93, in test_catches_up_two_ten_and_thirty_day_gaps_including_empty_days
+    self.assertEqual(status["verified_empty_intervals"], gap_days * 2 + 5)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 26 != 25
+
+======================================================================
+FAIL: test_open_session_schedule_runs_only_when_due (test_sync.SyncTests.test_open_session_schedule_runs_only_when_due)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_sync.py", line 430, in test_open_session_schedule_runs_only_when_due
+    self.assertEqual(
+    ~~~~~~~~~~~~~~~~^
+        scheduled_sync_decision(date(2026, 1, 2), database)["reason"],
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        "up_to_date",
+        ^^^^^^^^^^^^^
+    )
+    ^
+AssertionError: 'catch_up_required' != 'up_to_date'
+- catch_up_required
++ up_to_date
+
+
+======================================================================
+FAIL: test_same_day_refresh_rechecks_every_stream_and_recovers_late_sleep (test_sync.SyncTests.test_same_day_refresh_rechecks_every_stream_and_recovers_late_sleep)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_sync.py", line 457, in test_same_day_refresh_rechecks_every_stream_and_recovers_late_sleep
+    self.assertFalse(scheduled_sync_decision(through, database, now=checked+timedelta(minutes=59))['due'])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: True is not false
+
+======================================================================
+FAIL: test_friday_long_ride_gets_budget_before_shorter_weekdays (test_trainer_section_qc.TrainerSectionQC.test_friday_long_ride_gets_budget_before_shorter_weekdays)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_trainer_section_qc.py", line 98, in test_friday_long_ride_gets_budget_before_shorter_weekdays
+    self.assertEqual([row['definition']['workout_kind'] for row in quality],[] if kind is None else [kind])
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: Lists differ: ['threshold'] != ['short_efforts']
+
+First differing element 0:
+'threshold'
+'short_efforts'
+
+- ['threshold']
++ ['short_efforts']
+
+======================================================================
+FAIL: test_api_requires_review_and_validates_preferences (test_training.TrainingTests.test_api_requires_review_and_validates_preferences)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 145, in test_api_requires_review_and_validates_preferences
+    self.assertEqual(client.post('/api/training/draft',json={'week_start':'2026-10-12','timezone':'UTC','expected_preference_revision':1}).status_code,200)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 400 != 200
+
+======================================================================
+FAIL: test_changed_sports_requires_experience_and_volume_for_new_sport (test_training.TrainingTests.test_changed_sports_requires_experience_and_volume_for_new_sport)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 54, in test_changed_sports_requires_experience_and_volume_for_new_sport
+    self.assertIn('experience',context['missing']);self.assertIn('weekly_minutes',context['missing'])
+                                                   ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'weekly_minutes' not found in ['week_schedule', 'experience']
+
+======================================================================
+FAIL: test_dst_ambiguous_schedule_is_not_guessed (test_training.TrainingTests.test_dst_ambiguous_schedule_is_not_guessed)
+----------------------------------------------------------------------
+ValueError: Planning context changed; preview the week again before saving
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 185, in test_dst_ambiguous_schedule_is_not_guessed
+    with self.assertRaisesRegex(ValueError,'clock change'):draft_week(date(2026,10,19),'Europe/Berlin',1,self.path,now=NOW)
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "clock change" does not match "Planning context changed; preview the week again before saving"
+
+======================================================================
+FAIL: test_partial_answers_reused_and_only_missing_or_stale_asked (test_training.TrainingTests.test_partial_answers_reused_and_only_missing_or_stale_asked)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 34, in test_partial_answers_reused_and_only_missing_or_stale_asked
+    self.assertEqual(len(training_context(self.path,NOW)['missing']),10)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 9 != 10
+
+======================================================================
+FAIL: test_zero_minutes_never_gets_invented_as_volume (test_training.TrainingTests.test_zero_minutes_never_gets_invented_as_volume)
+----------------------------------------------------------------------
+ValueError: Planning context changed; preview the week again before saving
+
+During handling of the above exception, another exception occurred:
+
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training.py", line 86, in test_zero_minutes_never_gets_invented_as_volume
+    with self.assertRaisesRegex(ValueError,'No supported'):self.draft()
+         ~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: "No supported" does not match "Planning context changed; preview the week again before saving"
+
+======================================================================
+FAIL: test_fifty_casual_requests_preview_and_save (test_training_adjustments.TrainingAdjustmentQC.test_fifty_casual_requests_preview_and_save) (index=36, message='Give me sprint training today')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_adjustments.py", line 112, in test_fifty_casual_requests_preview_and_save
+    self.assertEqual(proposal['status'],expected,proposal)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'proposal' != 'not_recommended'
+- proposal
++ not_recommended
+ : {'tool': 'propose_training_adjustment', 'kind': 'adaptation', 'status': 'proposal', 'changes': {}, 'adjustments': [{'workout_id': 'workout-22426f2d-f9d2-4b17-a8b7-309c9bd42fea', 'expected_revision': 1, 'title': 'Steady endurance', 'date': '2026-10-19', 'changes': {'definition': {'variant_id': None, 'variant_label': None, 'sources': [], 'reference_ftp': None, 'version': 'training-prescription-v2', 'template_id': 'cycling_sprint', 'workout_kind': 'sprint', 'sport': 'cycling', 'title': 'Sprint technique and power', 'duration_minutes': 60.0, 'steps': [{'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Warm-up', 'type': 'warm-up', 'duration_seconds': 900, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 1', 'type': 'sprint_1', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 1', 'type': 'recovery_1', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 2', 'type': 'sprint_2', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 2', 'type': 'recovery_2', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 3', 'type': 'sprint_3', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 3', 'type': 'recovery_3', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 4', 'type': 'sprint_4', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.475, 'upper': 0.775}, 'name': 'Steady endurance', 'type': 'steady_endurance', 'duration_seconds': 1348, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 2, 'upper': 3, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '2–3 RPE / 10'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Cool-down', 'type': 'cool-down', 'duration_seconds': 600, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}], 'effort_target': {'method': 'perceived_effort', 'description': 'Warm-up: 1–2 RPE / 10; Sprint 1: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Recovery 1: 1–2 RPE / 10; Sprint 2: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Recovery 2: 1–2 RPE / 10; Sprint 3: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Recovery 3: 1–2 RPE / 10; Sprint 4: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Steady endurance: 2–3 RPE / 10; Cool-down: 1–2 RPE / 10'}, 'workout_location': 'outdoor', 'program_ftp': None, 'program_goal': 'ftp', 'calibration': {'power_access': 'none', 'ftp_confirmed_on': None, 'ftp_source': 'user_confirmed', 'hr_sensor': False, 'hr_zones': {}, 'hr_confirmed_on': None, 'hr_source': 'user_confirmed_zones'}, 'rationale': ['Targets use confirmed calibration when available; otherwise the explicit effort fallback applies.', 'Dedicated high-intensity work uses effort and repeatability, not watts inferred from FTP. Use a controlled traffic-free setting or suitable trainer; stop the efforts if technique or power quality deteriorates.'], 'schedule_slot_id': '0', 'schedule_slot_label': 'Cycling', 'schedule_timezone': 'Asia/Jerusalem', 'scheduled_date': '2026-10-19', 'time_unspecified': True, 'user_adjusted': True}}}], 'request': 'Give me sprint training today', 'root_plan_id': 'plan-approved-20eb41c79d9f898b0d088caa3861042a9c344e1faebd495d5762d6b93b187a87', 'program_revision': 1, 'message': 'Sure. Review the 1 session change(s) below. Nothing is saved yet.', 'policy': {'level': 'normal', 'quality_allowed': True, 'readiness_score': None, 'readiness_missing': True, 'adverse_feedback': False, 'high_load': False, 'physiology_concern': False, 'recent_demanding': False, 'reasons': [], 'rule_version': 'recovery-context-v1', 'note': 'Provisional app guidance using recorded workload, tolerance and recovery together; no score alone proves readiness or illness.'}, 'fingerprint': '1242f73dfcf59806b92110c9139dcdf7d23aee878f0584a21f5e78246cdc86f5'}
+
+======================================================================
+FAIL: test_fifty_casual_requests_preview_and_save (test_training_adjustments.TrainingAdjustmentQC.test_fifty_casual_requests_preview_and_save) (index=37, message='Can we do anaerobic intervals today?')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_adjustments.py", line 112, in test_fifty_casual_requests_preview_and_save
+    self.assertEqual(proposal['status'],expected,proposal)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'proposal' != 'not_recommended'
+- proposal
++ not_recommended
+ : {'tool': 'propose_training_adjustment', 'kind': 'adaptation', 'status': 'proposal', 'changes': {}, 'adjustments': [{'workout_id': 'workout-22426f2d-f9d2-4b17-a8b7-309c9bd42fea', 'expected_revision': 1, 'title': 'Steady endurance', 'date': '2026-10-19', 'changes': {'definition': {'variant_id': None, 'variant_label': None, 'sources': [], 'reference_ftp': None, 'version': 'training-prescription-v2', 'template_id': 'cycling_anaerobic', 'workout_kind': 'anaerobic', 'sport': 'cycling', 'title': 'Anaerobic capacity intervals', 'duration_minutes': 60.0, 'steps': [{'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Warm-up', 'type': 'warm-up', 'duration_seconds': 900, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Anaerobic effort 1', 'type': 'anaerobic_effort_1', 'duration_seconds': 30, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 9, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, 'effort': '9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 1', 'type': 'recovery_1', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Anaerobic effort 2', 'type': 'anaerobic_effort_2', 'duration_seconds': 30, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 9, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, 'effort': '9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 2', 'type': 'recovery_2', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Anaerobic effort 3', 'type': 'anaerobic_effort_3', 'duration_seconds': 30, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 9, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, 'effort': '9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 3', 'type': 'recovery_3', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Anaerobic effort 4', 'type': 'anaerobic_effort_4', 'duration_seconds': 30, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 9, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, 'effort': '9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.'}, {'power_reference_fractions': {'lower': 0.475, 'upper': 0.775}, 'name': 'Steady endurance', 'type': 'steady_endurance', 'duration_seconds': 1260, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 2, 'upper': 3, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '2–3 RPE / 10'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Cool-down', 'type': 'cool-down', 'duration_seconds': 600, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}], 'effort_target': {'method': 'perceived_effort', 'description': 'Warm-up: 1–2 RPE / 10; Anaerobic effort 1: 9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.; Recovery 1: 1–2 RPE / 10; Anaerobic effort 2: 9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.; Recovery 2: 1–2 RPE / 10; Anaerobic effort 3: 9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.; Recovery 3: 1–2 RPE / 10; Anaerobic effort 4: 9–9 RPE / 10 · Very hard repeatable effort for the prescribed duration; ease off if technique or repeatability deteriorates. No sprint watts or HR target is inferred from FTP.; Steady endurance: 2–3 RPE / 10; Cool-down: 1–2 RPE / 10'}, 'workout_location': 'outdoor', 'program_ftp': None, 'program_goal': 'ftp', 'calibration': {'power_access': 'none', 'ftp_confirmed_on': None, 'ftp_source': 'user_confirmed', 'hr_sensor': False, 'hr_zones': {}, 'hr_confirmed_on': None, 'hr_source': 'user_confirmed_zones'}, 'rationale': ['Targets use confirmed calibration when available; otherwise the explicit effort fallback applies.', 'Dedicated high-intensity work uses effort and repeatability, not watts inferred from FTP. Use a controlled traffic-free setting or suitable trainer; stop the efforts if technique or power quality deteriorates.'], 'schedule_slot_id': '0', 'schedule_slot_label': 'Cycling', 'schedule_timezone': 'Asia/Jerusalem', 'scheduled_date': '2026-10-19', 'time_unspecified': True, 'user_adjusted': True}}}], 'request': 'Can we do anaerobic intervals today?', 'root_plan_id': 'plan-approved-20eb41c79d9f898b0d088caa3861042a9c344e1faebd495d5762d6b93b187a87', 'program_revision': 1, 'message': 'Sure. Review the 1 session change(s) below. Nothing is saved yet.', 'policy': {'level': 'normal', 'quality_allowed': True, 'readiness_score': None, 'readiness_missing': True, 'adverse_feedback': False, 'high_load': False, 'physiology_concern': False, 'recent_demanding': False, 'reasons': [], 'rule_version': 'recovery-context-v1', 'note': 'Provisional app guidance using recorded workload, tolerance and recovery together; no score alone proves readiness or illness.'}, 'fingerprint': '919bd20919c088d20e1b60a4147de687c1f9f64caf9f35f909546ec0104fe53a'}
+
+======================================================================
+FAIL: test_fifty_casual_requests_preview_and_save (test_training_adjustments.TrainingAdjustmentQC.test_fifty_casual_requests_preview_and_save) (index=38, message='Give me spritns today')
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_adjustments.py", line 112, in test_fifty_casual_requests_preview_and_save
+    self.assertEqual(proposal['status'],expected,proposal)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'proposal' != 'not_recommended'
+- proposal
++ not_recommended
+ : {'tool': 'propose_training_adjustment', 'kind': 'adaptation', 'status': 'proposal', 'changes': {}, 'adjustments': [{'workout_id': 'workout-22426f2d-f9d2-4b17-a8b7-309c9bd42fea', 'expected_revision': 1, 'title': 'Steady endurance', 'date': '2026-10-19', 'changes': {'definition': {'variant_id': None, 'variant_label': None, 'sources': [], 'reference_ftp': None, 'version': 'training-prescription-v2', 'template_id': 'cycling_sprint', 'workout_kind': 'sprint', 'sport': 'cycling', 'title': 'Sprint technique and power', 'duration_minutes': 60.0, 'steps': [{'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Warm-up', 'type': 'warm-up', 'duration_seconds': 900, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 1', 'type': 'sprint_1', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 1', 'type': 'recovery_1', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 2', 'type': 'sprint_2', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 2', 'type': 'recovery_2', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 3', 'type': 'sprint_3', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Recovery 3', 'type': 'recovery_3', 'duration_seconds': 240, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}, {'power_reference_fractions': None, 'name': 'Sprint 4', 'type': 'sprint_4', 'duration_seconds': 8, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 9, 'upper': 10, 'unit': 'RPE / 10', 'source': 'effort_prescription', 'description': 'Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, 'effort': '9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.'}, {'power_reference_fractions': {'lower': 0.475, 'upper': 0.775}, 'name': 'Steady endurance', 'type': 'steady_endurance', 'duration_seconds': 1348, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 2, 'upper': 3, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '2–3 RPE / 10'}, {'power_reference_fractions': {'lower': 0.275, 'upper': 0.575}, 'name': 'Cool-down', 'type': 'cool-down', 'duration_seconds': 600, 'termination': 'time', 'repetitions': 1, 'target': {'type': 'perceived_effort', 'lower': 1, 'upper': 2, 'unit': 'RPE / 10', 'source': 'calibrated_sensor_unavailable', 'description': 'Use conversational effort for easy work; do not chase an uncalibrated numeric sensor target.'}, 'effort': '1–2 RPE / 10'}], 'effort_target': {'method': 'perceived_effort', 'description': 'Warm-up: 1–2 RPE / 10; Sprint 1: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Recovery 1: 1–2 RPE / 10; Sprint 2: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Recovery 2: 1–2 RPE / 10; Sprint 3: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Recovery 3: 1–2 RPE / 10; Sprint 4: 9–10 RPE / 10 · Fast controlled acceleration; keep technique stable and end repetitions if quality drops.; Steady endurance: 2–3 RPE / 10; Cool-down: 1–2 RPE / 10'}, 'workout_location': 'outdoor', 'program_ftp': None, 'program_goal': 'ftp', 'calibration': {'power_access': 'none', 'ftp_confirmed_on': None, 'ftp_source': 'user_confirmed', 'hr_sensor': False, 'hr_zones': {}, 'hr_confirmed_on': None, 'hr_source': 'user_confirmed_zones'}, 'rationale': ['Targets use confirmed calibration when available; otherwise the explicit effort fallback applies.', 'Dedicated high-intensity work uses effort and repeatability, not watts inferred from FTP. Use a controlled traffic-free setting or suitable trainer; stop the efforts if technique or power quality deteriorates.'], 'schedule_slot_id': '0', 'schedule_slot_label': 'Cycling', 'schedule_timezone': 'Asia/Jerusalem', 'scheduled_date': '2026-10-19', 'time_unspecified': True, 'user_adjusted': True}}}], 'request': 'Give me spritns today', 'root_plan_id': 'plan-approved-20eb41c79d9f898b0d088caa3861042a9c344e1faebd495d5762d6b93b187a87', 'program_revision': 1, 'message': 'Sure. Review the 1 session change(s) below. Nothing is saved yet.', 'policy': {'level': 'normal', 'quality_allowed': True, 'readiness_score': None, 'readiness_missing': True, 'adverse_feedback': False, 'high_load': False, 'physiology_concern': False, 'recent_demanding': False, 'reasons': [], 'rule_version': 'recovery-context-v1', 'note': 'Provisional app guidance using recorded workload, tolerance and recovery together; no score alone proves readiness or illness.'}, 'fingerprint': '1242f73dfcf59806b92110c9139dcdf7d23aee878f0584a21f5e78246cdc86f5'}
+
+======================================================================
+FAIL: test_candidate_preferences_preview_isolation_and_approval (test_training_coach.CoachTests.test_candidate_preferences_preview_isolation_and_approval)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_coach.py", line 135, in test_candidate_preferences_preview_isolation_and_approval
+    self.assertEqual(training_context(self.path,NOW)['answers']['weekly_minutes']['cycling'],240)
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 180 != 240
+
+======================================================================
+FAIL: test_endurance_prioritizes_longest_slot (test_training_coach.CoachTests.test_endurance_prioritizes_longest_slot)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_coach.py", line 91, in test_endurance_prioritizes_longest_slot
+    p=self.preview(self.brief(goal='endurance'));self.assertEqual(p['sessions'][0]['scheduled_for'][:10],'2026-10-17');self.assertEqual(p['sessions'][0]['definition']['duration_minutes'],120)
+                                                 ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: '2026-10-12' != '2026-10-17'
+- 2026-10-12
+?          ^
++ 2026-10-17
+?          ^
+
+
+======================================================================
+FAIL: test_existing_week_consumes_budget_instead_of_double_training (test_training_coach.CoachTests.test_existing_week_consumes_budget_instead_of_double_training)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_coach.py", line 104, in test_existing_week_consumes_budget_instead_of_double_training
+    self.draft();p=self.preview();self.assertEqual(p['status'],'needs_review');self.assertEqual(p['weekly_minutes']['cycling'],300);self.assertEqual(p['sessions'],[])
+                                                                               ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 180.0 != 300
+
+======================================================================
+FAIL: test_fixed_wednesday_preserved_and_no_extra_quality (test_training_coach.CoachTests.test_fixed_wednesday_preserved_and_no_extra_quality)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_coach.py", line 75, in test_fixed_wednesday_preserved_and_no_extra_quality
+    p=self.preview(b);self.assertEqual(p['status'],'ready');self.assertEqual(p['weekly_minutes']['cycling'],300)
+                                                            ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 180 != 300
+
+======================================================================
+FAIL: test_ftp_has_one_exact_duration_interval_without_inferred_ftp (test_training_coach.CoachTests.test_ftp_has_one_exact_duration_interval_without_inferred_ftp)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_coach.py", line 84, in test_ftp_has_one_exact_duration_interval_without_inferred_ftp
+    confirmed=self.preview(self.brief(ftp_watts=250,calibration={'power_access':'outdoor','ftp_confirmed_on':'2026-10-11','hr_sensor':False}));self.assertTrue(any(step.get('target',{}).get('lower')==225 and step['target']['upper']==237.5 for step in confirmed['sessions'][0]['definition']['steps']))
+                                                                                                                                               ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_date_only_day_budget_conflict_does_not_pretend_clock_overlap (test_training_date_only.DateOnlyTests.test_date_only_day_budget_conflict_does_not_pretend_clock_overlap)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_date_only.py", line 58, in test_date_only_day_budget_conflict_does_not_pretend_clock_overlap
+    self.assertEqual(result['status'],'needs_input')
+    ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: 'ready' != 'needs_input'
+- ready
++ needs_input
+
+
+======================================================================
+FAIL: test_explicit_timed_availability_retains_original_clock (test_training_date_only.DateOnlyTests.test_explicit_timed_availability_retains_original_clock)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_date_only.py", line 71, in test_explicit_timed_availability_retains_original_clock
+    self.assertTrue(all(not session['time_unspecified'] and '08:00' in session['scheduled_for'] for session in result['sessions']))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+======================================================================
+FAIL: test_beginner_zero_capacity_uses_supported_alternatives_and_can_activate (test_training_questionnaire.QuestionnaireTests.test_beginner_zero_capacity_uses_supported_alternatives_and_can_activate)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/Users/dotanhofman/Documents/garmin_app/backend/tests/test_training_questionnaire.py", line 35, in test_beginner_zero_capacity_uses_supported_alternatives_and_can_activate
+    self.assertTrue(any(exercise['id']=='wall_pushup' for exercise in definition['exercises']))
+    ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+AssertionError: False is not true
+
+----------------------------------------------------------------------
+Ran 724 tests in 35.665s
+
+FAILED (failures=26, errors=14)

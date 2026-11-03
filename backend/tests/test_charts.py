@@ -7,7 +7,7 @@ from pathlib import Path
 
 from app.charts import add_weight, chart_data, read_layout, save_layout
 from app.database import connect, migrate
-from app.ai_chat import _tool_evidence, _normalize_tool_arguments, chat_stream
+from app.assistant_evidence import tool_evidence as _tool_evidence
 from app.ai_tools import execute_tool
 
 
@@ -33,47 +33,6 @@ class ChartTests(unittest.TestCase):
         line=chart_data({'metric':'vo2_cycling','kind':'line','trend_line':True},self.path)
         self.assertEqual(result['analysis']['trend'],line['analysis']['trend'])
 
-    def test_assistant_time_axis_request_and_context_refinement(self):
-        from app.ai_chat import _explicit_plot_arguments
-        from app.plot_requests import refine
-        spec=_explicit_plot_arguments('Plot cycling VO2 max against time with a trend line',self.path)['plots'][0]
-        self.assertEqual(spec['x_metric'],'date')
-        result=refine('Use time on the x axis with a trend line',[{'metric':'activity_speed','x_metric':'activity_power','kind':'scatter'}],_explicit_plot_arguments,date(2026,10,11),self.path)
-        self.assertEqual(result['plots'][0]['x_metric'],'date')
-        self.assertEqual(result['plots'][0]['metric'],'activity_speed')
-
-    def test_matched_speed_plot_and_plot_it_use_full_gps_set_not_all_rides(self):
-        with connect(self.path) as c:
-            for index in range(32):
-                ident = 'reference' if index == 30 else 'unrelated' if index == 31 else f'match-{index}'
-                day = '2026-10-06' if index == 30 else (date(2026,8,1)+timedelta(days=index)).isoformat()
-                c.execute("INSERT INTO activities(id,source_name,name,activity_type,started_at,duration_seconds,distance_meters,raw_json) VALUES(?,'synthetic',?,'cycling',?,3600,20000,?)", (ident,ident,day+'T06:00:00Z',json.dumps({'averageSpeed':5+index/10})))
-                c.executemany("INSERT INTO activity_samples(activity_id,recorded_at,latitude,longitude) VALUES(?,?,?,?)", [(ident,day+f'T06:00:{i:02d}Z',32+i*.001+(1 if ident=='unrelated' else 0),34+i*.001) for i in range(12)])
-        question = 'can you generate a plot of date and speed of those matched rides?'
-        history = [{'role':'user','content':'What rides match my ride on September 27th?'}, {'role':'user','content':'and for the ride on OC 6th?'}]
-        with patch('app.ai_chat._today',return_value=date(2026,10,10)), patch('app.ai_chat._ollama_request') as model:
-            for message, context in ((question,history), ('plot it',history+[{'role':'user','content':question}])):
-                events = [json.loads(line) for line in chat_stream(message,history=context,timezone_name='Asia/Jerusalem',path=self.path)]
-                self.assertFalse(any(e['type']=='error' for e in events),events)
-                plot = next(e['evidence']['plots'][0] for e in events if e['type']=='tool')
-                self.assertEqual(plot['count'],31)
-                self.assertEqual(plot['spec']['gps_reference_id'],'reference')
-                self.assertNotIn('unrelated',{p['id'] for p in plot['points']})
-                self.assertIn('match-29',{p['id'] for p in plot['points']})
-                self.assertEqual(plot['unit'],'km/h')
-                self.assertAlmostEqual(plot['latest']['y'],28.8)
-                self.assertEqual(plot['spec']['size'],'full')
-                save_layout([{**plot['spec'],'id':'pinned'}], self.path)
-                self.assertEqual(chart_data(read_layout(self.path)[0],self.path)['count'],31)
-            followup = [json.loads(line) for line in chat_stream('Plot speed of those matched rides with correlation',
-                history=[], plot_context=[plot['spec']], timezone_name='Asia/Jerusalem',path=self.path)]
-            self.assertFalse(any(e['type']=='error' for e in followup),followup)
-            carried = next(e['evidence']['plots'][0] for e in followup if e['type']=='tool')
-            self.assertEqual(carried['count'],31)
-            self.assertEqual(carried['spec']['gps_reference_id'],'reference')
-        model.assert_not_called()
-        with self.assertRaisesRegex(ValueError,'activity metric'):
-            chart_data({'metric':'vo2_cycling','kind':'line','gps_reference_id':'reference'},self.path)
 
     def test_sparse_vo2_is_paired_only_on_real_dates(self):
         result = chart_data({'metric':'vo2_cycling','x_metric':'resting_heart_rate','kind':'scatter'},self.path)
@@ -130,38 +89,3 @@ class ChartTests(unittest.TestCase):
         self.assertEqual(r['count'],1)
         self.assertEqual(r['points'][0]['x'],200)
         self.assertAlmostEqual(r['points'][0]['y'],28.8)
-
-    def test_validation_and_assistant_evidence(self):
-        mixed = chart_data({'metric':'vo2_cycling','kind':'scatter','x_metric':'activity_power'},self.path)
-        self.assertEqual(mixed['count'], 0)  # Same-date pairing is supported; missing rides are not fabricated.
-        with self.assertRaises(ValueError):
-            chart_data({'metric':'vo2_cycling','kind':'line','sql':'DROP TABLE activities'},self.path)
-        r=execute_tool('create_plots',{'plots':[{'metric':'vo2_cycling','kind':'line'}]},self.path)
-        self.assertEqual(_tool_evidence('create_plots',r)['plots'][0]['count'],2)
-        args=_normalize_tool_arguments('create_plots',{'plots':[{'metric':'vo2_cycling','kind':'line'}]},'Plot VO2 in the last year','Asia/Jerusalem')
-        self.assertEqual(args['plots'][0]['timezone'],'Asia/Jerusalem')
-        self.assertIn('start',args['plots'][0])
-        all_history=_normalize_tool_arguments('create_plots',{'plots':[{'metric':'activity_power','x_metric':'activity_speed','kind':'scatter','start':'2025-10-10','end':'2026-10-10'}]},'Plot power vs speed across all my cycling rides','Asia/Jerusalem')
-        self.assertNotIn('start',all_history['plots'][0])
-        self.assertEqual(all_history['plots'][0]['x_metric'],'activity_power')
-        mixed=_normalize_tool_arguments('create_plots',{'plots':[
-            {'metric':'weight','kind':'line','start':'2024-10-09','end':'2025-10-09'},
-            {'metric':'vo2_running','x_metric':'resting_heart_rate','kind':'scatter','start':'2025-01-01'}]},
-            'Plot weight over the last year; plot resting HR versus cycling VO2 max across all history','Asia/Jerusalem')
-        self.assertEqual(mixed['plots'][0]['start'],args['plots'][0]['start'])
-        self.assertNotIn('start',mixed['plots'][1])
-        self.assertEqual(mixed['plots'][1]['metric'],'vo2_cycling')
-
-    def test_four_explicit_plots_stream_without_model_or_invented_dates(self):
-        add_weight('2026-09-02',76,'kg',self.path)
-        events=[json.loads(line) for line in chat_stream(
-            'Create four plots: weight over the last year; power versus speed across all my cycling rides; resting heart rate versus cycling VO2 max on matching dates; resting heart rate history over the last year.',
-            timezone_name='Asia/Jerusalem',path=self.path)]
-        self.assertFalse(any(e['type']=='error' for e in events),events)
-        plots=next(e['evidence']['plots'] for e in events if e['type']=='tool')
-        self.assertEqual(len(plots),4)
-        self.assertEqual(plots[0]['count'],1)
-        self.assertNotIn('start',plots[1]['spec'])
-        self.assertEqual(plots[2]['spec']['metric'],'vo2_cycling')
-        self.assertEqual(plots[2]['count'],1)
-        self.assertEqual(plots[0]['spec']['start'],plots[3]['spec']['start'])

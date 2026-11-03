@@ -6,7 +6,6 @@ from app.database import connect, migrate
 from app.activity_metrics import preserve_fit_summary, backfill_fit_ascent
 from app.garmin_connection import _normalise_activity
 from app.sync import _upsert_activity
-from app.ai_chat import _explicit_plot_arguments
 from app.charts import chart_data
 
 class AscentTests(unittest.TestCase):
@@ -36,7 +35,3 @@ class AscentTests(unittest.TestCase):
   for sessions,expected in (([{'total_ascent':42}],1),([{'total_ascent':20},{'total_ascent':22}],0),([{'total_ascent':None}],0)):
    with connect(self.path) as c:c.execute('UPDATE activities SET elevation_gain_meters=NULL,raw_json=?',(json.dumps({'fit_sessions':sessions}),))
    self.assertEqual(backfill_fit_ascent(self.path),expected)
- def test_climb_plot_uses_ascent_meters_against_time(self):
-  spec=_explicit_plot_arguments('Plot total climb against time',self.path)['plots'][0]
-  self.assertEqual(spec['metric'],'activity_elevation');self.assertEqual(spec['x_metric'],'date')
-  plot=chart_data(spec,self.path);self.assertEqual(plot['unit'],'m');self.assertEqual(plot['points'][0]['y'],534);self.assertEqual(plot['points'][0]['x'],'2026-10-09')

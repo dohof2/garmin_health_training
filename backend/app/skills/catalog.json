@@ -1,0 +1,544 @@
+{
+  "version": 1,
+  "branches": [
+    {
+      "path": "Training",
+      "summary": "Planned sessions, edits, scheduling, feedback, workout recommendations, long-term programs, events."
+    },
+    {
+      "path": "Activities & analysis",
+      "summary": "Find recorded activities, assess efforts, compare rides/periods, investigate sections/FIT, create plots."
+    },
+    {
+      "path": "Health & recovery",
+      "summary": "Recorded health trends, readiness, recovery, and forecasts."
+    },
+    {
+      "path": "Nutrition",
+      "summary": "Log food, correct meals, daily balance, targets, reusable foods and recipes."
+    },
+    {
+      "path": "Profile & preferences",
+      "summary": "Personal goals, availability, equipment, restrictions, FTP and HR calibration."
+    },
+    {
+      "path": "Garmin & sync",
+      "summary": "Connection/freshness, synchronization, and workout publication."
+    },
+    {
+      "path": "Equipment maintenance",
+      "summary": "Log completed equipment work and inspect/correct/undo history."
+    },
+    {
+      "path": "App & data",
+      "summary": "Discover data/coverage, transfer data, dashboard configuration."
+    }
+  ],
+  "skills": [
+    {
+      "id": "training.sessions.inspect",
+      "path": "Training / Sessions / Inspect and explain",
+      "summary": "Explain a planned workout and its purpose.",
+      "examples": [
+        "What is today's workout?",
+        "Explain the strength session"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_workouts",
+        "lookup_program"
+      ]
+    },
+    {
+      "id": "training.sessions.edit",
+      "path": "Training / Sessions / Edit or replace",
+      "summary": "Change duration, intensity, blocks, exercises, or replace the sport of one planned session.",
+      "examples": [
+        "Remove today's strength and add yesterday's endurance ride",
+        "Make the second interval four minutes"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_workouts",
+        "lookup_program",
+        "preview_session_change",
+        "get_training_readiness",
+        "get_garmin_strength_catalog"
+      ]
+    },
+    {
+      "id": "training.sessions.schedule",
+      "path": "Training / Sessions / Move or swap",
+      "summary": "Move one workout or exchange two session dates.",
+      "examples": [
+        "Swap strength and endurance",
+        "Move Tuesday's ride to Friday"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_workouts",
+        "preview_schedule_change"
+      ]
+    },
+    {
+      "id": "training.sessions.feedback",
+      "path": "Training / Sessions / Completion and feedback",
+      "summary": "Record workout completion, feedback, linked activities and actual strength sets.",
+      "examples": [
+        "I did strength yesterday",
+        "Log these actual lifting sets"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_workouts",
+        "list_activities",
+        "preview_workout_feedback"
+      ]
+    },
+    {
+      "id": "training.sessions.recommend",
+      "path": "Training / Sessions / Recommend a workout",
+      "summary": "Recommend a workout for available time, independently or following the active plan.",
+      "examples": [
+        "I have 45 minutes to ride today",
+        "What should I do following my plan?"
+      ],
+      "version": 1,
+      "tools": [
+        "suggest_today_workout",
+        "get_recent_training_mix",
+        "get_cycling_workout_variants",
+        "get_garmin_strength_catalog"
+      ]
+    },
+    {
+      "id": "training.programs.build",
+      "path": "Training / Programs / Build a new long-term plan",
+      "summary": "Build a new multi-week/season plan using goals, history, recovery, availability, restrictions, calibration and commitments.",
+      "examples": [
+        "Build a new 12-week training plan",
+        "Plan my season for a race"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_program",
+        "lookup_workouts",
+        "get_training_context",
+        "get_recent_training_mix",
+        "get_training_readiness",
+        "get_health_summary",
+        "list_activities",
+        "compare_periods",
+        "get_cycling_workout_variants",
+        "get_garmin_strength_catalog",
+        "preview_training_plan",
+        "propose_training_setup"
+      ]
+    },
+    {
+      "id": "training.programs.revise",
+      "path": "Training / Programs / Revise a program",
+      "summary": "Substantially revise future program blocks after goals or circumstances change.",
+      "examples": [
+        "Rebuild the remaining plan after my trip",
+        "Change my program direction"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_program",
+        "lookup_workouts",
+        "get_training_context",
+        "get_recent_training_mix",
+        "get_training_readiness",
+        "preview_training_plan",
+        "propose_training_setup",
+        "preview_strength_progression",
+        "preview_program_format"
+      ]
+    },
+    {
+      "id": "training.programs.review",
+      "path": "Training / Programs / Review progression",
+      "summary": "Review a week or program progression against recorded workload and tolerance.",
+      "examples": [
+        "Review this training week",
+        "How is my progression?"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_program",
+        "lookup_workouts",
+        "get_recent_training_mix",
+        "get_training_readiness",
+        "get_training_context",
+        "list_activities",
+        "compare_periods"
+      ]
+    },
+    {
+      "id": "training.programs.events",
+      "path": "Training / Programs / Events and commitments",
+      "summary": "Add, update or remove a dated race, trip or fixed training commitment.",
+      "examples": [
+        "Add a race on March 10",
+        "Remove that trip from my plan"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_program",
+        "propose_training_event"
+      ]
+    },
+    {
+      "id": "activities.inspect",
+      "path": "Activities & analysis / Find and inspect",
+      "summary": "Find recorded activities and answer factual questions about them.",
+      "examples": [
+        "Find last Sunday's ride",
+        "How long was my latest run?"
+      ],
+      "version": 1,
+      "tools": [
+        "list_activities",
+        "query_app_data",
+        "get_app_data_catalog",
+        "get_activity_detail"
+      ]
+    },
+    {
+      "id": "activities.assess",
+      "path": "Activities & analysis / Assess",
+      "summary": "Assess a recorded activity against stated session intent.",
+      "examples": [
+        "Was yesterday's ride endurance?",
+        "Was that ride effective?"
+      ],
+      "version": 1,
+      "tools": [
+        "list_activities",
+        "assess_ride",
+        "get_recent_training_mix"
+      ]
+    },
+    {
+      "id": "activities.compare",
+      "path": "Activities & analysis / Compare",
+      "summary": "Compare activities or periods, similar rides, or repeated GPS courses.",
+      "examples": [
+        "Compare this ride with last month",
+        "How have I changed on the same route?"
+      ],
+      "version": 1,
+      "tools": [
+        "list_activities",
+        "compare_periods",
+        "compare_latest_ride",
+        "find_similar_rides",
+        "find_same_course_rides",
+        "running_volume_trend"
+      ]
+    },
+    {
+      "id": "activities.investigate",
+      "path": "Activities & analysis / Investigate sections and FIT",
+      "summary": "Investigate intervals, laps, climbs, streams and unusual recorded FIT fields.",
+      "examples": [
+        "Compare the two climbs",
+        "Show my 10-second efforts",
+        "Inspect grit and flow"
+      ],
+      "version": 1,
+      "tools": [
+        "list_activities",
+        "analyze_activity_sections",
+        "analyze_activity_climbs",
+        "analyze_sprint_intervals",
+        "get_activity_stream",
+        "find_fit_fields",
+        "get_fit_activity_data"
+      ]
+    },
+    {
+      "id": "activities.plot",
+      "path": "Activities & analysis / Create or refine plots",
+      "summary": "Render recorded metrics as charts and retain refinements.",
+      "examples": [
+        "Plot my sleep for 30 days",
+        "Put power against HR for that ride"
+      ],
+      "version": 1,
+      "tools": [
+        "get_chart_catalog",
+        "create_plots",
+        "list_activities",
+        "find_fit_fields"
+      ]
+    },
+    {
+      "id": "health.trends",
+      "path": "Health & recovery / Recorded trends",
+      "summary": "Explain trends in recorded sleep, HRV, weight, steps and other health metrics.",
+      "examples": [
+        "Why was HRV lower this week?",
+        "Compare my sleep across months"
+      ],
+      "version": 1,
+      "tools": [
+        "get_health_summary",
+        "compare_periods",
+        "query_app_data",
+        "get_app_data_catalog"
+      ]
+    },
+    {
+      "id": "health.readiness",
+      "path": "Health & recovery / Readiness and recovery",
+      "summary": "Explain advisory readiness, recovery evidence and forecasts.",
+      "examples": [
+        "How ready am I today?",
+        "What is tomorrow's readiness forecast?"
+      ],
+      "version": 1,
+      "tools": [
+        "get_training_readiness",
+        "get_projected_training_readiness",
+        "get_recent_training_mix"
+      ]
+    },
+    {
+      "id": "nutrition.log",
+      "path": "Nutrition / Log food",
+      "summary": "Record consumed foods and portions in the nutrition log.",
+      "examples": [
+        "I ate eggs for breakfast",
+        "Log 200 grams of yogurt"
+      ],
+      "version": 1,
+      "tools": [
+        "nutrition_conversation",
+        "nutrition_day",
+        "find_food"
+      ]
+    },
+    {
+      "id": "nutrition.correct",
+      "path": "Nutrition / Correct or move a meal",
+      "summary": "Correct items/portions, move a meal, or manage a supported removal.",
+      "examples": [
+        "That yogurt was 150 grams",
+        "Move the meal to yesterday"
+      ],
+      "version": 1,
+      "tools": [
+        "nutrition_conversation",
+        "nutrition_day",
+        "query_app_data",
+        "find_food"
+      ]
+    },
+    {
+      "id": "nutrition.balance",
+      "path": "Nutrition / Daily balance",
+      "summary": "Explain daily intake totals, targets and remaining nutrients.",
+      "examples": [
+        "How much protein remains today?",
+        "What have I eaten?"
+      ],
+      "version": 1,
+      "tools": [
+        "nutrition_day"
+      ]
+    },
+    {
+      "id": "nutrition.targets",
+      "path": "Nutrition / Targets",
+      "summary": "Discuss or propose calories/macronutrients and nutrition goals.",
+      "examples": [
+        "Set a calorie target",
+        "Review my protein goal"
+      ],
+      "version": 1,
+      "tools": [
+        "nutrition_conversation",
+        "nutrition_day",
+        "query_app_data",
+        "get_health_summary"
+      ]
+    },
+    {
+      "id": "nutrition.library",
+      "path": "Nutrition / Reusable foods and recipes",
+      "summary": "Inspect and reuse saved foods, meals and recipes.",
+      "examples": [
+        "Find my saved breakfast",
+        "Use that recipe again"
+      ],
+      "version": 1,
+      "tools": [
+        "query_app_data",
+        "nutrition_conversation",
+        "find_food"
+      ]
+    },
+    {
+      "id": "profile.personal",
+      "path": "Profile & preferences / Personal profile and goals",
+      "summary": "Review or propose changes to personal details and goals.",
+      "examples": [
+        "Update my weight",
+        "Change my primary goal"
+      ],
+      "version": 1,
+      "tools": [
+        "get_training_context",
+        "propose_settings_change"
+      ]
+    },
+    {
+      "id": "profile.training",
+      "path": "Profile & preferences / Training preferences",
+      "summary": "Update recurring availability, equipment and restrictions.",
+      "examples": [
+        "I can train Tuesdays now",
+        "I have dumbbells"
+      ],
+      "version": 1,
+      "tools": [
+        "get_training_context",
+        "propose_training_setup"
+      ]
+    },
+    {
+      "id": "profile.calibration",
+      "path": "Profile & preferences / FTP and HR calibration",
+      "summary": "Review or update confirmed FTP/HR settings and sensor availability.",
+      "examples": [
+        "My tested FTP is 240 watts",
+        "I no longer have a power meter"
+      ],
+      "version": 1,
+      "tools": [
+        "get_training_context",
+        "propose_training_setup"
+      ]
+    },
+    {
+      "id": "garmin.status",
+      "path": "Garmin & sync / Status",
+      "summary": "Inspect connection, data freshness, sync gaps and publication state.",
+      "examples": [
+        "Is Garmin connected?",
+        "When did sleep last sync?"
+      ],
+      "version": 1,
+      "tools": [
+        "app_status",
+        "query_app_data"
+      ]
+    },
+    {
+      "id": "garmin.sync",
+      "path": "Garmin & sync / Synchronization",
+      "summary": "Run sync or investigate a reported sync failure/gap.",
+      "examples": [
+        "Sync now",
+        "Why is last night's sleep missing?"
+      ],
+      "version": 1,
+      "tools": [
+        "app_status",
+        "query_app_data",
+        "open_app_workflow"
+      ]
+    },
+    {
+      "id": "garmin.publish",
+      "path": "Garmin & sync / Workout publication",
+      "summary": "Prepare publication/update/removal of exact supported workouts.",
+      "examples": [
+        "Send that workout to Garmin",
+        "Update the workout I edited"
+      ],
+      "version": 1,
+      "tools": [
+        "lookup_workouts",
+        "app_status",
+        "query_app_data",
+        "open_app_workflow"
+      ]
+    },
+    {
+      "id": "maintenance.log",
+      "path": "Equipment maintenance / Log completed work",
+      "summary": "Log completed equipment maintenance with supplied dates and costs.",
+      "examples": [
+        "I replaced the bike chain today",
+        "Log the fork service"
+      ],
+      "version": 1,
+      "tools": [
+        "log_maintenance",
+        "list_maintenance"
+      ]
+    },
+    {
+      "id": "maintenance.history",
+      "path": "Equipment maintenance / History and corrections",
+      "summary": "Inspect, correct, remove/restore, undo or export maintenance history.",
+      "examples": [
+        "When did I replace the chain?",
+        "Correct that maintenance cost"
+      ],
+      "version": 1,
+      "tools": [
+        "list_maintenance",
+        "update_maintenance",
+        "undo_maintenance",
+        "export_maintenance"
+      ]
+    },
+    {
+      "id": "app.data",
+      "path": "App & data / Discover data",
+      "summary": "Discover supported datasets and explain coverage or missingness.",
+      "examples": [
+        "What data do you have?",
+        "Why is that metric unavailable?"
+      ],
+      "version": 1,
+      "tools": [
+        "get_app_data_catalog",
+        "query_app_data",
+        "app_status"
+      ]
+    },
+    {
+      "id": "app.transfer",
+      "path": "App & data / Data transfer",
+      "summary": "Prepare imports, exports, backups and restore previews.",
+      "examples": [
+        "Export my activities",
+        "Back up the app"
+      ],
+      "version": 1,
+      "tools": [
+        "get_app_data_catalog",
+        "open_app_workflow"
+      ]
+    },
+    {
+      "id": "app.dashboard",
+      "path": "App & data / Dashboard configuration",
+      "summary": "Inspect or configure dashboard cards and saved charts.",
+      "examples": [
+        "Hide the sleep card",
+        "Change my dashboard layout"
+      ],
+      "version": 1,
+      "tools": [
+        "query_app_data",
+        "open_app_workflow"
+      ]
+    }
+  ]
+}

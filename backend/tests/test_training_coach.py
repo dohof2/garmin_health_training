@@ -12,7 +12,6 @@ from unittest.mock import patch
 from app.database import connect, migrate
 from app.training import save_preferences, list_training, update_workout
 from app.training_coach import DEFAULT, parse_request, preview, create_draft, read_brief, save_brief, validate_brief
-from app.ai_chat import chat_stream, _forced_tool_name
 
 NOW=datetime(2026,10,11,12,tzinfo=timezone.utc)
 WEEK=date(2026,10,12)
@@ -164,35 +163,11 @@ class CoachTests(unittest.TestCase):
   with self.assertRaises(ValueError):save_brief(self.brief(goal='general'),0,self.path)
   for patchvalue in ({'horizon_weeks':True},{'ftp_watts':float('nan')},{'goal_sport':'swimming'}):
    with self.assertRaises(ValueError):validate_brief(self.brief(**patchvalue))
- def test_assistant_followup_preserves_brief_and_is_read_only(self):
-  def ask(text,context=None):
-   with patch('app.training_coach.datetime',Clock):return [json.loads(e) for e in chat_stream(text,coaching_context=context,timezone_name='Asia/Jerusalem',path=self.path)]
-  events=ask('Increase FTP. Wednesday I have a trip');coaching=next(e['evidence']['coaching'] for e in events if e['type']=='tool' and 'coaching' in e['evidence'])
-  self.assertEqual(coaching['sessions'],[]);self.assertEqual(coaching['roadmap'],[])
-  events=ask('8 weeks',coaching);coaching=next(e['evidence']['coaching'] for e in events if e['type']=='tool' and 'coaching' in e['evidence'])
-  self.assertTrue(coaching['brief']['duration_confirmed']);self.assertEqual(coaching['brief']['horizon_weeks'],8)
-  events=ask('3 hours at 08:00 hard',coaching);followup=next(e['evidence']['coaching'] for e in events if e['type']=='tool' and 'coaching' in e['evidence'])
-  self.assertEqual(followup['brief']['goal'],'ftp');self.assertEqual(followup['brief']['fixed_events'][0]['duration_minutes'],180);self.assertEqual(followup['status'],'ready')
-  self.assertEqual(list_training(self.path)['plans'],[]);self.assertEqual(read_brief(self.path)['revision'],0)
+
  def test_current_recovery_block_controls_actual_sessions(self):
-  from app.training_coach import summarize_blocks,assistant_answer
   b=self.brief(horizon_weeks=8,program_start=(WEEK-timedelta(weeks=3)).isoformat())
   p=self.preview(b)
   self.assertTrue(p['sessions'])
   self.assertTrue(all(session['definition']['training_block']['phase']=='Recovery / review' for session in p['sessions']))
   self.assertTrue(all(session['definition'].get('workout_kind')=='recovery' for session in p['sessions']))
   self.assertEqual(sum(block['weeks'] for block in p['block_summary']),8)
-  self.assertIn('8-week',assistant_answer({**p,'recognized':[]}))
- def test_today_chat_requests_time_then_suggests_without_plan(self):
-  from app.ai_chat import _today_chat_request
-  question='I can go today for a ride what would you suggest'
-  self.assertEqual(_forced_tool_name(question),'suggest_today_workout')
-  self.assertEqual(_forced_tool_name('I want two hard rides Tuesday and Wednesday. I can train today. I want FTP improvement.'),'preview_training_plan')
-  self.assertEqual(_today_chat_request(question,[])['minutes'],None)
-  self.assertEqual(_today_chat_request('60 minutes',[{'role':'user','content':question}]),{'minutes':60,'sport':'cycling'})
-  result={'session':{'title':'Easy ride','steps':[{'type':'Warm-up','duration_seconds':600}]},'reason':'Recent workload favors easy riding','warnings':['Preview only'],'saved':False}
-  with patch('app.ai_chat._execute_calls',return_value=([{'result':result}],[])):
-   events=[json.loads(event) for event in chat_stream('60 minutes',history=[{'role':'user','content':question},{'role':'assistant','content':'How much time?'}],timezone_name='Asia/Jerusalem',path=self.path)]
-  self.assertIn('Recent workload',str(events));self.assertEqual(list_training(self.path)['plans'],[])
- def test_ordinary_race_or_ftp_question_is_not_forced_to_coach(self):
-  self.assertNotEqual(_forced_tool_name('What was my FTP last year?'),'preview_training_plan');self.assertNotEqual(_forced_tool_name('Compare that race to my rides'),'preview_training_plan')

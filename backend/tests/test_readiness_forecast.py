@@ -34,14 +34,6 @@ class ForecastTests(unittest.TestCase):
   predicted=fit_predict(examples,[.8],40)
   self.assertLess(abs(predicted-56),abs(40-56))
   self.assertTrue(0<=fit_predict(examples,[100],40)<=100)
- def test_assistant_tomorrow_request_routes_read_only_forecast(self):
-  from app.ai_chat import chat_stream
-  class Clock(datetime):
-   @classmethod
-   def now(cls,tz=None):return NOW
-  with patch('app.readiness_forecast.datetime',Clock):events=[json.loads(line) for line in chat_stream('What is my projected training readiness tomorrow?',timezone_name='UTC',path=self.path)]
-  self.assertTrue(any(e['type']=='delta' and "Tomorrow's projected" in e['text'] for e in events))
-  self.assertTrue(any(e['type']=='tool' and e['evidence']['tool']=='get_projected_training_readiness' for e in events))
  def test_early_completed_wake_unlocks_before_fallback_hour(self):
   now=datetime(2026,10,10,6,10,tzinfo=timezone.utc)
   result=calculate(DAY,'UTC',self.rows,[],COVERAGE,DEFAULTS,now=now)

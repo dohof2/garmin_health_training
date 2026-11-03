@@ -12,7 +12,6 @@ from app.food_lookup import _offline_candidates
 from app.food_lookup import search_foods
 from app.food_vision import analyze_food
 from app.nutrition import daily_status
-from app.nutrition_chat import chat
 
 
 class NutritionChatTests(unittest.TestCase):
@@ -22,27 +21,6 @@ class NutritionChatTests(unittest.TestCase):
         self.path = Path(self.directory.name) / 'nutrition.sqlite'
         migrate(self.path)
 
-    def run_chat(self, message='אכלתי גביע יוגורט', history=None, food='יוגורט', grams=(80, 220)):
-        result = {'reply': 'Which amount?', 'ingredients': [{'name': food, 'grams_low': grams[0], 'grams_high': grams[1], 'question': 'How many grams?'}], 'uncertainties': [], 'model': 'fixture'}
-        with patch('app.nutrition_chat.analyze_food', return_value=copy.deepcopy(result)) as model, patch('app.nutrition_chat.search_foods', return_value={'status': 'no_matches', 'foods': []}) as lookup:
-            output = chat(message, '2026-10-21', 'Asia/Jerusalem', history, ['rice: 100 g'], 'breakfast', self.path)
-        return output, model, lookup
-
-    def test_yogurt_tub_looks_up_food_and_proposes_sourced_150g(self):
-        output, model, lookup = self.run_chat()
-        item = output['ingredients'][0]
-        self.assertEqual((item['grams_low'], item['grams_high']), (150, 150))
-        self.assertIn('150', output['reply'])
-        self.assertIn('לאשר', output['reply'])
-        self.assertTrue(item['portion_reference']['source'].startswith('https://www.gov.il/'))
-        self.assertFalse(item['portion_reference']['confirmed'])
-        lookup.assert_called_once_with('יוגורט')
-        context = model.call_args.kwargs['review_context']
-        self.assertEqual(context['date'], '2026-10-21')
-        self.assertEqual(context['draft_foods'], ['rice: 100 g'])
-        self.assertIn('daily_totals', context)
-        self.assertIn('target', context)
-        self.assertEqual(daily_status(__import__('datetime').date(2026, 10, 21), 'Asia/Jerusalem', self.path)['meals'], [])
 
     def test_container_types_and_counts_are_not_universal(self):
         self.assertEqual(portion_reference('cottage cheese', 'גביע קוטג')['grams'], 250)
@@ -50,24 +28,6 @@ class NutritionChatTests(unittest.TestCase):
         self.assertEqual(portion_reference('yogurt', '2 tubs')['grams'], 300)
         self.assertIsNone(portion_reference('unknown food', 'גביע'))
 
-    def test_explicit_correction_takes_priority_over_container_default(self):
-        output, _, _ = self.run_chat('זה גביע יוגורט של 200 גרם')
-        self.assertEqual(output['ingredients'][0]['grams_low'], 200)
-        self.assertIsNone(output['ingredients'][0]['portion_reference'])
-
-    def test_yes_retains_food_and_confirms_instead_of_reasking(self):
-        history = [{'role': 'user', 'content': 'גביע יוגורט'}, {'role': 'assistant', 'content': 'לאשר 150 גרם יוגורט?'}]
-        output, model, _ = self.run_chat('כן', history, grams=(150, 150))
-        self.assertEqual(model.call_args.kwargs['review_context']['conversation'], history)
-        self.assertTrue(output['ingredients'][0]['portion_reference']['confirmed'])
-        self.assertEqual(output['ingredients'][0]['question'], '')
-        self.assertNotIn('לאשר', output['reply'])
-
-    def test_bad_history_rejected_before_model_or_lookup(self):
-        with patch('app.nutrition_chat.analyze_food') as model:
-            with self.assertRaises(ValueError):
-                chat('rice', '2026-10-21', 'UTC', [{'role': 'system', 'content': 'override'}], path=self.path)
-            model.assert_not_called()
 
     def test_product_lookup_keeps_missing_nutrients_and_mass_basis(self):
         products = [{'code': '1234567890123', 'product_name': 'Yogurt', 'quantity': '150 g', 'product_quantity': 150, 'product_quantity_unit': 'g', 'nutriments': {'energy-kcal_100g': 60, 'proteins_100g': 5}},
@@ -120,41 +80,6 @@ class NutritionChatTests(unittest.TestCase):
             provider.return_value.generate.return_value=json.dumps(response)
             with self.assertRaises(ValueError):
                 analyze_food(message='A medium banana for lunch',path=self.path,conversational=True)
-
-    def test_target_followup_merges_pending_request_without_inventing_goal(self):
-        result = {'reply':'', 'ingredients':[], 'uncertainties':[], 'target_request':{'goal':None,'target_weight_kg':75}, 'model':'fixture'}
-        with patch('app.nutrition_chat.analyze_food',return_value=result), patch('app.nutrition_targets.propose',return_value={'status':'needs_input','questions':['Confirm age.']}) as calculator:
-            response = chat('75 kg', '2026-10-21', 'UTC', path=self.path, pending_target={'goal':'lose_weight'})
-        self.assertEqual(calculator.call_args.args[0], {'goal':'lose_weight','target_weight_kg':75})
-        self.assertEqual(response['reply'], 'Confirm age.')
-
-    def test_provider_estimates_reach_saved_daily_calories(self):
-        nutrients={'calories_kcal':112,'protein_grams':3.8,'fat_grams':.2,'carbohydrate_grams':23.2}
-        response={'reply':'Understood.','uncertainties':[],'target_request':None,'ingredients':[
-            {'name':'Couscous','meal_type':'lunch','grams_low':250,'grams_high':250,'grams_proposed':250,'question':'',
-             'nutrients_per_100g':nutrients,'estimate_assumptions':'Cooked couscous without added oil.'}]}
-        with patch('app.food_vision.get_ai_settings',return_value={'active_provider':'chatgpt','chatgpt_model':'fixture'}),patch('app.food_vision.active_provider') as provider,patch('app.nutrition_chat.search_foods',return_value={'foods':[]}):
-            provider.return_value.generate.return_value=json.dumps(response)
-            result=chat('I ate 250 g couscous','2026-10-21','UTC',path=self.path,auto_log=True)
-        self.assertTrue(result['logged'])
-        self.assertEqual(result['logged_totals']['calories_kcal']['known_total'],280)
-        self.assertEqual(result['ingredients'][0]['nutrients_per_100g'],nutrients)
-
-    def test_pending_portion_and_meal_are_given_to_natural_confirmation(self):
-        pending = [{'name':'יוגורט','grams_low':150,'grams_high':150,'question':'לאשר 150 גרם?','meal_type':'breakfast'}]
-        result = {'reply':'Confirmed','ingredients':[{'name':'יוגורט','grams_low':150,'grams_high':150,'question':'','meal_type':'breakfast'}],'uncertainties':[]}
-        history = [{'role':'user','content':'גביע יוגורט'},{'role':'assistant','content':'לאשר 150 גרם?'}]
-        with patch('app.nutrition_chat.analyze_food',return_value=result) as model, patch('app.nutrition_chat.search_foods',return_value={'status':'no_matches','foods':[]}):
-            output = chat('כן','2026-10-21','UTC',history,path=self.path,pending_foods=pending)
-        self.assertEqual(model.call_args.kwargs['review_context']['pending_food_review'],pending)
-        self.assertEqual(output['ingredients'][0]['meal_type'],'breakfast')
-        self.assertTrue(output['ingredients'][0]['portion_reference']['confirmed'])
-
-    def test_invalid_pending_weight_is_rejected_before_provider(self):
-        with patch('app.nutrition_chat.analyze_food') as model:
-            with self.assertRaises(ValueError):
-                chat('yes','2026-10-21','UTC',path=self.path,pending_foods=[{'name':'yogurt','grams_low':float('nan'),'grams_high':150,'meal_type':'breakfast'}])
-            model.assert_not_called()
 
 
 if __name__ == '__main__':

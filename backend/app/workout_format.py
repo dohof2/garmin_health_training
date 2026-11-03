@@ -32,7 +32,7 @@ def continuous_definition(old):
     return updated
 
 
-def propose(message,path=None,now=None):
+def propose(message,path=None,now=None,*,selected_id=None):
     from .training_coach import read_brief
     from .active_training import _program_workouts
     now=now or datetime.now(timezone.utc)
@@ -43,6 +43,7 @@ def propose(message,path=None,now=None):
         if program:
             state=json.loads(program['state_json']);today=now.astimezone(ZoneInfo(state['timezone'])).date()
             for row in _program_workouts(c,program['plan_id']):
+                if selected_id and row['id']!=selected_id:continue
                 old=json.loads(row['definition_json'])
                 day=old.get('scheduled_date') or datetime.fromisoformat(row['scheduled_for']).astimezone(ZoneInfo(state['timezone'])).date().isoformat()
                 kind=old.get('workout_kind') or ('endurance' if old.get('template_id')=='cycling_easy' else None)
@@ -52,7 +53,8 @@ def propose(message,path=None,now=None):
                     raise ValueError('A matching ride has an unfinished Garmin send. Reconcile it before editing its blocks.')
                 updated=continuous_definition(old)
                 changes.append({'workout_id':row['id'],'expected_revision':row['revision'],'title':row['title'],'date':day,'changes':{'definition':updated}})
-    result={'tool':'propose_training_adjustment','kind':'adaptation','format_preference':True,'status':'proposal','request':message,'root_plan_id':program['plan_id'] if program else None,'program_revision':program['revision'] if program else None,'brief_revision':brief['revision'],'adjustments':changes,'changes':{},'message':f'Review {len(changes)} upcoming base/recovery ride(s) as one continuous block, preserving total duration and the main effort target. Save also remembers this format for future plans and suggestions. Published rides will show pending Garmin updates.'}
+    result={'tool':'propose_training_adjustment','kind':'adaptation','format_preference':not selected_id,'status':'proposal' if changes or not selected_id else 'needs_input','request':message,'root_plan_id':program['plan_id'] if program else None,'program_revision':program['revision'] if program else None,'brief_revision':brief['revision'],'adjustments':changes,'changes':{},'message':f'Review {len(changes)} upcoming base/recovery ride(s) as one continuous block, preserving total duration and the main effort target. '+('Only the selected session changes; recurring preferences remain unchanged.' if selected_id else 'Save also remembers this format for future plans and suggestions.')+' Published rides will show pending Garmin updates.'}
+    if selected_id and not changes:result['message']='The selected session has no eligible steady block to merge, or is already continuous. Its instructions were not changed.'
     result['fingerprint']=hashlib.sha256(encoded({k:result[k] for k in ('root_plan_id','program_revision','brief_revision','adjustments')}).encode()).hexdigest()
     return result
 
@@ -81,11 +83,3 @@ def save(arguments,path=None,now=None):
             c.execute('UPDATE active_training_program SET state_json=?,revision=revision+1 WHERE id=1',(encoded(state),))
             invalidate(c,root)
     return {'status':'saved','count':len(proposal['adjustments']),'continuous_endurance':True}
-
-
-def resolve_followup(message,history):
-    """Keep this narrow formatting request through scope/affirmation replies."""
-    if not re.fullmatch(r'\s*(?:yes(?:[,. ]+apply it)?|also for (?:the )?(?:planning|pkanning) ahead|in general for cycling (?:endurance|edurance) steady)[.!? ]*',message,re.I):return message
-    prior=[turn['content'] for turn in history[-8:] if turn['role']=='user']
-    combined=' '.join(prior[-4:]+[message])
-    return combined if requested(combined) else message

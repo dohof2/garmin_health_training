@@ -6,7 +6,6 @@ from pathlib import Path
 from unittest.mock import patch
 from app.database import migrate,connect
 from app.charts import chart_data,catalog
-from app.ai_chat import chat_stream
 from app.ai_tools import execute_tool
 from app.garmin_connection import GarminConnectProvider
 from app.sync import run_sync,_upsert_activity_detail
@@ -15,53 +14,7 @@ from app.main import garmin_import
 
 
 class QCRemediationTests(unittest.TestCase):
-    def test_last_year_wording_clarifies_and_preserves_period(self):
-        from app.ride_comparison import comparison_start,comparison_end
-        question='how was my last ride compared to the rides in the last year?'
-        with patch('app.ai_chat._today',return_value=date(2026,10,11)),patch('app.ai_chat._ollama_request') as model:
-            events=[json.loads(e) for e in chat_stream(question,path=self.path)]
-            clarification=''.join(e.get('text','') for e in events if e['type']=='delta')
-            self.assertIn('compared with',clarification)
-            history=[{'role':'user','content':question},{'role':'assistant','content':clarification}]
-            followup=[json.loads(e) for e in chat_stream('general records',history=history,path=self.path)]
-        model.assert_not_called()
-        evidence=next(e['evidence'] for e in followup if e['type']=='tool')
-        self.assertEqual(evidence['period'],{'start':'2025-10-11','end':'2026-10-11'})
-        self.assertEqual(comparison_start('last year',date(2026,10,11)),date(2025,1,1))
-        self.assertEqual(comparison_end('last year',date(2026,10,11)),date(2025,12,31))
 
-    def test_latest_ride_comparison_uses_year_without_gps_matching(self):
-        with connect(self.path) as c:
-            c.execute("UPDATE activities SET distance_meters=10000,duration_seconds=3600")
-            for id, source, deleted, day, distance in [
-                ('latest','garmin_connect',None,'2026-10-09',30000),
-                ('old','garmin_connect',None,'2025-12-31',999999),
-                ('fake','synthetic_fixture',None,'2026-10-10',999999),
-                ('removed','garmin_connect','2026-10-10','2026-10-10',999999)]:
-                c.execute("INSERT INTO activities(id,source_name,source_record_id,activity_type,name,started_at,distance_meters,deleted_at) VALUES(?,?,?,'mountain_biking','Test ride',?,?,?)",(id,source,id,day+'T10:00:00Z',distance,deleted))
-        with patch('app.ai_chat._today',return_value=date(2026,10,11)),patch('app.ai_chat._ollama_request') as model:
-            question='How was my last ride compared to other rides this year?'
-            first=[json.loads(e) for e in chat_stream(question,path=self.path)]
-            clarification=''.join(e.get('text','') for e in first if e['type']=='delta')
-            self.assertIn('compared with',clarification)
-            self.assertEqual(next(e['evidence']['tool'] for e in first if e['type']=='tool'),'compare_latest_ride')
-            history=[{'role':'user','content':question},{'role':'assistant','content':clarification}]
-            events=[json.loads(e) for e in chat_stream('All rides',history=history,path=self.path)]
-        model.assert_not_called()
-        self.assertFalse([e for e in events if e['type']=='error'],events)
-        result=next(e['evidence'] for e in events if e['type']=='tool')
-        self.assertEqual(result['reference_record']['id'],'latest')
-        self.assertEqual(result['candidate_pool_count'],2)
-        distance=next(r for r in result['comparisons'] if r['metric']=='distance_meters')
-        self.assertEqual(distance['median'],10)
-        self.assertEqual(distance['reference'],30)
-        answer=''.join(e.get('text','') for e in events if e['type']=='delta')
-        self.assertIn('200.0% above',answer)
-        self.assertIn('2026-01-01',answer)
-        with patch('app.ai_chat._today',return_value=date(2026,10,11)),patch('app.ai_chat.execute_tool',return_value={'dummy':True}) as gps,patch('app.ai_chat._tool_evidence',return_value={'tool':'find_same_course_rides'}),patch('app.ai_chat._deterministic_answer',return_value='GPS comparison'):
-            list(chat_stream('Same route',history=history,path=self.path))
-        self.assertEqual(gps.call_args.args[1]['candidate_start_date'],'2026-01-01')
-        self.assertEqual(gps.call_args.args[1]['candidate_end_date'],'2026-10-11')
 
     def setUp(self):
         calendar_patch=patch('app.ride_comparison.date',wraps=date)
@@ -92,14 +45,6 @@ class QCRemediationTests(unittest.TestCase):
         for spec in [{'rolling_days':True},{'aggregation':'weekly_fake'},{'rolling_days':0}]:
             with self.assertRaises(ValueError):chart_data({'metric':'weight','kind':'line',**spec},self.path)
 
-    def test_assistant_transforms_are_executed(self):
-        for text,key,value in [('Plot weekly median weight','aggregation','weekly_median'),('Plot weight with a 7-day rolling average','rolling_days',7)]:
-            with patch('app.ai_chat._ollama_request') as model:
-                events=[json.loads(e) for e in chat_stream(text,path=self.path)]
-            self.assertFalse([e for e in events if e['type']=='error'],events)
-            result=next(e['evidence']['plots'][0] for e in events if e['type']=='tool')
-            self.assertEqual(result['spec'][key],value)
-            model.assert_not_called()
 
     def test_archive_discovery_is_read_only_and_keeps_numeric_fields(self):
         with connect(self.path) as c:
@@ -204,11 +149,6 @@ class QCRemediationTests(unittest.TestCase):
         self.assertEqual(len(first),1);self.assertEqual(len(second),1)
         self.assertNotEqual(first[0]['id'],second[0]['id'])
 
-    def test_model_catalog_timezone_is_kept_as_request_context(self):
-        from app.ai_chat import _execute_calls
-        outputs,evidence=_execute_calls([('catalog','get_chart_catalog',{'timezone':'UTC'})],self.path,message='Show available plot metrics',timezone_name='UTC')
-        self.assertTrue(outputs)
-        self.assertTrue(evidence)
 
     def test_live_response_contracts_use_correct_arguments(self):
         from app.supplementary_sync import fetch_supplementary

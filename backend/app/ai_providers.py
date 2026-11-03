@@ -21,7 +21,7 @@ def shared_allowance_message(error):
     body=getattr(error,'body',None)
     detail=body.get('error',body) if isinstance(body,dict) else {}
     if isinstance(detail,dict) and detail.get('code')=='subscription_sharing_usage_limit_exceeded':
-        return 'Your ChatGPT shared assistant allowance has been reached. Wait for its reset, or explicitly choose another configured provider in Settings. No paid fallback was used.'
+        return 'ChatGPT declined this request because of a usage allowance limit. Check ChatGPT Settings > Usage for this app limit and your overall plan usage. This error does not identify which limit was reached or when it resets. No paid fallback was used.'
     return None
 
 
@@ -138,10 +138,13 @@ class OllamaProvider:
         self.model = model
 
     def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str:
+        from .agent_runtime import CURRENT
+        runtime=CURRENT.get()
         body = json.dumps(
             {
                 "model": self.model,
                 "stream": False,
+                **({"options":{"num_predict":runtime.output_limit}} if runtime else {}),
                 "messages": [
                     {"role": "system", "content": instructions},
                     {"role": "user", "content": prompt},
@@ -156,6 +159,8 @@ class OllamaProvider:
         )
         with urlopen(request, timeout=timeout_seconds) as response:
             payload = json.loads(response.read().decode("utf-8"))
+        from .agent_runtime import observe
+        if type(payload.get('prompt_eval_count')) is int:observe({'input_tokens':payload['prompt_eval_count'],'output_tokens':payload.get('eval_count',0)})
         return str(payload["message"]["content"])
 
 
@@ -166,22 +171,31 @@ class OpenAIProvider:
         self.model = model
 
     def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str:
+        from .agent_runtime import output_options,observe
         response = OpenAI(timeout=timeout_seconds, max_retries=0).responses.create(
             model=self.model,
             instructions=instructions,
             input=prompt,
             store=False,
+            **output_options(),
         )
+        observe(getattr(response,"usage",None))
         return response.output_text
 
 
-def active_provider(path: Path | None = None) -> AIProvider:
+def _active_provider(path: Path | None = None) -> AIProvider:
     settings = get_ai_settings(path)
     if settings["active_provider"] == "chatgpt":
         return ChatGPTProvider(str(settings["chatgpt_model"]),path)
     if settings["active_provider"] == "openai":
         return OpenAIProvider(str(settings["openai_model"]))
     return OllamaProvider(str(settings["ollama_model"]))
+
+
+def active_provider(path: Path | None = None) -> AIProvider:
+    from .agent_runtime import CURRENT,BudgetedProvider
+    provider=_active_provider(path);runtime=CURRENT.get()
+    return BudgetedProvider(provider,runtime) if runtime else provider
 
 
 class ChatGPTProvider:
@@ -192,9 +206,11 @@ class ChatGPTProvider:
         client=OpenAI(api_key=access_token(self.path),base_url='https://api.openai.com/v1',timeout=timeout_seconds,max_retries=0)
         text=[];completed=False
         reasoning = {'reasoning': {'effort': 'low'}} if '-sol' in self.model else {}
-        for event in client.responses.create(model=self.model,instructions=instructions,input=[{'role':'user','content':prompt}],store=False,stream=True,**reasoning):
+        from .agent_runtime import output_options,observe
+        for event in client.responses.create(model=self.model,instructions=instructions,input=[{'role':'user','content':prompt}],store=False,stream=True,**reasoning,**output_options()):
             if event.type=='response.output_text.delta':text.append(event.delta)
-            elif event.type=='response.completed':completed=True
+            elif event.type=='response.completed':
+                completed=True;observe(getattr(getattr(event,'response',None),'usage',None))
             elif event.type in {'response.failed','response.incomplete','error'}:raise RuntimeError('ChatGPT request failed or was incomplete. Check account access and usage in Settings.')
         if not completed:raise RuntimeError('ChatGPT stream ended before completion.')
         return ''.join(text)

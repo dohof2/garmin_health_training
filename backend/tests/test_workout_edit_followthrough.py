@@ -17,7 +17,6 @@ from app.training_completion import benefit_coverage,adapt_missed_stimulus
 from app.active_training import _program_workouts,review
 from app.garmin_training_publish import preview,approve,run,view
 from app.cycling_variants import select
-from app.ai_chat import chat_stream
 
 
 class FollowthroughTests(unittest.TestCase):
@@ -50,20 +49,6 @@ class FollowthroughTests(unittest.TestCase):
    c.execute("INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json,completion_status) VALUES(?,?,'cycling','Past quality',?,?,'completed')",(identifier,root,day+'T07:00:00+00:00',encoded(d)))
    c.execute("INSERT INTO activities(id,source_name,activity_type,started_at,duration_seconds,raw_json) VALUES(?,'garmin_connect','cycling',?,3600,?)",(identifier,day+'T07:00:00+00:00',encoded({'trainingEffectLabel':benefit})))
    c.execute('INSERT INTO training_feedback(workout_id,activity_id,effort,soreness,pain_or_illness,updated_at) VALUES(?,?,?,1,0,?)',(identifier,identifier,effort,day+'T10:00:00+00:00'))
- def test_chat_preview_save_and_daily_review_preserve_exact_blocks(self):
-  message='Change today cycling to 2 x 4 minutes, recovery to 3 minutes'
-  before=list_training(self.path)
-  with patch('app.training_adjustments.datetime',wraps=type(NOW)) as clock, patch('app.ai_chat._chatgpt_stream',side_effect=AssertionError('Unexpected provider request')):
-   clock.now.return_value=NOW
-   events=[json.loads(e) for e in chat_stream(message,path=self.path,timezone_name=TZ)]
-  p=next(e['evidence']['training_adjustment'] for e in events if e['type']=='tool')
-  self.assertEqual(p['status'],'proposal',p);self.assertEqual(before,list_training(self.path))
-  d=p['adjustments'][0]['changes']['definition']
-  self.assertEqual([s['duration_seconds'] for s in d['steps'] if s['name'].startswith('Work interval')],[240,240])
-  self.assertEqual(sum(s['duration_seconds'] for s in d['steps']),3600)
-  self.save(p);review(self.path,TZ,NOW)
-  self.assertEqual(self.current()['definition'],d)
-  with self.assertRaises(ValueError):self.save(p)
  def test_targets_recovery_and_increase_are_checked_again_on_save(self):
   p=propose('Set today cycling work target to 5-6 RPE',self.path,NOW)
   self.assertEqual(p['status'],'proposal',p)
@@ -130,12 +115,6 @@ class FollowthroughTests(unittest.TestCase):
   with connect(self.path) as c:
    choice,evidence=select(c,'threshold',NOW.date(),TZ);self.assertEqual(choice,'sustained_threshold');self.assertEqual(evidence['tolerated_recordings'],2)
    self.assertEqual(select(c,'threshold',NOW.date(),TZ,False)[0],'split_threshold')
- def test_mixed_requests_clarify_both_tasks_without_silently_editing_or_logging(self):
-  for message in ('I ate eggs, change today cycling to 2 x 4 minutes','Plot my sleep and change today workout reps to 1'):
-   before=list_training(self.path)
-   with patch('app.nutrition_chat.chat',side_effect=AssertionError('Unexpected meal action')),patch('app.training_adjustments.propose',side_effect=AssertionError('Unexpected partial edit')):
-    events=[json.loads(e) for e in chat_stream(message,path=self.path,timezone_name=TZ)]
-   self.assertEqual(events[-1]['type'],'complete');self.assertIn('combined request',events[1]['text']);self.assertEqual(before,list_training(self.path))
  def test_rolling_publication_applies_edited_blocks_once(self):
   from app.rolling_publication import window,sync,status
   client=FakeGarmin();factory=lambda p:client

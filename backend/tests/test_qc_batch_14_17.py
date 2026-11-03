@@ -6,8 +6,6 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from app.database import connect,migrate
-from app.ai_chat import chat_stream,_matching_followup
-from app.chat_routing import task_segments
 from app.history import get_activity
 from app.garmin_training_publish import history,preview,approve,run,view
 from app.garmin_strength import mapping_blockers
@@ -20,47 +18,6 @@ class BatchTests(unittest.TestCase):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   self.path=Path(self.tmp.name)/'test.sqlite';migrate(self.path)
  def events(self,message,**kwargs):return [json.loads(line) for line in chat_stream(message,path=self.path,timezone_name=TZ,message_time=NOW,**kwargs)]
- def test_task_boundaries_do_not_split_ingredients_or_fragments(self):
-  self.assertEqual(task_segments('I ate bread and eggs'),[])
-  self.assertEqual(task_segments('Make my ride easier and more comfortable'),[])
-  self.assertEqual(task_segments('Make my ride easier and log my lunch'),['Make my ride easier','log my lunch'])
-  self.assertEqual(task_segments('I ate 200 g rice; reduce my cycling this week by 20%'),['I ate 200 g rice','reduce my cycling this week by 20%'])
- def test_mixed_food_and_workout_preserve_both_cards_context_and_operation_ids(self):
-  pending={'day':NOW.date().isoformat(),'pending_foods':[{'name':'rice'}]}
-  proposal={'status':'proposal','message':'Review the easier ride; nothing saved.','adjustments':[]}
-  with patch('app.training_adjustments.propose',return_value=proposal) as workout,patch('app.nutrition_chat.chat',return_value={'reply':'Logged rice','logged':True,'context_date':'2026-10-27'}) as food:
-   events=self.events('Make my ride easier; log my lunch',operation_id='batch-1',nutrition_context=pending)
-   first_id=food.call_args.kwargs['operation_id']
-   self.assertEqual(food.call_args.kwargs['pending_foods'],pending['pending_foods'])
-   self.assertEqual(workout.call_args.args[0],'Make my ride easier')
-   self.assertEqual(food.call_args.args[0],'log my lunch')
-   again=self.events('Make my ride easier; log my lunch',operation_id='batch-1',nutrition_context=pending)
-   self.assertEqual(food.call_args.kwargs['operation_id'],first_id)
-  self.assertEqual([e['type'] for e in events].count('complete'),1)
-  evidence=[e['evidence'] for e in events if e['type']=='tool']
-  self.assertTrue(any('training_adjustment' in e for e in evidence));self.assertTrue(any('nutrition' in e for e in evidence))
-  self.assertTrue(any(e.get('chat_roles')==['trainer','nutrition'] for e in events));self.assertEqual(again[-1]['type'],'complete')
- def test_one_failed_task_does_not_discard_another_result(self):
-  with patch('app.training_adjustments.propose',side_effect=ValueError('No saved workout')),patch('app.nutrition_chat.chat',return_value={'reply':'Logged rice','logged':True,'context_date':'2026-10-27'}) as food:
-   events=self.events('Make my ride easier; log my lunch')
-  food.assert_called_once();text=''.join(e.get('text','') for e in events)
-  self.assertIn('could not be completed',text);self.assertIn('Logged rice',text);self.assertIn('not atomic',text)
- def test_matching_followup_preserves_user_date_not_assistant_claim(self):
-  history=[{'role':'user','content':'Find matching rides for September 27th'},{'role':'assistant','content':'October 9th is the reference.'}]
-  resolved=_matching_followup('Find matching rides using GPS',history,TZ)
-  self.assertIn('2026-09-27',resolved)
- def test_matching_uses_selected_reference_without_provider_question(self):
-  captured=[]
-  def execute(name,args,path):captured.append((name,args));return {'tool':name}
-  with patch('app.ai_chat.execute_tool',side_effect=execute),patch('app.ai_chat._tool_evidence',return_value={'tool':'find_same_course_rides'}),patch('app.ai_chat._deterministic_answer',return_value='Matched the selected ride'),patch('app.ai_chat._chatgpt_stream',side_effect=AssertionError('Unexpected provider call')):
-   events=self.events('Find matching rides using GPS',ride_context='selected-ride')
-  self.assertEqual(captured[0][1]['reference_activity_id'],'selected-ride');self.assertEqual(events[-1]['type'],'complete')
- def test_explicit_latest_overrides_selected_context_and_period_filters_remain(self):
-  captured=[]
-  def execute(name,args,path):captured.append(args);return {'tool':name}
-  with patch('app.ai_chat.execute_tool',side_effect=execute),patch('app.ai_chat._tool_evidence',return_value={}),patch('app.ai_chat._deterministic_answer',return_value='Matched'):
-   self.events('Find GPS matches for my latest ride in the past 3 months',ride_context='old-ride')
-  self.assertNotIn('reference_activity_id',captured[0]);self.assertIn('candidate_start_date',captured[0])
  def test_speed_is_flagged_without_rewriting_samples_or_converting_twice(self):
   with connect(self.path) as c:
    c.execute("INSERT INTO activities(id,source_name,activity_type,started_at) VALUES('ride','garmin_connect','mountain_biking','2026-10-09T02:00:00Z')")

@@ -19,8 +19,6 @@ from app.activity_sections import plots,climbs
 from app.garmin_workout_mapping import workout_payload,canonical,digest
 from app.garmin_training_publish import preview,approve,run,view
 from app.rolling_publication import window,sync,status,disable
-from app.chat_routing import route
-from app.ai_chat import chat_stream
 from app.ai_tools import execute_tool
 
 
@@ -116,14 +114,6 @@ class RoadmapTests(unittest.TestCase):
    self.assertEqual(len(definitions),2);self.assertNotEqual(definitions[0]['steps'],definitions[1]['steps'])
    for d in definitions:self.assertEqual(sum(s['duration_seconds'] for s in d['steps']),3600);self.assertTrue(d['sources'])
   with self.assertRaises(ValueError):endurance('sprint',60,b,variant='made-up')
- def test_strength_sets_reps_load_rest_and_readback_comparison(self):
-  d={'sport':'strength','title':'Invented strength','duration_minutes':30,'warmup_minutes':5,'exercises':[{'id':'dumbbell_row','name':'Dumbbell row','sets':2,'repetitions':8,'rest_seconds':90,'load_target_kg':12.5,'load':'Leave 2 repetitions in reserve'}]}
-  payload,warnings=workout_payload(d,'test');steps=payload['workoutSegments'][0]['workoutSteps']
-  work=[s for s in steps if s['endCondition']['conditionTypeKey']=='reps'];self.assertEqual(len(work),2);self.assertEqual(work[0]['endConditionValue'],8);self.assertEqual(work[0]['weightValue'],12500)
-  changed=copy.deepcopy(payload);changed['workoutSegments'][0]['workoutSteps'][1]['weightValue']=20000
-  self.assertNotEqual(digest(canonical(payload)),digest(canonical(changed)))
-  d['exercises'][0]['id']='chair_squat'
-  with self.assertRaisesRegex(ValueError,'Unsupported exact'):workout_payload(d,'test')
  def test_rolling_requires_initial_approved_window_and_repeated_sync_is_idempotent(self):
   client=FakeGarmin();factory=lambda p:client;root,_=self.rows()
   with connect(self.path) as c:ids=window(c,root,TZ,NOW)
@@ -143,12 +133,6 @@ class RoadmapTests(unittest.TestCase):
   p=preview({'workout_ids':ids,'timezone':TZ,'enable_rolling':True},self.path,factory,NOW);approve(p['id'],self.path,factory,NOW);run(p['id'],self.path,factory)
   client.display_name='another-account';creates=client.creates;sync(self.path,factory,NOW)
   self.assertEqual(status(self.path)['status'],'attention');self.assertEqual(creates,client.creates)
- def test_shared_chat_roles_and_nutrition_do_not_call_training_adjustments(self):
-  for text,role in [('Plot weight and sleep','assistant'),('How many calories burned?','assistant'),('I ate eggs','nutrition'),('Make my endurance ride easier','trainer'),('My sleep was terrible, make my workout easier','trainer'),('How was my sleep?','assistant')]:self.assertEqual(route(text),role)
-  self.assertEqual(route('yes','auto','nutrition'),'nutrition');self.assertEqual(route('I ate eggs','trainer'),'trainer')
-  with patch('app.nutrition_chat.chat',return_value={'reply':'Review invented eggs','ingredients':[],'context_date':'2026-10-19'}),patch('app.training_adjustments.propose',side_effect=AssertionError('Wrong route')):
-   events=[json.loads(line) for line in chat_stream('I ate eggs',path=self.path,timezone_name=TZ)]
-  self.assertEqual(events[0]['chat_role'],'nutrition');self.assertEqual(events[-1]['type'],'complete')
  def add_stream(self,missing=False):
   self.add_activity('stream',seconds=300)
   origin=datetime(2026,10,19,8,tzinfo=timezone.utc)
@@ -168,11 +152,6 @@ class RoadmapTests(unittest.TestCase):
   self.assertEqual(result['traces']['speed']['points'][20]['distance'],.08)
   with connect(self.path) as c:c.execute("UPDATE activity_samples SET power_watts=NULL WHERE activity_id='stream' AND id=(SELECT min(id)+10 FROM activity_samples WHERE activity_id='stream')")
   self.assertGreater(len({p['segment'] for p in plots('stream',self.path)['traces']['power']['points']}),1)
- def test_climb_followup_retains_activity_without_provider_or_lap_substitution(self):
-  self.add_stream()
-  with patch('app.ai_chat._chatgpt_stream',side_effect=AssertionError('Unexpected external inference')):
-   events=[json.loads(line) for line in chat_stream('there is a chunk of up hill what was the avg power there and how long was it?',path=self.path,timezone_name=TZ,ride_context='stream')]
-  self.assertEqual(events[-1]['type'],'complete');self.assertTrue(any(e.get('evidence',{}).get('activity_id')=='stream' for e in events));self.assertIn('Time-weighted average power',next(e['text'] for e in events if e['type']=='delta'))
  def test_app_data_discovers_metrics_without_account_tables(self):
   result=execute_tool('query_app_data',{'dataset':'health','start_date':'2026-10-01','end_date':'2026-10-24'},self.path)
   self.assertIn('available_metrics',result)
@@ -210,16 +189,12 @@ class RoadmapTests(unittest.TestCase):
   for dataset in ('profile','sync','nutrition','health','archive'):
    execute_tool('query_app_data',{'dataset':dataset,'start_date':'2026-10-19','end_date':'2026-10-19'},self.path)
   with connect(self.path) as c:self.assertEqual(before,list(c.iterdump()))
- def test_yesterday_food_query_reads_log_without_estimating_a_new_meal(self):
-  with patch('app.nutrition_chat.chat',side_effect=AssertionError('Read question must not estimate food')):
-   events=[json.loads(line) for line in chat_stream('What did I eat yesterday?',path=self.path,timezone_name=TZ)]
-  self.assertEqual(events[-1]['type'],'complete');self.assertTrue(any(e.get('evidence',{}).get('dataset')=='nutrition' for e in events))
 
- def test_format_scope_and_yes_followups_retain_the_original_request(self):
-  from app.workout_format import resolve_followup,requested
-  history=[{'role':'user','content':"In my steady edurance I don't need warm up and cool down it is very easy as is"}]
-  for followup in ('in general for cycling edurance steady','also for the pkanning ahead','yes apply it'):
-   resolved=resolve_followup(followup,history)
-   self.assertTrue(requested(resolved));self.assertEqual(propose(resolved,self.path,NOW)['status'],'proposal')
-   history.append({'role':'user','content':followup})
-  self.assertEqual(resolve_followup('no do not apply it',history),'no do not apply it')
+ def test_strength_sets_reps_load_rest_and_readback_comparison(self):
+  d={'sport':'strength','title':'Invented strength','duration_minutes':30,'warmup_minutes':5,'exercises':[{'id':'dumbbell_row','name':'Dumbbell row','sets':2,'repetitions':8,'rest_seconds':90,'load_target_kg':12.5,'load':'Leave 2 repetitions in reserve'}]}
+  payload,warnings=workout_payload(d,'test');steps=payload['workoutSegments'][0]['workoutSteps']
+  work=[s for s in steps if s['endCondition']['conditionTypeKey']=='reps'];self.assertEqual(len(work),2);self.assertEqual(work[0]['endConditionValue'],8);self.assertEqual(work[0]['weightValue'],12500)
+  changed=copy.deepcopy(payload);changed['workoutSegments'][0]['workoutSteps'][1]['weightValue']=20000
+  self.assertNotEqual(digest(canonical(payload)),digest(canonical(changed)))
+  d['exercises'][0]['id']='chair_squat'
+  with self.assertRaisesRegex(ValueError,'Unsupported exact'):workout_payload(d,'test')

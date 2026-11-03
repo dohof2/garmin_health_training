@@ -303,6 +303,8 @@ def process_one(path=None, responder=None, now=None):
         context = json.loads(saved_state['context_json']) if saved_state else {}
         operation_id = f"telegram:{row['bot_id']}:{row['update_id']}"
         saved_operation = c.execute('SELECT 1 FROM nutrition_chat_operations WHERE operation_id=?',(operation_id,)).fetchone()
+        if not saved_operation:
+            saved_operation = c.execute("SELECT 1 FROM assistant_skill_turns WHERE operation_id=? AND status IN ('completed','review','awaiting_information') UNION SELECT 1 FROM assistant_skill_calls WHERE operation_id=? AND json_extract(result_json,'$.evidence.nutrition.logged')=1 LIMIT 1", (operation_id,operation_id)).fetchone()
         local_sent=datetime.fromtimestamp(row['sent_at'],timezone.utc).astimezone(ZoneInfo(settings['timezone']))
         day_start=local_sent.replace(hour=0,minute=0,second=0,microsecond=0).timestamp()
         history = [dict(r) for r in c.execute('''SELECT role,content FROM (SELECT t.id,t.role,t.content FROM telegram_turns t JOIN telegram_updates u ON u.bot_id=t.bot_id AND u.update_id=t.update_id

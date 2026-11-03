@@ -8,7 +8,6 @@ from app.database import migrate
 from app.training_coach import DEFAULT, preview, approve
 from app.training import list_training
 from app.active_training import review, suggest_today, set_status
-from app.training_questionnaire import extract_structured, turn
 
 NOW = datetime(2026, 10, 19, 7, tzinfo=timezone.utc)
 TZ = 'Asia/Jerusalem'
@@ -163,16 +162,3 @@ class TrainerSectionQC(unittest.TestCase):
             with connect(path) as connection:context=_context(connection,NOW,answers)
             self.assertIn('strength',context['answers']['sports'])
             self.assertTrue(any('strength' in message and 'no training slots' in message for message in context['blockers']))
-
-    def test_semantic_extraction_is_bounded_and_optional(self):
-        with patch('app.ai_providers.active_provider') as provider:
-            provider.return_value.generate.side_effect=TimeoutError()
-            self.assertEqual(extract_structured('about five'),[])
-            self.assertEqual(provider.return_value.generate.call_args.kwargs['timeout_seconds'],15)
-
-    def test_reported_strength_reply_retains_capacity(self):
-        with tempfile.TemporaryDirectory() as directory:
-            path=Path(directory)/'qc.sqlite';migrate(path)
-            result=turn('For strength 30 minutes. Pull ups I do 5. Dips I do 5. I am a beginner in strength.',[],TZ,path,NOW)
-            self.assertEqual(result['brief']['strength_capacity'],{'pull_up_reps':5,'dip_reps':5})
-            self.assertEqual(result['candidate_answers']['experience']['strength'],'new')

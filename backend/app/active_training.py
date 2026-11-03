@@ -136,6 +136,11 @@ def _fill(c,program,state,today,now):
             if p['status']=='needs_input':warnings.extend(p['questions'])
             continue
         occupied={(w['scheduled_for'][:10],json.loads(w['definition_json']).get('schedule_slot_id'),w['sport']) for w in _program_workouts(c,program)}
+        for w in _program_workouts(c,program):
+            override=json.loads(w['definition_json']).get('schedule_override') or {}
+            if override.get('date')==w['scheduled_for'][:10]:
+                occupied.add((override['date'],override.get('replaced_slot_id'),override.get('destination_sport')))
+                if override.get('vacated_date'):occupied.add((override['vacated_date'],override.get('vacated_slot_id'),override.get('vacated_sport')))
         sessions=[s for s in p['sessions'] if (s['scheduled_for'][:10],s['definition'].get('schedule_slot_id'),s['sport']) not in occupied and today<=datetime.fromisoformat(s['scheduled_for']).date()<=end]
         if not sessions:continue
         child='plan-'+str(uuid.uuid4())
@@ -579,46 +584,99 @@ def set_status(status,path=None):
         if c.execute('SELECT changes()').fetchone()[0]!=1:raise ValueError('No active plan')
 
 
-def reschedule(identifier,scheduled_for,expected_revision,path=None,now=None,scheduled_date=None,start_time=None):
+def reschedule(identifier,scheduled_for,expected_revision,path=None,now=None,scheduled_date=None,start_time=None,manual_override=False):
     now=now or datetime.now(timezone.utc)
     date_only=scheduled_date is not None and start_time is None or isinstance(scheduled_for,str) and len(scheduled_for)==10
     local=None if scheduled_date is not None or date_only else datetime.fromisoformat(scheduled_for.replace('Z','+00:00'))
     with connect(path) as c:
-        c.execute('BEGIN IMMEDIATE');row=_snapshot(c,identifier)
-        if not row or row['revision']!=expected_revision:raise ValueError('Session changed; refresh first')
-        managed=bool(c.execute('SELECT 1 FROM garmin_publication_links WHERE workout_id=? AND verified_hash IS NOT NULL',(identifier,)).fetchone())
-        if row['completion_status']!='planned' or row['publish_status'] not in ('local','published','update_needed') or (row['publish_status']!='local' or row['garmin_workout_id']) and not managed:raise ValueError('Only local sessions or verified app-managed Garmin sessions can be moved')
-        program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
-        if not program or identifier not in {w['id'] for w in _program_workouts(c,program['plan_id'])}:raise ValueError('Session does not belong to the active plan')
-        state=json.loads(program['state_json']);tz=ZoneInfo(state['timezone'])
-        if scheduled_date is not None or date_only:
-            from .training_coach import _scheduled
-            local=datetime.fromisoformat(_scheduled(scheduled_date or scheduled_for,start_time,state['timezone']))
-        day=local.astimezone(tz).date()
-        if not local.tzinfo or (day<now.astimezone(tz).date() if date_only else local<now):raise ValueError('Choose a current or future scheduled day')
-        if not date.fromisoformat(state['starts_on'])<=day<=date.fromisoformat(state['ends_on']):raise ValueError('Choose a date within the active plan')
-        if local.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None)!=local.astimezone(tz).replace(tzinfo=None):raise ValueError('Choose a valid local time')
-        definition=json.loads(row['definition_json']);end=local+timedelta(minutes=definition['duration_minutes'])
-        definition.update(scheduled_date=day.isoformat(),time_unspecified=date_only,schedule_timezone=state['timezone'])
-        day_total=definition['duration_minutes'];date_budget_required=date_only
-        for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND completion_status='planned'",(identifier,)):
-            start=datetime.fromisoformat(other['scheduled_for']);d=json.loads(other['definition_json'])
-            if start.astimezone(tz).date()==day:
-                day_total+=d['duration_minutes'];date_budget_required=date_budget_required or d.get('time_unspecified',False)
-            if not(date_only or d.get('time_unspecified')) and local<start+timedelta(minutes=d['duration_minutes']) and start<end:raise ValueError('This overlaps another planned workout; move or cancel it first')
-            if (definition['duration_minutes']>=90 or definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals') and abs((start.astimezone(tz).date()-day).days)<=1 and (d['duration_minutes']>=90 or d.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or d.get('template_id')=='cycling_controlled_intervals'):raise ValueError('Keep a recovery day between demanding sessions')
-        from .training_constraints import assign_slot,day_limit
-        constraints=_context(c,now,brief=state['brief'],timezone_name=state['timezone'])['answers']['week_schedule']
-        used_ids=[json.loads(other['definition_json']).get('schedule_slot_id') for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND completion_status='planned'",(identifier,)) if datetime.fromisoformat(other['scheduled_for']).astimezone(tz).date()==day]
+        c.execute('BEGIN IMMEDIATE')
+        _reschedule(c,identifier,scheduled_for,expected_revision,path,now,scheduled_date,start_time,date_only,local,manual_override=manual_override)
+    return {'status':'saved'}
+
+
+def _reschedule(c,identifier,scheduled_for,expected_revision,path,now,scheduled_date,start_time,date_only,local,swap_override=None,manual_override=False):
+    row=_snapshot(c,identifier)
+    if not row or row['revision']!=expected_revision:raise ValueError('Session changed; refresh first')
+    managed=bool(c.execute('SELECT 1 FROM garmin_publication_links WHERE workout_id=? AND verified_hash IS NOT NULL',(identifier,)).fetchone())
+    if row['completion_status']!='planned' or row['publish_status'] not in ('local','published','update_needed') or (row['publish_status']!='local' or row['garmin_workout_id']) and not managed:raise ValueError('Only local sessions or verified app-managed Garmin sessions can be moved')
+    program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+    if not program or identifier not in {w['id'] for w in _program_workouts(c,program['plan_id'])}:raise ValueError('Session does not belong to the active plan')
+    state=json.loads(program['state_json']);tz=ZoneInfo(state['timezone'])
+    if scheduled_date is not None or date_only:
+        from .training_coach import _scheduled
+        local=datetime.fromisoformat(_scheduled(scheduled_date or scheduled_for,start_time,state['timezone']))
+    day=local.astimezone(tz).date()
+    if not local.tzinfo or (day<now.astimezone(tz).date() if date_only else local<now):raise ValueError('Choose a current or future scheduled day')
+    if not date.fromisoformat(state['starts_on'])<=day<=date.fromisoformat(state['ends_on']):raise ValueError('Choose a date within the active plan')
+    if local.astimezone(timezone.utc).astimezone(tz).replace(tzinfo=None)!=local.astimezone(tz).replace(tzinfo=None):raise ValueError('Choose a valid local time')
+    definition=json.loads(row['definition_json'])
+    if definition.get('fixed_commitment') or definition.get('event_id') or definition.get('template_id')=='fixed_commitment':raise ValueError('Edit the fixed event instead of moving its workout')
+    end=local+timedelta(minutes=definition['duration_minutes'])
+    original_day=definition.get('scheduled_date') or datetime.fromisoformat(row['scheduled_for']).astimezone(tz).date().isoformat()
+    original_slot=definition.get('schedule_slot_id');previous_override=definition.get('schedule_override') or {}
+    definition.update(scheduled_date=day.isoformat(),time_unspecified=date_only,schedule_timezone=state['timezone'])
+    day_total=definition['duration_minutes'];date_budget_required=date_only
+    for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND completion_status IN ('planned','completed')",(identifier,)):
+        start=datetime.fromisoformat(other['scheduled_for']);d=json.loads(other['definition_json'])
+        if row['sport']=='strength' and other['sport']=='strength' and abs((start.astimezone(tz).date()-day).days)<=1:raise ValueError('Keep a recovery day between strength sessions')
+        if start.astimezone(tz).date()==day:
+            day_total+=d['duration_minutes'];date_budget_required=date_budget_required or d.get('time_unspecified',False)
+        if not(date_only or d.get('time_unspecified')) and local<start+timedelta(minutes=d['duration_minutes']) and start<end:raise ValueError('This overlaps another planned workout; move or cancel it first')
+        if (definition['duration_minutes']>=90 or definition.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or definition.get('template_id')=='cycling_controlled_intervals') and abs((start.astimezone(tz).date()-day).days)<=1 and (d['duration_minutes']>=90 or d.get('workout_kind') in ('tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo') or d.get('template_id')=='cycling_controlled_intervals'):raise ValueError('Keep a recovery day between demanding sessions')
+    from .training_constraints import assign_slot,day_limit
+    constraints=_context(c,now,brief=state['brief'],timezone_name=state['timezone'])['answers']['week_schedule']
+    used_ids=[json.loads(other['definition_json']).get('schedule_slot_id') for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND completion_status='planned'",(identifier,)) if datetime.fromisoformat(other['scheduled_for']).astimezone(tz).date()==day]
+    if manual_override:
+        day_row=next((item for item in constraints if item['weekday']==day.weekday()),{})
+        replacement=day_row.get('activities',[])
+        slot=next((item for item in replacement if item['sport']==row['sport']),replacement[0] if len(replacement)==1 else {})
+        swap_override={'slot_id':f"manual-{identifier}",'destination_sport':slot.get('sport'),'replaced_slot_id':slot.get('slot_id'),'vacated_date':original_day,'vacated_slot_id':original_slot,'vacated_sport':row['sport'],'reason':'Explicit manual date change; recurring availability is unchanged.'}
+        if previous_override.get('vacated_date'):swap_override.update({key:previous_override[key] for key in ('vacated_date','vacated_slot_id','vacated_sport') if key in previous_override})
+    if swap_override:
+        # A user-requested cross-sport exchange is a dated exception to recurring
+        # sport/day preferences, not permission to rewrite the weekly template.
+        definition['schedule_slot_id']=swap_override['slot_id']
+        definition['schedule_slot_label']='One-time schedule change'
+        definition['schedule_override']={**swap_override,'date':day.isoformat(),'reason':swap_override.get('reason','Explicit cross-sport workout swap; recurring availability is unchanged.')}
+    else:
+        definition.pop('schedule_override',None)
         assigned=assign_slot(constraints,day.weekday(),row['sport'],definition['duration_minutes'],definition.get('schedule_slot_id'),used_ids)
         definition['schedule_slot_id']=assigned['slot_id']
-        if day_total>day_limit(constraints,day.weekday()):raise ValueError('The scheduled day exceeds confirmed availability')
-        c.execute('UPDATE planned_workouts SET scheduled_for=?,definition_json=?,revision=revision+1 WHERE id=?',(local.isoformat(),encoded(definition),identifier));_revision(c,_snapshot(c,identifier))
-        if managed:c.execute("UPDATE planned_workouts SET publish_status='update_needed' WHERE id=?",(identifier,))
-        c.execute('UPDATE active_training_program SET revision=revision+1 WHERE id=1')
-        from .training_lifecycle import invalidate
-        invalidate(c,program['plan_id'])
-    return {'status':'saved'}
+        definition['schedule_slot_label']=assigned.get('label')
+    definition['user_adjusted']=True
+    if not swap_override and day_total>day_limit(constraints,day.weekday()):raise ValueError('The scheduled day exceeds confirmed availability')
+    if day_total>1440:raise ValueError('The scheduled day exceeds 24 hours')
+    c.execute('UPDATE planned_workouts SET scheduled_for=?,definition_json=?,revision=revision+1 WHERE id=?',(local.isoformat(),encoded(definition),identifier));_revision(c,_snapshot(c,identifier))
+    if managed:c.execute("UPDATE planned_workouts SET publish_status='update_needed' WHERE id=?",(identifier,))
+    c.execute('UPDATE active_training_program SET revision=revision+1 WHERE id=1')
+    from .training_lifecycle import invalidate
+    invalidate(c,program['plan_id'])
+
+
+def swap_workouts(first_id,second_id,first_revision,second_revision,path=None,now=None,preview=False,manual_override=False):
+    """Validate the final schedule together; commit both dates or neither."""
+    now=now or datetime.now(timezone.utc)
+    if first_id==second_id:raise ValueError('Choose two different sessions')
+    with connect(path) as c:
+        c.execute('BEGIN IMMEDIATE')
+        rows=[_snapshot(c,key) for key in (first_id,second_id)]
+        if any(row is None for row in rows) or [row['revision'] for row in rows]!=[first_revision,second_revision]:raise ValueError('Session changed; refresh first')
+        # Stage the final locations within this transaction so validation sees
+        # neither the old occupant nor an intermediate double booking.
+        for row,destination in zip(rows,reversed(rows)):
+            definition=json.loads(row['definition_json']);other=json.loads(destination['definition_json'])
+            for key in ('scheduled_date','time_unspecified','schedule_timezone','schedule_slot_id','schedule_slot_label'):
+                definition.pop(key,None)
+                if key in other:definition[key]=other[key]
+            c.execute('UPDATE planned_workouts SET scheduled_for=?,definition_json=? WHERE id=?',(destination['scheduled_for'],encoded(definition),row['id']))
+        cross_sport=rows[0]['sport']!=rows[1]['sport']
+        for row,destination in zip(rows,reversed(rows)):
+            definition=json.loads(destination['definition_json'])
+            override={'slot_id':f"swap-{row['id']}",'replaces_workout_id':destination['id'],'destination_sport':destination['sport'],'destination_minutes':definition['duration_minutes'],'replaced_slot_id':definition.get('schedule_slot_id')} if cross_sport or manual_override else None
+            local=datetime.fromisoformat(destination['scheduled_for'])
+            _reschedule(c,row['id'],destination['scheduled_for'],row['revision'],path,now,local.date().isoformat() if definition.get('time_unspecified') else None,None,bool(definition.get('time_unspecified')),local,swap_override=override)
+        if preview:c.rollback()
+    return {'status':'proposal' if preview else 'saved','count':2}
 
 
 def request_change(message,timezone_name,path=None,now=None,apply=True):

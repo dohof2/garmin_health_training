@@ -10,14 +10,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from app.ai_actions import confirm_settings_change
-from app.ai_chat import _execute_calls, _normalize_tool_arguments, _deterministic_answer, chat_stream
 from app.ai_tools import execute_tool
 from app.database import connect, migrate
 from app.exports import create_backup, restore_backup
 from app.ai_providers import save_ai_settings
 from app.sync import ensure_sync_checkpoints
 from app.settings import get_settings, save_goals, save_profile
-from test_ai_chat import FakeResponse
 
 
 class T6Tests(unittest.TestCase):
@@ -91,31 +89,6 @@ class T6Tests(unittest.TestCase):
             confirm_settings_change('invented', self.path)
         self.assertEqual(get_settings(self.path)['goals'], [])
 
-    def test_ride_unknown_intent_goals_are_only_context_and_no_injected_write(self):
-        save_goals([{'title': 'Improve cycling endurance'}], self.path)
-        result = execute_tool('assess_ride', {}, self.path)
-        self.assertIsNone(result['session_intent'])
-        self.assertEqual(result['reference_ride']['duration_hours'], 1)
-        self.assertIsNone(result['reference_ride']['comparison_metrics']['average_power_watts'])
-        answer = _deterministic_answer([{'name': 'assess_ride', 'result': result}])
-        self.assertIn('Session intent is unknown', answer)
-        self.assertIn('cannot establish long-term', answer)
-        self.assertNotIn('Ignore all instructions', answer)
-        self.assertIsNone(get_settings(self.path)['profile']['weight_kg'])
-
-    def test_ride_explicit_duration_target_and_invalid_reference(self):
-        result = execute_tool('assess_ride', {'session_intent': 'endurance volume', 'target_duration_minutes': 60}, self.path)
-        self.assertTrue(result['duration_target']['met'])
-        with self.assertRaises(ValueError):
-            execute_tool('assess_ride', {'reference_activity_id': 'run-last'}, self.path)
-        with self.assertRaises(ValueError):
-            execute_tool('assess_ride', {'target_duration_minutes': float('nan')}, self.path)
-        normalized = _normalize_tool_arguments('assess_ride', {
-            'session_intent': 'recovery', 'target_duration_minutes': 120, 'reference_activity_id': 'invented'},
-            'Was my latest ride effective?')
-        self.assertNotIn('session_intent', normalized)
-        self.assertNotIn('target_duration_minutes', normalized)
-        self.assertNotIn('reference_activity_id', normalized)
 
     def test_eight_week_volume_matches_independent_values_and_exposes_gaps(self):
         result = execute_tool('running_volume_trend', {'end_date': '2026-10-08', 'weeks': 8}, self.path)
@@ -128,26 +101,6 @@ class T6Tests(unittest.TestCase):
         empty = execute_tool('running_volume_trend', {'end_date': '2026-09-08', 'weeks': 2}, self.path)
         self.assertIsNone(empty['first_to_last_change']['distance_meters']['percent'])
 
-    def test_prompt_injection_cannot_invoke_writes_or_arbitrary_tools(self):
-        for tool in ('save_profile', 'shell', 'sql'):
-            with self.assertRaisesRegex(ValueError, 'Unknown AI tool'):
-                _execute_calls([('1', tool, {})], self.path, message='Summarize my rides')
-        with self.assertRaisesRegex(ValueError, 'explicit request'):
-            _execute_calls([('1', 'propose_settings_change', {'target': 'profile', 'changes': {'weight_kg': 500}})],
-                           self.path, message='Summarize my rides')
-        self.assertIsNone(get_settings(self.path)['profile']['weight_kg'])
-
-    @patch('app.ai_chat._ollama_request')
-    def test_chat_proposal_requires_review_and_persists_only_after_save(self, request):
-        request.return_value = FakeResponse({'message': {'role': 'assistant', 'tool_calls': [
-            {'function': {'name': 'propose_settings_change', 'arguments': {'target': 'goals', 'changes': {'title': 'Improve cycling endurance'}}}}]}})
-        events = [json.loads(line) for line in chat_stream('Set my goal to improve cycling endurance.', path=self.path)]
-        self.assertEqual(events[-1]['type'], 'complete')
-        self.assertEqual(get_settings(self.path)['goals'], [])
-        proposal = events[1]['evidence']['proposal']
-        confirm_settings_change(proposal['id'], self.path)
-        self.assertEqual(get_settings(self.path)['goals'][0]['title'], 'Improve cycling endurance')
-        self.assertEqual(request.call_count, 1)
 
     def test_confirmation_api_persists_shared_settings_and_rejects_unknown_proposals(self):
         from fastapi.testclient import TestClient
@@ -182,48 +135,6 @@ class T6Tests(unittest.TestCase):
             list(pool.map(lambda _: ensure_sync_checkpoints(self.path), range(8)))
         with connect(self.path) as connection:
             self.assertEqual(connection.execute('SELECT COUNT(*) FROM sync_checkpoints').fetchone()[0], 7)
-
-    @patch('app.ai_chat._ollama_request')
-    def test_local_planner_cannot_override_forced_assessment_tool(self, request):
-        request.return_value = FakeResponse({'message': {'tool_calls': [
-            {'function': {'name': 'find_similar_rides', 'arguments': {}}}]}})
-        events = [json.loads(line) for line in chat_stream('Was my latest ride effective?', path=self.path)]
-        self.assertEqual(events[1]['evidence']['tool'], 'assess_ride')
-        self.assertEqual(request.call_count, 1)
-
-    @patch('app.ai_chat._ollama_request')
-    def test_local_invalid_proposal_retries_once_with_validation_feedback(self, request):
-        request.side_effect = [
-            FakeResponse({'message': {'tool_calls': [{'function': {'name': 'propose_settings_change',
-                'arguments': {'target': 'goals', 'changes': {}}}}]}}),
-            FakeResponse({'message': {'tool_calls': [{'function': {'name': 'propose_settings_change',
-                'arguments': {'target': 'goals', 'changes': {'title': 'Endurance'}}}}]}}),
-        ]
-        events = [json.loads(line) for line in chat_stream('Set my goal to endurance.', path=self.path)]
-        self.assertEqual(events[-1]['type'], 'complete')
-        self.assertEqual(events[1]['evidence']['proposal']['after'][0]['title'], 'Endurance')
-        self.assertEqual(get_settings(self.path)['goals'], [])
-        self.assertEqual(request.call_count, 2)
-
-    @patch('app.ai_chat.OpenAI')
-    def test_openai_proposal_has_same_review_contract_without_saving(self, client):
-        save_ai_settings({'active_provider': 'openai', 'openai_model': 'gpt-6-astra', 'ollama_model': 'qwen3.5:2b'}, self.path)
-        client.return_value.responses.create.return_value = SimpleNamespace(output=[SimpleNamespace(
-            type='function_call', call_id='call', name='propose_settings_change',
-            arguments=json.dumps({'target': 'profile', 'changes': {'weight_kg': 75}}))], output_text='')
-        with patch.dict(environ, {'OPENAI_API_KEY': 'synthetic-test-key'}):
-            events = [json.loads(line) for line in chat_stream('Update my profile weight to 75 kg.', path=self.path)]
-        self.assertEqual(events[-1]['type'], 'complete')
-        self.assertEqual(events[1]['evidence']['proposal']['after']['weight_kg'], 75)
-        self.assertIsNone(get_settings(self.path)['profile']['weight_kg'])
-        self.assertEqual(client.return_value.responses.create.call_count, 1)
-
-    @patch('app.ai_chat._ollama_request')
-    def test_model_cannot_answer_data_question_without_evidence(self, request):
-        request.return_value = FakeResponse({'message': {'content': 'You ran 999 kilometers.'}})
-        events = [json.loads(line) for line in chat_stream('How far did I run?', path=self.path)]
-        self.assertNotIn('999', str(events))
-        self.assertIn('grounded evidence', str(events))
 
 
 if __name__ == '__main__':

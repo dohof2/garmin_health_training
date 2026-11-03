@@ -195,6 +195,32 @@ def delete_meal(identifier,expected_revision,path=None):
         c.execute("""UPDATE nutrition_chat_operations SET result_json=? WHERE EXISTS (
             SELECT 1 FROM json_each(result_json,'$.saved_meals') AS ref
             WHERE json_extract(ref.value,'$.id')=?)""",(encoded(tombstone),identifier))
+        # Shared-agent receipts must not replay a deleted food as a saved meal.
+        c.execute("""UPDATE assistant_skill_calls SET result_json=? WHERE EXISTS (
+            SELECT 1 FROM json_each(result_json,'$.evidence.nutrition.saved_meals') AS ref
+            WHERE json_extract(ref.value,'$.id')=?)""",
+            (encoded({'result':tombstone,'evidence':{'tool':'nutrition_conversation','nutrition':tombstone}}),identifier))
+        def clear_evidence(evidence):
+            nutrition=evidence.get('nutrition') or {}
+            if any(ref.get('id')==identifier for ref in nutrition.get('saved_meals',[])):
+                evidence['nutrition']=tombstone
+                return True
+            return False
+        for turn in c.execute('SELECT operation_id,events_json FROM assistant_skill_turns').fetchall():
+            events=json.loads(turn['events_json']);changed=False
+            for event in events:
+                if event.get('type')=='tool':changed=clear_evidence(event.get('evidence',{})) or changed
+                elif event.get('type')=='complete':
+                    for evidence in event.get('evidence',[]):changed=clear_evidence(evidence) or changed
+            if changed:
+                for event in events:
+                    if event.get('type')=='delta':event['text']=tombstone['reply']
+                c.execute('UPDATE assistant_skill_turns SET events_json=? WHERE operation_id=?',(encoded(events),turn['operation_id']))
+        for session in c.execute('SELECT conversation_id,state_json FROM assistant_skill_sessions').fetchall():
+            context=json.loads(session['state_json']);nutrition=context.get('nutrition',{})
+            if any(ref.get('id')==identifier for ref in nutrition.get('saved_meals',[])):
+                nutrition['saved_meals']=[ref for ref in nutrition['saved_meals'] if ref.get('id')!=identifier]
+                c.execute('UPDATE assistant_skill_sessions SET state_json=? WHERE conversation_id=?',(encoded(context),session['conversation_id']))
         for state in c.execute('SELECT bot_id,conversation_id,context_json FROM telegram_conversation_state').fetchall():
             context=json.loads(state['context_json'])
             nutrition=context.get('nutrition',{})

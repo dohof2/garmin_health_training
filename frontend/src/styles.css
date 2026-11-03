@@ -1964,3 +1964,11 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 .sync-summary > summary strong { margin-right: 14px; }
 .sync-summary > summary span { font-size: 0.85rem; }
 .sync-component-scroll { max-height: 320px; overflow-y: auto; margin-top: 14px; }
+
+.training-week > .training-day-card--drop { outline:3px solid #3478b9; outline-offset:3px; background:#eef6ff; }
+.workout-day[data-movable="true"] { cursor:grab; }
+.workout-day[data-movable="true"]:active { cursor:grabbing; }
+.training-drop-hint { color:#245e92; font-weight:600; }
+
+.workout-day[data-movable="true"] { touch-action:none; user-select:none; }
+.workout-day--dragging { opacity:.55; }

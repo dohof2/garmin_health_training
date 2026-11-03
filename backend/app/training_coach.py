@@ -621,23 +621,6 @@ def assistant_preview(arguments,path=None):
     return {'tool':'preview_training_plan',**preview(brief,week,tz,path,now,arguments.get('replace_plan_id'),candidate_answers=answers,session_changes=arguments.get('session_changes')),'recognized':recognized}
 
 
-def assistant_answer(result):
-    b=result['brief']
-    if result.get('questionnaire') and result.get('questions'):
-        return ' '.join([*result.get('recognized',[]),result['questions'][0]])
-    if not b.get('duration_confirmed') and not b.get('program_start'):
-        return 'Before I build your long-term plan: '+result['questions'][0]
-    lines=[f"Here is the proposed {b['horizon_weeks']}-week plan to {GOALS.get(b['goal'],'work toward your goal').lower()}. Nothing has been saved."]
-    lines.extend(result.get('recognized',[]))
-    for block in result.get('block_summary',[]):
-        span=str(block['start_week']) if block['start_week']==block['end_week'] else str(block['start_week'])+'–'+str(block['end_week'])
-        lines.append(f"Weeks {span}: {block['phase']} ({block['weeks']} {'week' if block['weeks']==1 else 'weeks'}). {block['focus']}")
-    if result['questions']:lines.append(result['questions'][0])
-    else:
-        lines.append('Your next seven days follow the current block, confirmed availability and upcoming events: '+', '.join(f"{sport}: {minutes} min" for sport,minutes in result['weekly_minutes'].items())+'.')
-    lines.extend(result['warnings'])
-    lines.append('Review the proposal and choose Approve and activate plan when you are happy with it.')
-    return '\n\n'.join(lines)
 
 
 def propose_setup(arguments,path=None):

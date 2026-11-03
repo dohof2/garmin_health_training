@@ -1,16 +1,4 @@
 import {newDayNutrition} from './dailyChat.ts';
-type Turn = {role: 'user'|'assistant'; content: string; chat_role?: string;chat_roles?:string[]};
-
-// Keep older turns for the selected role alongside the latest shared exchange.
-export function roleHistories(messages: Turn[]) {
-  const turns=messages.filter(m=>m.content.trim());
-  return Object.fromEntries(['trainer','nutrition','assistant'].map(role=>{
-    const relevant=new Set(turns.map((m,i)=>(m.chat_roles??(m.role==='user'?turns[i+1]?.chat_roles:undefined))?.includes(role)||(m.chat_role??(m.role==='user'?turns[i+1]?.chat_role:undefined))===role?i:-1).filter(i=>i>=0).slice(-14));
-    turns.slice(-6).forEach((_,i)=>relevant.add(turns.length-Math.min(6,turns.length)+i));
-    return [role,turns.filter((_,i)=>relevant.has(i)).slice(-20).map(({role,content})=>({role,content:content.slice(0,4000)}))];
-  }));
-}
-
 export function mergeNutritionContext(previous: Record<string,unknown>, result: Record<string,unknown>) {
   const next:Record<string,unknown>=result.context_date&&previous.day&&result.context_date!==previous.day?newDayNutrition(previous,String(result.context_date)):{...previous};
   if(result.context_date)next.day=result.context_date;

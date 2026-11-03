@@ -305,17 +305,6 @@ class FoodDescription(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
-class NutritionConversation(FoodDescription):
-    operation_id: str = Field(default_factory=lambda:str(uuid.uuid4()),min_length=1,max_length=120)
-    day: date
-    timezone: str = Field(max_length=100)
-    history: list[dict[str, str]] = Field(default_factory=list, max_length=12)
-    draft_items: list[str] = Field(default_factory=list, max_length=30)
-    meal_type: str = Field(default='meal', max_length=30)
-    pending_target: dict | None = None
-    pending_foods: list[dict] = Field(default_factory=list, max_length=30)
-
-
 class NutritionSuggestedTargetSave(BaseModel):
     model_config = {"extra": "forbid"}
     request: dict
@@ -408,12 +397,6 @@ def nutrition_target_save(body: NutritionTargetSave):
 @app.post('/api/nutrition/assistant')
 def nutrition_assistant(body: FoodDescription):
     return nutrition_call(analyze_text,body.message)
-
-
-@app.post('/api/nutrition/chat')
-def nutrition_conversation(body: NutritionConversation):
-    from .nutrition_chat import chat
-    return nutrition_call(chat, body.message, body.day.isoformat(), body.timezone, body.history, body.draft_items, body.meal_type, pending_target=body.pending_target, pending_foods=body.pending_foods,auto_log=True,operation_id=body.operation_id)
 
 
 @app.post('/api/nutrition/targets/suggestion/save')
@@ -537,10 +520,8 @@ class AIChatMessage(BaseModel):
 
 
 class AIChatRequest(BaseModel):
+    conversation_id: str | None = Field(default=None,min_length=1,max_length=120)
     section_context: list[dict[str, object]] | None = Field(default=None,max_length=2)
-    role_histories: dict[Literal['trainer','assistant','nutrition'], list[AIChatMessage]] | None = None
-    chat_role: Literal['auto','trainer','assistant','nutrition'] = 'auto'
-    previous_role: Literal['trainer','assistant','nutrition'] | None = None
     nutrition_context: dict[str, object] | None = None
     coaching_context: dict[str, object] | None = None
     plot_context: list[dict[str, object]] | None = Field(default=None, max_length=4)
@@ -627,7 +608,7 @@ def update_goals(payload: GoalsUpdate) -> list[dict[str, object]]:
 @app.put("/api/settings/ai")
 def update_ai_settings(payload: AISettingsUpdate) -> dict[str, object]:
     try:
-        return save_ai_settings(payload.model_dump())
+        return save_ai_settings(payload.model_dump(exclude_none=True))
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
 
@@ -668,18 +649,27 @@ def ai_chat(payload: AIChatRequest) -> StreamingResponse:
             [item.model_dump() for item in payload.history],
             payload.timezone,
             operation_id=payload.operation_id,
+            conversation_id=payload.conversation_id,
             clarification_id=payload.clarification_id,
             plot_context=payload.plot_context,
             ride_context=payload.ride_context,
             coaching_context=payload.coaching_context,
             section_context=payload.section_context,
-            chat_role=payload.chat_role,previous_role=payload.previous_role,nutrition_context=payload.nutrition_context,
-            role_histories={role:[item.model_dump() for item in turns] for role,turns in payload.role_histories.items()} if payload.role_histories else None,
+            nutrition_context=payload.nutrition_context,
         ),
         media_type="application/x-ndjson",
         headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"},
     )
 
+
+
+@app.get('/api/ai/skills')
+def assistant_skills(path: str = '', query: str | None = None):
+    from .skill_catalog import children, find
+    try:
+        return find(query) if query else children(path)
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @app.get("/api/maintenance")
@@ -903,13 +893,27 @@ def change_active_training(payload: ActiveTrainingRequest):
         raise HTTPException(status_code=400, detail=str(error)) from error
 
 
+@app.patch('/api/training/workouts/{workout_id}/swap')
+def swap_active_workouts(workout_id: str, payload: TrainingWorkoutUpdate):
+    from .active_training import swap_workouts
+    try:
+        if set(payload.changes)-{'other_workout_id','other_expected_revision','manual_override'} or not {'other_workout_id','other_expected_revision'}<=set(payload.changes):raise ValueError('Choose the other session and its current revision')
+        if type(payload.changes['other_expected_revision']) is not int:raise ValueError('Invalid session revision')
+        if not isinstance(payload.changes['other_workout_id'],str) or not payload.changes['other_workout_id']:raise ValueError('Choose the other session')
+        if type(payload.changes.get('manual_override',False)) is not bool:raise ValueError('Manual override must be true or false')
+        return swap_workouts(workout_id,payload.changes['other_workout_id'],payload.expected_revision,payload.changes['other_expected_revision'],manual_override=payload.changes.get('manual_override',False))
+    except (ValueError,TypeError) as error:
+        raise HTTPException(status_code=400,detail=str(error)) from error
+
+
 @app.patch('/api/training/workouts/{workout_id}/schedule')
 def move_active_workout(workout_id: str, payload: TrainingWorkoutUpdate):
     from .active_training import reschedule
-    if set(payload.changes)!={'scheduled_for'} and (set(payload.changes)-{'scheduled_date','start_time','timezone'} or 'scheduled_date' not in payload.changes):
+    if set(payload.changes)!={'scheduled_for'} and (set(payload.changes)-{'scheduled_date','start_time','timezone','manual_override'} or 'scheduled_date' not in payload.changes):
         raise HTTPException(status_code=400,detail='Choose a scheduled date, optionally including a start time')
     try:
-        return reschedule(workout_id,payload.changes.get('scheduled_for'),payload.expected_revision,scheduled_date=payload.changes.get('scheduled_date'),start_time=payload.changes.get('start_time'))
+        if type(payload.changes.get('manual_override',False)) is not bool:raise ValueError('Manual override must be true or false')
+        return reschedule(workout_id,payload.changes.get('scheduled_for'),payload.expected_revision,scheduled_date=payload.changes.get('scheduled_date'),start_time=payload.changes.get('start_time'),manual_override=payload.changes.get('manual_override',False))
     except (ValueError,TypeError) as error:
         raise HTTPException(status_code=400,detail=str(error)) from error
 

@@ -1,22 +1,33 @@
+import {useRef,useState} from 'react';
 import {trainingWeek,workoutDate} from './trainingCalendar';
-export type CalendarWorkout={id:string;title:string;sport:string;scheduled_for:string;completion_status:string;definition:{duration_minutes:number;scheduled_date?:string;time_unspecified?:boolean;variant_label?:string|null;is_race?:boolean;sport_label?:string;label?:string;duration_guidance?:{recovery_adjustment?:{allocated_minutes:number}}}};
+export type CalendarWorkout={id:string;title:string;sport:string;scheduled_for:string;completion_status:string;definition:{duration_minutes:number;scheduled_date?:string;time_unspecified?:boolean;variant_label?:string|null;is_race?:boolean;sport_label?:string;label?:string;fixed_commitment?:boolean;event_id?:string;template_id?:string;duration_guidance?:{recovery_adjustment?:{allocated_minutes:number}}}};
 
-export default function TrainingWeek({workouts,timezone,selectedWorkoutId,onSelect,now=new Date()}:{workouts:CalendarWorkout[];timezone:string;selectedWorkoutId:string|null;onSelect:(id:string)=>void;now?:Date}) {
+export default function TrainingWeek({workouts,timezone,selectedWorkoutId,onSelect,onMove,disabled=false,now=new Date()}:{workouts:CalendarWorkout[];timezone:string;selectedWorkoutId:string|null;onSelect:(id:string)=>void;onMove?:(id:string,day:string,targetId?:string)=>void;disabled?:boolean;now?:Date}) {
+ const [dragging,setDragging]=useState<string|null>(null),[over,setOver]=useState<string|null>(null);
+ const pointer=useRef<{id:string;x:number;y:number;active:boolean}|null>(null),suppressClick=useRef(false);
+ const movable=(w:CalendarWorkout)=>Boolean(onMove&&!disabled&&w.completion_status==='planned'&&!w.definition.fixed_commitment&&!w.definition.event_id&&w.definition.template_id!=='fixed_commitment');
+
  return <div className="training-week">{trainingWeek(now,timezone).map(day=>{
   const sessions=workouts.filter(w=>w.completion_status!=='cancelled'&&workoutDate(w,timezone)===day).sort((a,b)=>a.scheduled_for.localeCompare(b.scheduled_for)||a.id.localeCompare(b.id));
   const completed=sessions.filter(w=>w.completion_status==='completed').length;
   const date=new Date(`${day}T12:00:00Z`);
-  return <div className="training-day-card" key={day}>
+  return <div className={`training-day-card${over===day?' training-day-card--drop':''}`} data-workout-day={day} key={day}>
    <div className="training-day-heading"><strong>{date.toLocaleDateString([],{timeZone:'UTC',weekday:'long'})}</strong><time dateTime={day}>{date.toLocaleDateString([],{timeZone:'UTC',month:'short',day:'numeric'})}</time></div>
    {completed>0&&<span className="training-day-completion">{completed===sessions.length?<><CompletionIcon/> All sessions completed</>:`${completed} of ${sessions.length} sessions completed`}</span>}
    {sessions.length?sessions.map(w=>{
     const kind=workoutPresentation(w),done=w.completion_status==='completed';
-    return <button type="button" key={w.id} className={`workout-day ${kind.kind}${done?' workout-day--completed':''}`} aria-expanded={selectedWorkoutId===w.id} aria-controls="selected-workout-detail" onClick={()=>onSelect(w.id)}>
+    return <button type="button" key={w.id} className={`workout-day ${kind.kind}${done?' workout-day--completed':''}${dragging===w.id?' workout-day--dragging':''}`} aria-expanded={selectedWorkoutId===w.id} aria-controls="selected-workout-detail" data-workout-id={w.id} data-movable={movable(w)} draggable={false}
+     onPointerDown={event=>{if(!movable(w)||event.button!==0)return;event.preventDefault();event.stopPropagation();event.currentTarget.focus({preventScroll:true});event.currentTarget.setPointerCapture(event.pointerId);pointer.current={id:w.id,x:event.clientX,y:event.clientY,active:false};}}
+     onPointerMove={event=>{const move=pointer.current;if(!move||disabled)return;if(!move.active&&Math.hypot(event.clientX-move.x,event.clientY-move.y)<7)return;event.preventDefault();move.active=true;setDragging(move.id);const target=document.elementFromPoint(event.clientX,event.clientY)?.closest<HTMLElement>('[data-workout-day]');setOver(target?.dataset.workoutDay??null);if(event.clientY>window.innerHeight-35)window.scrollBy(0,14);else if(event.clientY<35)window.scrollBy(0,-14);}}
+     onPointerUp={event=>{const move=pointer.current;pointer.current=null;if(event.currentTarget.hasPointerCapture(event.pointerId))event.currentTarget.releasePointerCapture(event.pointerId);if(!move?.active)return;event.preventDefault();event.stopPropagation();suppressClick.current=true;window.requestAnimationFrame(()=>{suppressClick.current=false;});const target=document.elementFromPoint(event.clientX,event.clientY);const targetDay=target?.closest<HTMLElement>('[data-workout-day]')?.dataset.workoutDay;const targetId=target?.closest<HTMLElement>('[data-workout-id]')?.dataset.workoutId;setDragging(null);setOver(null);if(targetDay&&targetDay!==workoutDate(w,timezone))onMove?.(move.id,targetDay,targetId===move.id?undefined:targetId);}}
+     onPointerCancel={()=>{pointer.current=null;setDragging(null);setOver(null);}}
+     onKeyDown={event=>{if(event.key==='Escape'){pointer.current=null;setDragging(null);setOver(null);}}}
+     onClick={()=>{if(suppressClick.current){suppressClick.current=false;return;}onSelect(w.id);}}>
      <span className="workout-day-type">{done?<CompletionIcon/>:<SportIcon sport={w.sport}/>}<span>{kind.label}</span></span>
      {done&&<span className="workout-completion-label">Completed</span>}
      <span className="workout-day-title">{w.title}</span>{w.definition.variant_label&&<span className="graph-meta">{w.definition.variant_label}</span>}<strong className="workout-day-duration">{formatWorkoutDuration(w.definition.duration_minutes)}</strong>
      {!done&&w.definition.duration_guidance?.recovery_adjustment&&w.definition.duration_guidance.recovery_adjustment.allocated_minutes>w.definition.duration_minutes&&<span className="graph-meta">Recovery-adjusted · planned {formatWorkoutDuration(w.definition.duration_guidance.recovery_adjustment.allocated_minutes)}</span>}
-     <span className="workout-day-action">{selectedWorkoutId===w.id?'Hide workout details':'View workout details'} <span aria-hidden="true">{selectedWorkoutId===w.id?'−':'+'}</span></span>
+     <span className="workout-day-action">{movable(w)?'Drag to change day · ':''}{selectedWorkoutId===w.id?'Hide workout details':'View workout details'} <span aria-hidden="true">{selectedWorkoutId===w.id?'−':'+'}</span></span>
     </button>;
    }):<div className="training-rest-day"><span aria-hidden="true">☾</span><strong>Rest day</strong><small>No session scheduled</small></div>}
   </div>;

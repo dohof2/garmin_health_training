@@ -11,8 +11,7 @@ from unittest.mock import patch
 from app.database import connect, migrate
 from app.training_coach import DEFAULT, preview, approve
 from app.training import list_training, encoded
-from app.training_adjustments import propose, save
-from app.ai_chat import chat_stream
+from app.training_adjustments import propose,save
 
 NOW=datetime(2026,10,19,7,tzinfo=timezone.utc)
 TZ='Asia/Jerusalem'
@@ -62,7 +61,7 @@ CASES=[
  ('Make today 200 minutes','needs_input'),
  ('Reduce this week by 150%','needs_input'),
  ('Move my ride to tomorrow','needs_input'),
- ('Swap Monday and Wednesday training','needs_input'),
+ ('Swap Monday and Wednesday training','proposal'),
  ('I feel good','needs_input'),
  ('Make my strength workout harder','needs_input'),
  ('My last ride felt too hard','needs_input'),
@@ -99,7 +98,7 @@ class TrainingAdjustmentQC(unittest.TestCase):
         self.directory=tempfile.TemporaryDirectory();self.addCleanup(self.directory.cleanup)
         self.path=Path(self.directory.name)/'base.sqlite';fixture(self.path)
 
-    def test_fifty_casual_requests_through_chat_and_save(self):
+    def test_fifty_casual_requests_preview_and_save(self):
         self.assertEqual(len(CASES),50)
         for index,(message,expected) in enumerate(CASES):
             with self.subTest(index=index+1,message=message):
@@ -109,13 +108,7 @@ class TrainingAdjustmentQC(unittest.TestCase):
                 with closing(sqlite3.connect(self.path)) as source, closing(sqlite3.connect(path)) as target:
                     source.backup(target)
                 before=list_training(path)
-                with patch('app.training_adjustments.datetime',wraps=datetime) as clock, patch('app.ai_chat._chatgpt_stream',side_effect=AssertionError('Unexpected provider fallback')):
-                    clock.now.return_value=NOW
-                    events=[json.loads(line) for line in chat_stream(message,path=path,timezone_name=TZ,coaching_context={'ongoing':True})]
-                self.assertFalse(any(e['type']=='error' for e in events),events)
-                self.assertTrue(any(e['type']=='delta' and e.get('text') for e in events),events)
-                self.assertEqual(events[-1]['type'],'complete')
-                proposal=next(e['evidence']['training_adjustment'] for e in events if e['type']=='tool')
+                proposal=propose(message,path,NOW)
                 self.assertEqual(proposal['status'],expected,proposal)
                 self.assertEqual(before,list_training(path),'Preview must not write')
                 if expected=='proposal':
@@ -126,6 +119,7 @@ class TrainingAdjustmentQC(unittest.TestCase):
                         row=after[item['workout_id']]
                         self.assertEqual(row['revision'],item['expected_revision']+1)
                         if item['changes'].get('completion_status'):self.assertEqual(row['completion_status'],'skipped')
+                        elif item['changes'].get('scheduled_for'):self.assertEqual(row['scheduled_for'],item['changes']['scheduled_for'])
                         else:
                             definition=row['definition'];self.assertEqual(definition,item['changes']['definition'])
                             self.assertEqual(sum(s['duration_seconds'] for s in definition['steps']),definition['duration_minutes']*60)
@@ -181,10 +175,6 @@ class TrainingAdjustmentQC(unittest.TestCase):
         with connect(self.path) as c:c.execute("UPDATE planned_workouts SET publish_status='published' WHERE id=?",(w['id'],))
         self.assertEqual(propose('Make today easier',self.path,NOW)['status'],'not_recommended')
 
-    def test_reading_health_and_plotting_are_not_adjustments(self):
-        from app.training_adjustments import is_adjustment
-        for message in ('How was my sleep last night?','Plot my weekly training load','What is anaerobic training?','Compare my last hard ride','Show soreness feedback'):
-            self.assertFalse(is_adjustment(message),message)
 
     def test_saved_changes_reach_next_seven_days_and_survive_refresh(self):
         from app.active_training import active_view, review

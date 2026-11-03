@@ -93,7 +93,7 @@ def pending_save_intent(message, pending, history=None):
     if re.search(r"\?|\b(what|how|did|was|were|if|maybe|should|could|would|don't|do not|not|never|לא|אם|אולי|האם)\b|אל תשמור|אל תרשום|אל תוסיף|אל תתעד|ששמרת|תאשר ששמר|נשמר|תועד",value):return False
     if re.search(r'\b(goal|target|plan|workout)\b|יעד|מטרה|אימון',value):return False
     last=next((turn['content'] for turn in reversed(history or []) if turn['role']=='assistant'),'')
-    if re.fullmatch(r'\s*(?:approved|approve|confirmed|confirm|go ahead|do it|מאשר|מאשרת|מאושר)[.!\s]*',value):
+    if re.fullmatch(r'\s*(?:(?:i\s+)?(?:approved|approve|confirmed|confirm)|go ahead|do it|מאשר|מאשרת|מאושר)[.!\s]*',value):
         return not bool(re.search(r'\b(target|goal)\b|יעד|מטרה',last,re.I))
     if re.fullmatch(r'\s*(?:yes|yes please|yep|sure|ok|okay|correct|כן|כן בבקשה|נכון|בטח|אוקיי)[.!\s]*',value):
         if re.search(r'\b(target|goal)\b|יעד|מטרה',last,re.I):return False

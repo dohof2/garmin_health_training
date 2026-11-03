@@ -4,18 +4,24 @@ import sqlite3
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Iterator
+from contextvars import ContextVar
 
 from .config import database_path
 from .chat_access import READ_ONLY
 
 
 MIGRATIONS_DIRECTORY = Path(__file__).resolve().parent / "migrations"
+_PREVIEW_CONNECTION = ContextVar('preview_connection', default=None)
 
 
 @contextmanager
 def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
     """Open the local SQLite database with safe application defaults."""
     target = path or database_path()
+    preview = _PREVIEW_CONNECTION.get()
+    if preview is not None and preview[0] == target.resolve():
+        yield preview[1]
+        return
     target.parent.mkdir(parents=True, exist_ok=True)
 
     connection = sqlite3.connect(f'{target.resolve().as_uri()}?mode=ro', uri=True) if READ_ONLY.get() else sqlite3.connect(target)
@@ -34,6 +40,19 @@ def connect(path: Path | None = None) -> Iterator[sqlite3.Connection]:
         raise
     finally:
         connection.close()
+
+
+@contextmanager
+def rollback_preview(path=None):
+    """Run an existing local validator/writer against one always-rolled-back connection."""
+    target = path or database_path()
+    with connect(path) as connection:
+        token = _PREVIEW_CONNECTION.set((target.resolve(), connection))
+        try:
+            yield
+        finally:
+            connection.rollback()
+            _PREVIEW_CONNECTION.reset(token)
 
 
 def migrate(path: Path | None = None) -> list[str]:

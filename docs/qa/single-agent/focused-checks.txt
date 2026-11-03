@@ -1,0 +1,70 @@
+.....skill_agent_turn_failed RuntimeError
+...........................................................................................................................................
+----------------------------------------------------------------------
+Ran 144 tests in 7.505s
+
+OK
+
+> garmin-health-training-frontend@0.1.0 build
+> tsc -b && vite build
+
+vite v8.3.0 building client environment for production...
+transforming...
+✓ 58 modules transformed.
+rendering chunks...
+computing gzip size...
+dist/index.html                   0.46 kB │ gzip:   0.29 kB
+dist/assets/index-_oJ4F_jR.css   74.99 kB │ gzip:  14.87 kB
+dist/assets/index-CiwlviDa.js   540.05 kB │ gzip: 152.96 kB
+
+✓ built in 88ms
+[plugin builtin:vite-reporter]
+(!) Some chunks are larger than 500 kB after minification. Consider:
+- Using dynamic import() to code-split the application
+- Use build.rolldownOptions.output.codeSplitting to improve chunking: https://rolldown.rs/reference/OutputOptions.codeSplitting
+- Adjust chunk size limit for this warning via build.chunkSizeWarningLimit.
+✔ pending portions and nutrient estimates survive unrelated replies and opening nutrition (0.80725ms)
+✔ saving a target clears only its proposal and retains food context (0.074875ms)
+✔ supper clarification retains the other meals (0.07125ms)
+✔ historical correction retains its chat day and pending action until committed (0.079042ms)
+✔ threshold ride efforts and recovery use minutes:seconds (0.540125ms)
+✔ hour durations use hours:minutes:seconds, including exact hour boundary (0.080083ms)
+✔ preserves fractional seconds, short efforts, existing times and other units (0.057042ms)
+✔ preserves code, URLs, rates and signed values (0.037417ms)
+✔ daily boundary uses the selected timezone (18.659375ms)
+✔ new day discards every pending request and old reference (0.326208ms)
+Shared reads, independent cancellation, fresh repeat reads and unshared writes passed.
+Successful writes invalidate pre-write in-flight reads.
+Background commit invalidation preserves subscribers and fresh-read coalescing.
+Non-JSON server failures show a readable message.
+✔ tests/request.test.mjs (89.094667ms)
+✔ view invalidation precedes reads and successful fields survive one failure (0.578375ms)
+✔ complete refresh preserves nullable values without a warning (0.228833ms)
+✔ new load commit refreshes the view even while sync interval progress is unchanged (0.160375ms)
+✔ terminal status refreshes cards even with no new interval commit (0.053291ms)
+✔ plots wait for a terminal sync status through every progress update (0.075792ms)
+✔ idle watcher detects a sync started elsewhere, progress and completion (4.33925ms)
+✔ hidden windows defer reads, focus catches up and stop ignores in-flight output (1.445625ms)
+✔ Jerusalem spring DST retains seven consecutive local calendar dates (16.11625ms)
+✔ Jerusalem autumn DST retains seven dates including repeated hour (0.20925ms)
+✔ local midnight and year boundary use selected timezone rather than UTC (0.127584ms)
+✔ date-only workout labels never show an internal anchor clock (0.257916ms)
+✔ explicit workout clock still appears and top-level date-only metadata is supported (0.146708ms)
+✔ partial sport-only preview preserves safe editable fields without mutation (0.98125ms)
+✔ empty saved setup and incomplete preview can render every sport and day (0.136417ms)
+✔ explicit empty candidate arrays and individual sport budgets are retained (0.10125ms)
+✔ approval comparison ignores object key order but detects changed workout content (5.692ms)
+✔ completed session reappears beside a remaining session without marking the entire day done (7.237334ms)
+✔ all completed days have a labelled checkmark and no rest placeholder (1.080208ms)
+✔ refresh merging deduplicates IDs, ignores canceled entries and keeps completed status (0.203ms)
+✔ variant labels and upcoming mix describe actual planned cycling rather than completed or strength sessions (35.120834ms)
+✔ nested repeated groups expose stable editable paths without changing leaf instructions (0.651209ms)
+✔ malformed or excessively expanded structures do not render partial invented instructions (0.091541ms)
+ℹ tests 33
+ℹ suites 0
+ℹ pass 33
+ℹ fail 0
+ℹ cancelled 0
+ℹ skipped 0
+ℹ todo 0
+ℹ duration_ms 1230.607167

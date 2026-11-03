@@ -3,8 +3,8 @@ from datetime import datetime,timezone
 from pathlib import Path
 from unittest.mock import patch
 from app.database import connect,migrate
-from app.training_adjustments import propose,save,is_adjustment
-from app.strength_adjustments import resolve_followup,apply_policy
+from app.training_adjustments import propose,save
+from app.strength_adjustments import apply_policy
 
 NOW=datetime(2026,10,30,10,tzinfo=timezone.utc)
 REQUEST='in the training plan the strength feel abut too easy I think we can do 2 sets from each strating from next workout'
@@ -28,7 +28,6 @@ class StrengthSetRequestTests(unittest.TestCase):
   patch('app.strength_adjustments._context',return_value=self.context).start()
   patch('app.strength_adjustments._preferences',return_value={'answers':{'weekly_minutes':{'strength':120}}}).start()
  def test_verbatim_request_prepares_all_exercises_without_new_plan(self):
-  self.assertTrue(is_adjustment(REQUEST))
   result=propose(REQUEST,self.path,NOW)
   self.assertEqual(result['status'],'proposal');self.assertEqual(len(result['adjustments']),2)
   for adjustment in result['adjustments']:
@@ -46,6 +45,10 @@ class StrengthSetRequestTests(unittest.TestCase):
    completed=json.loads(c.execute("SELECT definition_json FROM planned_workouts WHERE id='done'").fetchone()[0]);self.assertEqual(completed['exercises'][0]['sets'],1)
   continued=apply_policy(self.definition,policy,'Build specificity');self.assertEqual(continued['duration_minutes'],25);self.assertEqual(continued['exercises'][0]['sets'],2)
   recovery=apply_policy(self.definition,policy,'Recovery / review');self.assertEqual(recovery['exercises'][0]['sets'],1)
+ def test_selected_session_set_edit_does_not_create_program_progression(self):
+  proposal=propose(REQUEST,self.path,NOW,selected_id='next')
+  self.assertEqual([row['workout_id'] for row in proposal['adjustments']],['next'])
+  self.assertNotIn('strength_set_policy',proposal['adjustments'][0]['changes']['definition'])
  def test_continuation_fill_passes_preferences_by_name_and_uses_duration_limit(self):
   from app.active_training import _fill
   from app.training_coach import DEFAULT
@@ -61,18 +64,6 @@ class StrengthSetRequestTests(unittest.TestCase):
    _fill(c,'root',state,NOW.date(),NOW)
    row=c.execute("SELECT definition_json FROM planned_workouts WHERE substr(scheduled_for,1,10)='2026-10-31'").fetchone()
    self.assertIsNotNone(row);definition=json.loads(row[0]);self.assertEqual(definition['exercises'][0]['sets'],2);self.assertEqual(definition['duration_minutes'],25)
- def test_short_and_duration_followups_retain_original_instruction(self):
-  history=[{'role':'user','content':REQUEST},{'role':'assistant','content':'Which exercise?'}]
-  for text in ('the strntgh','it is not 60 minutes you over estimated it yestarday i set of each took me 12 minutes'):
-   resolved=resolve_followup(text,history);self.assertIn(REQUEST,resolved)
-   self.assertEqual(propose(resolved,self.path,NOW)['status'],'proposal')
- def test_real_chat_routes_original_and_short_followup_without_rebuilding_plan(self):
-  from app.ai_chat import chat_stream
-  history=[{'role':'user','content':REQUEST},{'role':'assistant','content':'For strength, choose the exercise.'}]
-  with patch('app.ai_chat._chatgpt_stream',side_effect=AssertionError('No provider roundtrip')),patch('app.ai_chat._ollama_stream',side_effect=AssertionError('No provider roundtrip')),patch('app.ai_chat._openai_stream',side_effect=AssertionError('No provider roundtrip')):
-   events=[json.loads(event) for event in chat_stream('the strntgh',history, 'Asia/Jerusalem',self.path,chat_role='trainer')]
-  tool=next(event['evidence'] for event in events if event['type']=='tool')
-  self.assertEqual(tool['tool'],'propose_training_adjustment');self.assertEqual(tool['training_adjustment']['status'],'proposal')
  def test_explicit_cap_and_availability_still_apply(self):
   with patch('app.strength_adjustments._preferences',return_value={'answers':{'weekly_minutes':{'strength':40}}}):self.assertIn('explicit 40-minute cap',propose(REQUEST,self.path,NOW)['message'])
   for day in self.context['answers']['week_schedule']:day['total_limit_minutes']=15

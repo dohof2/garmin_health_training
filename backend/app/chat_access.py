@@ -4,6 +4,7 @@ from contextvars import ContextVar
 
 READ_ONLY = ContextVar('chat_read_only', default=False)
 NUTRITION_WRITE_AUTHORIZER = ContextVar('nutrition_write_authorizer', default=None)
+ALLOW_NUTRITION = ContextVar('channel_allows_nutrition', default=False)
 QUESTION_TOOLS = frozenset({
     'get_health_summary', 'list_activities', 'compare_periods', 'find_similar_rides',
     'find_same_course_rides', 'get_projected_training_readiness', 'get_training_readiness',
@@ -23,11 +24,13 @@ QUESTION_INSTRUCTIONS = (
 
 
 @contextmanager
-def questions_only():
+def questions_only(*, allow_nutrition=False):
     token = READ_ONLY.set(True)
+    nutrition_token = ALLOW_NUTRITION.set(allow_nutrition)
     try:
         yield
     finally:
+        ALLOW_NUTRITION.reset(nutrition_token)
         READ_ONLY.reset(token)
 
 

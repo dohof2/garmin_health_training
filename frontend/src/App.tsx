@@ -5,7 +5,7 @@ import {chatDay as currentChatDay,pendingDraft,newDayNutrition,persistPendingDra
 import {coalescedFetch,invalidateReadRequests} from './request';
 import {refreshReadViews,syncViewRevision,watchSyncStatus} from './syncRefresh';
 import {formatChatDurations} from './chatDuration';
-import {mergeNutritionContext, mergeNutritionEntry, roleHistories} from './chatContext';
+import {mergeNutritionContext, mergeNutritionEntry} from './chatContext';
 import RetainedPage from './RetainedPage';
 import SortableCards from './SortableCards';
 import WeightEntryDialog from './WeightEntryDialog';
@@ -310,6 +310,7 @@ function proposalRows(proposal: SettingsProposal) {
 type SectionReference={activity_id:string;start_seconds:number;end_seconds:number};
 
 type ChatEvidence = {
+  action_link?:{url:string;label:string};
   sections?:Array<{start_seconds:number;end_seconds:number}>;
   activity_id?:string;
   activity?:{id:string};
@@ -387,10 +388,9 @@ type ChatEvidence = {
   limitations?: string[];
 };
 
-type ChatRole='trainer'|'assistant'|'nutrition';
+type TaskUsage={reasoning_tokens?:number;model_calls:number;input_estimate:number;output_estimate:number;input_tokens:number;output_tokens:number;usage_reported:number};
 type ChatMessage = {
-  chat_role?:ChatRole;
-  chat_roles?:ChatRole[];
+  workflow?:string;usage?:TaskUsage;skills?:string[];
   id: string;
   role: "user" | "assistant";
   content: string;
@@ -398,10 +398,10 @@ type ChatMessage = {
 };
 
 type ChatStreamEvent =
-  | { type: "start"; provider: AiProviderName; model: string; chat_role?:ChatRole;chat_roles?:ChatRole[] }
+  | { type: "start"; provider: AiProviderName; model: string }
   | { type: "tool"; evidence: ChatEvidence }
   | { type: "delta"; text: string }
-  | { type: "complete"; provider: AiProviderName; model: string; evidence: ChatEvidence[] }
+  | { type: "complete"; provider: AiProviderName; model: string; evidence: ChatEvidence[];workflow?:string;usage?:TaskUsage;skills?:string[] }
   | { type: "error"; message: string };
 
 type AppSettings = {
@@ -808,9 +808,7 @@ export default function App() {
   const [chatDate,setChatDate]=useState(()=>currentChatDay(browserTimeZone));
   const chatDateRef=useRef(chatDate);
   const [previousChatDate]=useState(()=>{try{return sessionStorage.getItem('garmin-shared-chat-day-v1');}catch{return null;}});
-  const [initialRouting]=useState<{role?:ChatRole;nutrition?:Record<string,unknown>}>(()=>{try{const saved=JSON.parse(sessionStorage.getItem('garmin-shared-routing-v1')||'{}');return {...saved,nutrition:saved.nutrition??JSON.parse(localStorage.getItem('garmin-pending-nutrition-drafts-v1')||'{}')};}catch{return {};}});
-  const [chatRole,setChatRole]=useState<'auto'|ChatRole>('auto');
-  const lastChatRole=useRef<ChatRole>(previousChatDate&&previousChatDate!==chatDate?'assistant':initialRouting.role??'assistant');
+  const [initialRouting]=useState<{nutrition?:Record<string,unknown>}>(()=>{try{const saved=JSON.parse(sessionStorage.getItem('garmin-shared-nutrition-v2')||'{}');return {...saved,nutrition:saved.nutrition??JSON.parse(localStorage.getItem('garmin-pending-nutrition-drafts-v1')||'{}')};}catch{return {};}});
   const nutritionChatContext=useRef<Record<string,unknown>>(previousChatDate&&previousChatDate!==chatDate||!previousChatDate&&(initialRouting.nutrition?.chat_day??initialRouting.nutrition?.day)&&(initialRouting.nutrition?.chat_day??initialRouting.nutrition?.day)!==chatDate?newDayNutrition(initialRouting.nutrition??{},chatDate):initialRouting.nutrition??{});
   const chatMessagesFrame=useRef<HTMLDivElement>(null);
   const pendingAnswerStart=useRef<string|null>(null);
@@ -834,11 +832,11 @@ export default function App() {
     try { return previousChatDate&&previousChatDate!==chatDate?{}:JSON.parse(sessionStorage.getItem('garmin-assistant-query-context') || '{}'); } catch { return {}; }
   });
   const chatContext = useRef(initialChatContext);
+  const [assistantConversationId,setAssistantConversationId]=useState(()=>{try{const key='garmin-assistant-conversation-v2';const previous=localStorage.getItem(key)??sessionStorage.getItem(key);if(previous){localStorage.setItem(key,previous);return previous;}const id=crypto.randomUUID();localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}});
   useEffect(()=>{
     const ask=(event:Event)=>{
       const {question,coaching}=(event as CustomEvent<{question:string;coaching:ChatEvidence['coaching']}>).detail;
       if(!question)return;
-      setChatRole('trainer');
       chatContext.current.coaching=coaching;
       setChatMessages(current=>current.at(-1)?.role==='assistant'&&current.at(-1)?.content===question?current:[...current,{id:crypto.randomUUID(),role:'assistant',content:question,evidence:coaching?[{tool:'preview_training_plan',coaching}]:[]}]);
       window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});
@@ -1218,14 +1216,13 @@ export default function App() {
     }
   };
 
-  useEffect(()=>{if(page==='nutrition')setChatRole('nutrition');},[page]);
   const resetDailyChat=()=>{
     const day=currentChatDay(browserTimeZone);
     if(day===chatDateRef.current)return false;
     chatDateRef.current=day;setChatDate(day);setChatMessages([]);setPlotMessageId(null);
-    chatContext.current={};lastChatRole.current='assistant';
+    chatContext.current={};
     nutritionChatContext.current=newDayNutrition(nutritionChatContext.current,day);persistPendingDraft(nutritionChatContext.current);
-    try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({nutrition:nutritionChatContext.current}));}catch{/* Preserve in-memory pending drafts. */}
+    try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.setItem('garmin-shared-nutrition-v2',JSON.stringify({nutrition:nutritionChatContext.current}));}catch{/* Preserve in-memory pending drafts. */}
     return true;
   };
   useEffect(()=>{
@@ -1233,7 +1230,7 @@ export default function App() {
     const timer=window.setInterval(check,60000);window.addEventListener('focus',check);check();
     return()=>{window.clearInterval(timer);window.removeEventListener('focus',check);};
   },[chatStatus.kind]);
-  const sendChatMessage = async (suggestedMessage?: string, roleOverride?:ChatRole, nutritionOverride?:Record<string,unknown>) => {
+  const sendChatMessage = async (suggestedMessage?: string, nutritionOverride?:Record<string,unknown>) => {
     const message = (suggestedMessage ?? chatInput).trim();
     if (!message || chatStatus.kind === "streaming") return;
 
@@ -1262,8 +1259,6 @@ export default function App() {
 
     const controller = new AbortController();
     chatAbortController.current = controller;
-    let trainerTimedOut = false;
-    const trainerTimer = page === 'training' ? window.setTimeout(() => { trainerTimedOut = true; controller.abort(); }, 90_000) : undefined;
     const slowTimer = window.setTimeout(() => {
       setChatStatus((current) => current.kind === "streaming"
         ? { ...current, slow: true }
@@ -1274,11 +1269,6 @@ export default function App() {
     const showAnswerStart=()=>{if(!answerStarted){answerStarted=true;pendingAnswerStart.current=assistantId;}};
     const applyEvent = (event: ChatStreamEvent) => {
       if (event.type === "start") {
-        if(event.chat_role){
-          lastChatRole.current=event.chat_role;
-          setChatMessages(current=>current.map(item=>item.id===assistantId||item.id===userMessage.id?{...item,chat_role:event.chat_role,...(event.chat_roles?{chat_roles:event.chat_roles}:{})}:item));
-          try{sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({role:event.chat_role,nutrition:nutritionChatContext.current}));}catch{/* Continue in memory. */}
-        }
         setChatStatus({
           kind: "streaming",
           provider: event.provider,
@@ -1291,7 +1281,7 @@ export default function App() {
         if(event.evidence.activity_id&&event.evidence.sections?.length)chatContext.current.sections=event.evidence.sections.map(section=>({activity_id:event.evidence.activity_id!,start_seconds:section.start_seconds,end_seconds:section.end_seconds}));
         if(event.evidence.nutrition){const result=event.evidence.nutrition;if(result.target_saved){try{sessionStorage.removeItem('nutrition-target-proposal-v1');}catch{/* Continue with in-memory state. */}}if(result.logged||result.target_saved)window.dispatchEvent(new CustomEvent('nutrition-log-changed',{detail:{day:result.context_date,target_saved:result.target_saved}}));nutritionChatContext.current=mergeNutritionContext(nutritionChatContext.current,result);persistPendingDraft(nutritionChatContext.current);}
         if(event.evidence.nutrition?.saved_meals)nutritionChatContext.current={...nutritionChatContext.current,saved_meals:event.evidence.nutrition.saved_meals};
-        try{sessionStorage.setItem('garmin-shared-routing-v1',JSON.stringify({role:lastChatRole.current,nutrition:nutritionChatContext.current}));}catch{/* Keep in-memory routing context. */}
+        try{sessionStorage.setItem('garmin-shared-nutrition-v2',JSON.stringify({nutrition:nutritionChatContext.current}));}catch{/* Keep in-memory routing context. */}
         if (event.evidence.coaching) chatContext.current.coaching = event.evidence.coaching;
         if (event.evidence.plots?.length) {
           chatContext.current.plots = event.evidence.plots.map(p => p.spec);
@@ -1314,6 +1304,7 @@ export default function App() {
           ? { ...item, content: item.content + event.text }
           : item));
       } else if (event.type === "complete") {
+        if(event.workflow)setChatMessages(current=>current.map(item=>item.id===assistantId?{...item,workflow:event.workflow,usage:event.usage,skills:event.skills}:item));
         setChatStatus({
           kind: "idle",
           provider: event.provider,
@@ -1332,7 +1323,7 @@ export default function App() {
       const response = await coalescedFetch("/api/ai/chat", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message, history, role_histories:roleHistories(dailyMessages), chat_role:roleOverride??chatRole,previous_role:lastChatRole.current,nutrition_context:nutritionOverride??nutritionChatContext.current,coaching_context: chatContext.current.coaching,section_context:chatContext.current.sections,
+        body: JSON.stringify({ conversation_id:assistantConversationId,message, history, nutrition_context:nutritionOverride??nutritionChatContext.current,coaching_context: chatContext.current.coaching,section_context:chatContext.current.sections,
           plot_context: chatMessages.find(item => item.id === plotMessageId)?.evidence.flatMap(e => e.plots ?? []).map(p => p.spec) ?? chatContext.current.plots,
           ride_context: chatContext.current.ride ?? chatMessages.flatMap(item => item.evidence).filter(e => e.tool === 'find_same_course_rides').at(-1)?.reference_record?.id,
           timezone: browserTimeZone, operation_id: userMessage.id,
@@ -1363,7 +1354,7 @@ export default function App() {
       showAnswerStart();
       if (error instanceof DOMException && error.name === "AbortError") {
         setChatMessages((current) => current.map((item) => item.id === assistantId
-          ? { ...item, content: item.content || (trainerTimedOut ? "The trainer took too long. Your saved answers are retained; retry your last reply." : "Response stopped.") }
+          ? { ...item, content: item.content || "Response stopped. Your task context is retained." }
           : item));
         setChatStatus({ kind: "idle" });
       } else {
@@ -1375,11 +1366,10 @@ export default function App() {
       }
     } finally {
       window.clearTimeout(slowTimer);
-      window.clearTimeout(trainerTimer);
       chatAbortController.current = null;
     }
   };
-  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{message?:string;role?:ChatRole;nutrition?:Record<string,unknown>}>).detail;if(detail?.nutrition){nutritionChatContext.current=mergeNutritionEntry(nutritionChatContext.current,detail.nutrition);persistPendingDraft(nutritionChatContext.current);}if(detail?.role)setChatRole(detail.role);if(detail?.message)void sendChatMessage(detail.message,detail.role,nutritionChatContext.current);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
+  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{message?:string;nutrition?:Record<string,unknown>}>).detail;if(detail?.nutrition){nutritionChatContext.current=mergeNutritionEntry(nutritionChatContext.current,detail.nutrition);persistPendingDraft(nutritionChatContext.current);}if(detail?.message)void sendChatMessage(detail.message,nutritionChatContext.current);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
 
 
   const [savingProposal, setSavingProposal] = useState<string | null>(null);
@@ -1900,8 +1890,7 @@ export default function App() {
             <summary aria-label="Chat options" title="Chat options">⋯</summary>
             <div className="chat-options-panel">
               <small>Today · {chatDate}</small>
-              <label>Answering role <select value={chatRole} disabled={chatStatus.kind==='streaming'} onChange={e=>setChatRole(e.target.value as 'auto'|ChatRole)}><option value="auto">Auto</option><option value="trainer">Trainer</option><option value="assistant">Assistant</option><option value="nutrition">Nutrition</option></select></label>
-        <button type="button" disabled={chatStatus.kind==='streaming'||!chatMessages.length} onClick={()=>{setChatMessages([]);setPlotMessageId(null);chatContext.current={};nutritionChatContext.current={};persistPendingDraft({});lastChatRole.current='assistant';setChatRole('auto');try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.removeItem('garmin-shared-routing-v1');}catch{/* In-memory context is already cleared. */}}}>New conversation</button>
+        <button type="button" disabled={chatStatus.kind==='streaming'||!chatMessages.length} onClick={()=>{const id=crypto.randomUUID();setAssistantConversationId(id);try{localStorage.setItem('garmin-assistant-conversation-v2',id);sessionStorage.setItem('garmin-assistant-conversation-v2',id);}catch{/* Keep the new conversation in memory. */}setChatMessages([]);setPlotMessageId(null);chatContext.current={};nutritionChatContext.current={};persistPendingDraft({});try{sessionStorage.removeItem('garmin-assistant-query-context');sessionStorage.removeItem('garmin-shared-nutrition-v2');}catch{/* In-memory context is already cleared. */}}}>New conversation</button>
               <p className="chat-provider-detail">{activeAiProvider === 'chatgpt' ? 'ChatGPT account' : activeAiProvider === 'openai' ? 'OpenAI' : 'Qwen / Ollama'} · {activeAiStatus?.available?'Ready':'Setup needed'}</p>
         <InfoPopover title="Chat privacy"><p className="assistant-privacy">
           {activeAiProvider === "chatgpt"
@@ -1909,7 +1898,7 @@ export default function App() {
             : activeAiProvider === "openai"
             ? "OpenAI mode sends your question, recent chat context, and only the relevant tool results to the OpenAI API."
             : "Qwen mode sends the conversation and tool results only to Ollama on this computer."}
-          {" "}This shared conversation and graph/ride selections stay in this browser tab, including after a refresh.
+          {" "}Conversation and task context are stored locally in this app so unfinished plans can resume later. Graph and ride selections remain in this browser tab.
         </p></InfoPopover>
             </div>
           </details>
@@ -1924,8 +1913,9 @@ export default function App() {
             <div ref={chatMessagesFrame} className="chat-messages" aria-live="polite">
               {chatMessages.map((message) => (
                 <article id={`chat-message-${message.id}`} className={`chat-message chat-message--${message.role}`} key={message.id}>
-                  <span>{message.role === "user" ? "You" : ({trainer:"Trainer",assistant:"Assistant",nutrition:"Nutrition"}[message.chat_role??"assistant"])}</span>
+                  <span>{message.role === "user" ? "You" : "Assistant"}</span>
                   {!(message.role==='assistant'&&message.evidence.some(e=>e.training_adjustment?.kind==='adaptation'&&e.training_adjustment.message===message.content))&&<p>{(message.role === 'assistant' ? plainChatText(formatChatDurations(message.content)) : message.content) || (chatStatus.kind === "streaming" ? "Thinking…" : "No response was returned.")}</p>}
+                  {message.workflow==='skills'&&message.usage&&<details className="graph-meta"><summary>Turn usage · {message.usage.model_calls} model call{message.usage.model_calls===1?'':'s'}</summary><p>For this turn: estimated input {message.usage.input_estimate.toLocaleString()} tokens; estimated output {message.usage.output_estimate.toLocaleString()} tokens. {message.usage.usage_reported>0?`Provider reported ${message.usage.input_tokens.toLocaleString()} input and ${message.usage.output_tokens.toLocaleString()} output tokens for ${message.usage.usage_reported} call(s).`:'Provider token counts were unavailable; estimates are not billing measurements.'}</p></details>}
                   {message.evidence.some(e=>e.nutrition)&&<button type="button" onClick={()=>{const result=message.evidence.find(e=>e.nutrition)!.nutrition!;try{if(result.logged||result.target_saved)sessionStorage.removeItem('nutrition-pending-review-v1');else sessionStorage.setItem('nutrition-pending-review-v1',JSON.stringify(result));if(result.target_saved)sessionStorage.removeItem('nutrition-target-proposal-v1');else if(result.target_proposal)sessionStorage.setItem('nutrition-target-proposal-v1',JSON.stringify(result.target_proposal));}catch{/* Review can still use the in-memory event. */}window.location.hash='nutrition';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('nutrition-chat-review',{detail:result})));}}>{message.evidence.find(e=>e.nutrition)?.nutrition?.target_saved?'View saved goal in Nutrition':message.evidence.find(e=>e.nutrition)?.nutrition?.logged?'View logged meal in Nutrition':'Review food / targets in Nutrition'}</button>}
                   {message.evidence.find(e=>e.coaching)?.coaching?.status === 'ready' && <button type="button" onClick={()=>{window.location.hash='training';window.requestAnimationFrame(()=>window.dispatchEvent(new CustomEvent('training-coach-proposal',{detail:message.evidence.find(e=>e.coaching)?.coaching})));}}>Review coaching proposal in Training</button>}
                   {message.evidence.some(e => e.plots?.length) && <button type="button" onClick={() => { setPlotMessageId(message.id); window.requestAnimationFrame(() => document.getElementById("assistant-plots")?.scrollIntoView({behavior:"instant",block:"start"})); }}>Show these plots</button>}
@@ -1951,6 +1941,7 @@ export default function App() {
                             {evidence.maintenance.download_url && <a href={evidence.maintenance.download_url}>Download maintenance CSV</a>}
                             {evidence.maintenance.clarification_id && <small>Nothing saved yet. Reply with the missing detail to complete this entry.</small>}
                           </div>}
+                          {evidence.action_link&&<a href={evidence.action_link.url}>{evidence.action_link.label}</a>}
                           {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}{evidence.training_event&&<TrainingEventProposal proposal={evidence.training_event}/>}
                           {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
                           {evidence.proposal && (

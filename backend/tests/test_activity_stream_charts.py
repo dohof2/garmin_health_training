@@ -5,7 +5,6 @@ from pathlib import Path
 from app.database import connect, migrate
 from app.charts import chart_data, validate_spec, save_layout, read_layout
 from app.ai_tools import execute_tool
-from app.ai_chat import _execute_calls
 
 
 class ActivityStreamChartTests(unittest.TestCase):
@@ -123,13 +122,6 @@ class ActivityStreamChartTests(unittest.TestCase):
         self.assertEqual(read_layout(self.path)[0]['activity_ids'], ['a', 'b'])
         self.assertEqual(chart_data(read_layout(self.path)[0], self.path)['count'], 8)
 
-    def test_model_receives_summary_and_ui_receives_complete_trace(self):
-        outputs, evidence = _execute_calls([('overlay', 'create_plots', {'plots': [self.spec]})], self.path, message='Overlay two recordings', timezone_name='Asia/Jerusalem', model_driven=True)
-        import json
-        model = json.loads(outputs[0]['serialized'])
-        self.assertNotIn('points', model['plots'][0])
-        self.assertEqual(model['plots'][0]['series'][0]['maximum'], 400)
-        self.assertEqual(len(evidence[0]['plots'][0]['points']), 8)
 
     def test_fragmented_display_is_bounded_without_joining_gaps(self):
         self.add('fragmented', [(i * 10, 9000 if i == 1234 else 100) for i in range(6001)])

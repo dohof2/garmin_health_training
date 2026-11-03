@@ -16,7 +16,6 @@ from cryptography.hazmat.primitives.asymmetric import rsa
 import jwt
 
 from app import chatgpt_auth as auth
-from app.ai_chat import _chatgpt_stream
 from app.ai_providers import ChatGPTProvider
 
 
@@ -199,80 +198,7 @@ class ChatGPTAuthTests(unittest.TestCase):
 
 
 class ChatGPTStreamTests(unittest.TestCase):
-    def test_metadata_only_completion_uses_streamed_items_and_text(self):
-        call=SimpleNamespace(type='function_call',call_id='one',name='assess_ride',arguments='{}')
-        terminal=SimpleNamespace(type='response.completed',response=SimpleNamespace(output=[],output_text=''))
-        outputs=[{'serialized':'{"recorded_benefit":"aerobic_base"}'}]
-        with patch('app.chatgpt_auth.models',return_value=[{'id':'account-model'}]),patch('app.chatgpt_auth.access_token',return_value='fake'),patch('app.ai_chat.OpenAI') as client,patch('app.ai_chat._execute_calls',return_value=(outputs,[{'tool':'assess_ride'}])):
-            client.return_value.responses.create.side_effect=[iter([SimpleNamespace(type='response.output_item.done',item=call),terminal]),iter([SimpleNamespace(type='response.output_text.delta',delta='Useful endurance work.'),terminal])]
-            events=list(_chatgpt_stream('account-model','Was it good?',[], 'UTC',None))
-        self.assertIn('Useful endurance work.',''.join(events))
 
-    def test_trainer_clarification_is_not_replaced_with_generic_failure(self):
-        terminal=SimpleNamespace(type='response.completed',response=SimpleNamespace(output=[],output_text='What was your goal for that session?'))
-        with patch('app.chatgpt_auth.models',return_value=[{'id':'account-model'}]),patch('app.chatgpt_auth.access_token',return_value='fake'),patch('app.ai_chat.OpenAI') as client:
-            client.return_value.responses.create.return_value=iter([terminal])
-            events=list(_chatgpt_stream('account-model','Was it good?',[], 'UTC',None))
-        self.assertIn('What was your goal', ''.join(events))
-        self.assertNotIn('could not retrieve', ''.join(events))
-
-    def test_trainer_uses_tool_evidence_and_model_written_answer(self):
-        call=SimpleNamespace(type='function_call',call_id='one',name='assess_ride',arguments='{}')
-        first=SimpleNamespace(type='response.completed',response=SimpleNamespace(output=[call],output_text=''))
-        final=SimpleNamespace(type='response.completed',response=SimpleNamespace(output=[],output_text='Yes—useful endurance work. Keep tomorrow easy.'))
-        outputs=[{'serialized':'{"recorded_benefit":"aerobic_base"}'}]
-        with patch('app.chatgpt_auth.models',return_value=[{'id':'account-model'}]),patch('app.chatgpt_auth.access_token',return_value='fake'),patch('app.ai_chat.OpenAI') as client,patch('app.ai_chat._execute_calls',return_value=(outputs,[{'tool':'assess_ride'}])),patch('app.ai_chat._deterministic_answer',side_effect=AssertionError('No canned trainer answers')):
-            client.return_value.responses.create.side_effect=[iter([first]),iter([final])]
-            events=list(_chatgpt_stream('account-model','Was it good?',[], 'UTC',None))
-        self.assertIn('useful endurance work',''.join(events))
-        self.assertEqual(client.return_value.responses.create.call_count,2)
-        self.assertIn('aerobic_base',json.dumps(client.return_value.responses.create.call_args.kwargs['input'],default=str))
-
-    def test_chatgpt_bypasses_legacy_question_shortcuts(self):
-        from app.ai_chat import chat_stream
-        settings={'active_provider':'chatgpt','chatgpt_model':'account-model'}
-        with patch('app.ai_chat.get_ai_settings',return_value=settings),patch('app.ai_chat._chatgpt_stream',return_value=iter(['trainer answer\n'])) as trainer,patch('app.plot_requests.history_request',side_effect=AssertionError('No Qwen routing')):
-            result=list(chat_stream('How were my steps this year?'))
-        trainer.assert_called_once()
-        self.assertEqual(result[-1],'trainer answer\n')
-
-    def test_namespaced_tools_and_required_stream_contract(self):
-        terminal = SimpleNamespace(type='response.completed', response=SimpleNamespace(output=[], output_text='Hello'))
-        with patch('app.chatgpt_auth.models', return_value=[{'id': 'account-model'}]), patch('app.chatgpt_auth.access_token', return_value='fake'), patch('app.ai_chat.OpenAI') as client:
-            client.return_value.responses.create.return_value = iter([terminal])
-            events = list(_chatgpt_stream('account-model', 'Hello', [], 'UTC', None))
-        args = client.return_value.responses.create.call_args.kwargs
-        self.assertTrue(args['stream'])
-        self.assertFalse(args['store'])
-        self.assertIsInstance(args['input'], list)
-        self.assertEqual(args['tools'][0]['type'], 'namespace')
-        functions=args['tools'][0]['tools']
-        proposal=next(function for function in functions if function['name']=='propose_settings_change')
-        self.assertEqual(proposal['parameters']['properties']['target']['enum'],['profile','goals'])
-        self.assertNotIn('log_maintenance',{function['name'] for function in functions})
-        self.assertNotIn('max_output_tokens', args)
-        self.assertNotIn('temperature', args)
-        self.assertIn('complete', ''.join(events))
-
-    def test_failed_or_unfinished_stream_never_completes(self):
-        for stream in ([], [SimpleNamespace(type='response.failed')], [SimpleNamespace(type='response.incomplete')]):
-            with self.subTest(stream=stream), patch('app.chatgpt_auth.models', return_value=[{'id': 'account-model'}]), patch('app.chatgpt_auth.access_token', return_value='fake'), patch('app.ai_chat.OpenAI') as client:
-                client.return_value.responses.create.return_value = iter(stream)
-                with self.assertRaises(RuntimeError):
-                    list(_chatgpt_stream('account-model', 'Hello', [], 'UTC', None))
-
-    def test_missing_model_never_requests_inference(self):
-        with patch('app.chatgpt_auth.models', return_value=[]), patch('app.ai_chat.OpenAI') as client:
-            with self.assertRaisesRegex(RuntimeError, 'not available'):
-                list(_chatgpt_stream('wrong', 'Hello', [], 'UTC', None))
-        client.assert_not_called()
-
-    def test_sol_uses_light_reasoning(self):
-        terminal = SimpleNamespace(type='response.completed', response=SimpleNamespace(output=[], output_text='Hello'))
-        with patch('app.chatgpt_auth.models', return_value=[{'id': 'gpt-6-sol'}]), patch('app.chatgpt_auth.access_token', return_value='fake'), patch('app.ai_chat.OpenAI') as client:
-            client.return_value.responses.create.return_value = iter([terminal])
-            list(_chatgpt_stream('gpt-6-sol', 'Hello', [], 'UTC', None))
-        self.assertEqual(client.return_value.responses.create.call_args.kwargs['reasoning'], {'effort': 'low'})
 
     def test_general_provider_requires_terminal_success(self):
         with patch('app.chatgpt_auth.access_token', return_value='fake'), patch('app.ai_providers.OpenAI') as client:

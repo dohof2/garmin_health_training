@@ -14,7 +14,6 @@ from app.database import connect, migrate
 from app.exports import create_backup, export_json, restore_backup
 from app.readiness import DEFAULTS, calculate, get_readiness_settings, parameters, readiness_history, save_readiness_settings
 from app.ai_tools import execute_tool
-from app.ai_chat import _deterministic_answer, _normalize_tool_arguments
 from app.main import app
 
 DAY = date(2026,10,10)
@@ -313,13 +312,6 @@ class ReadinessPersistenceTests(unittest.TestCase):
         self.assertTrue(result['sensitivity']['band_changes'])
         self.assertIn('band_sensitive_to_provisional_parameters',result['warnings'])
 
-    def test_tool_is_advisory_and_deterministic_answer_preserves_partial_status(self):
-        with patch('app.readiness.datetime', FrozenClock):
-            result=execute_tool('get_training_readiness',{'date':'2026-10-10','timezone':'UTC'},self.path)
-        self.assertTrue(result['advisory_only'])
-        answer=_deterministic_answer([{'name':'get_training_readiness','result':result}])
-        self.assertIn('100/100',answer);self.assertIn('does not prove recovery',answer)
-        self.assertEqual(_normalize_tool_arguments('get_training_readiness',{'date':'2020-01-01'},'Readiness on 2026-10-09','UTC')['date'],'2026-10-09')
 
     def test_api_read_config_write_and_errors(self):
         with patch('app.database.database_path',return_value=self.path),patch('app.readiness.datetime', FrozenClock):

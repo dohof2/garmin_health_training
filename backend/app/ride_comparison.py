@@ -9,50 +9,6 @@ from .database import connect
 from .history import list_activities
 
 
-def requested(message):
-    text = message.lower()
-    return (bool(re.search(r'\b(last|latest|most recent|my)\s+(?:cycling |bike |bicycle )?ride\b', text))
-            and bool(re.search(r'\b(compared?|comparison|versus|vs|stack up)\b', text)))
-
-
-def scope(message):
-    if re.search(r'\b(?:not|no|without)\s+(?:using\s+)?(?:gps|route matching|matching)\b|\b(?:normal|general|ordinary) comparison\b',message,re.I): return 'all'
-    if re.search(r'\b(gps|same course|same route|matching routes?|match(?:ing)? rides?)\b',message,re.I): return 'gps'
-    if re.search(r'\b(all (?:other )?rides|general(?: records| comparison| rides)?|overall)\b',message,re.I): return 'all'
-    return None
-
-
-def resolve_followup(message, history):
-    if not history or history[-1]['role']!='assistant': return message
-    prompt = history[-1]['content']
-    scope_question = 'All rides, or rides on the same GPS route?' in prompt
-    # A short explicit scope change may follow the default general comparison.
-    if not requested(message) and scope(message) and len(message.split())<=10:
-        original=next((h['content'] for h in reversed(history) if h['role']=='user' and requested(h['content'])),None)
-        if original and (scope_question or 'compared with' in prompt):
-            from .plot_requests import period
-            selected=period(original,date.today())
-            bounds=f'from {selected[0]} to {selected[1]}' if selected else 'across full history' if re.search(r'\b(?:all|full|entire) history\b',original,re.I) else ''
-            return 'Compare my latest ride '+message+' '+bounds
-    period_question = 'Which period should I compare:' in prompt
-    if not (scope_question or period_question) or requested(message): return message
-    from .plot_requests import period
-    if scope_question and not scope(message):
-        if re.fullmatch(r'(?:yes|no|please|not sure)[.!? ]*',message,re.I):
-            original=next((h['content'] for h in reversed(history) if h['role']=='user' and requested(h['content'])),None)
-            return original or message
-        return message
-    if period_question and not period(message,date.today()) and not re.search(r'\bhistory\b',message,re.I): return message
-    if period_question and period(message,date.today()):
-        selected=period(message,date.today())
-        message=f'from {selected[0]} to {selected[1]}'
-    for index in range(len(history)-1,-1,-1):
-        if history[index]['role']=='user' and requested(history[index]['content']):
-            replies=[h['content'] for h in history[index+1:] if h['role']=='user']
-            return ' '.join([history[index]['content'],*replies,message])
-    return message
-
-
 def comparison_start(message, today):
     from .plot_requests import period
     selected = period(message,today)
