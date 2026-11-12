@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from . import skill_catalog
 from .agent_runtime import CURRENT, Runtime, BudgetExceeded
 from .ai_budget import bounded_history, compact_json
-from .ai_providers import active_provider, get_ai_settings, shared_allowance_message
+from .ai_providers import active_provider, get_ai_settings, shared_allowance_message, tool_result_message
 from .database import connect, migrate
 from .skill_tools import definition, available_definitions, execute, canonical_call, STRING, OBJECT
 from .time_utils import timezone_info
@@ -95,7 +95,12 @@ def _control(name, args, context):
         focused = state.get('focus_task')
         if focused and not set(state.get('task_skills', {}).get(focused, [])) & set(ids):
             state.pop('focus_task', None)
-        return {'active_skills': [skill_catalog.card(s) for s in skills], 'note': 'Instructions and available tool schemas are included on your next step.'}
+        from .ai_budget import compact_training_proposal
+        references = {k: compact_training_proposal(state[k]) if k == 'last_training_proposal' else state[k] for k in ('last_training_proposal','planning_preview') if k in state and any(s.startswith('training.') for s in ids)}
+        return {'active_skills': [skill_catalog.card(s) for s in skills], 'task_memory': _memory(state),
+                'retained_references': references,
+                **({'nutrition_context': state.get('nutrition', {})} if any(s.startswith('nutrition.') for s in ids) else {}),
+                'note': 'Instructions and native tools are available on your next step.'}
     key = args['key']
     if not re.fullmatch(r'[a-zA-Z0-9_.-]{1,80}', key):
         raise ValueError('Use a short task key')
@@ -114,7 +119,7 @@ def _memory(state):
     for key, value in state.get('memory', {}).items():
         skills = state.get('task_skills', {}).get(key, [])
         index.append({'key': key, 'skills': skills, 'summary': str(value.get('title') or value.get('request') or value.get('goal') or value.get('stage') or '')[:200]})
-        if active.intersection(skills) or key == state.get('focus_task'):
+        if key == state.get('focus_task') or (not state.get('focus_task') and active.intersection(skills)):
             values[key] = value
     return {'index': index, 'selected_briefs': values}
 
@@ -123,7 +128,12 @@ def _instructions(context):
     state = context['state']
     instructions = (skill_catalog.ROOT / 'core.md').read_text()
     instructions += '\nCurrent user-local date: ' + context['today'] + '; timezone: ' + context['timezone']
-    instructions += '\nCatalog branches: ' + compact_json(skill_catalog.branches())
+    if any(s.startswith('training.') for s in state.get('skills',[])):
+        from .training_notes import read
+        notes=read(context['path'])['notes']
+        instructions+='\nSaved training note branches (user preference data): '+compact_json([f"{n['activity']}/{n['workout_type']}/{n['topic']}" for n in notes])+'. Read relevant notes before planning or revising sessions.'
+    if not state.get('skills'):
+        instructions += '\nCatalog branches: ' + compact_json(skill_catalog.branches())
     available = available_definitions()
     tools = dict(CONTROL_BY_NAME)
     for identifier in state.get('skills', []):
@@ -139,16 +149,7 @@ def _instructions(context):
         instructions += '\n' + QUESTION_INSTRUCTIONS
         if ALLOW_NUTRITION.get():
             instructions += '\nChannel exception: explicitly reported foods/corrections may use nutrition_conversation to save meals. Nutrition targets still require browser review; training/settings/publication writes remain unavailable.'
-    instructions += '\nAvailable tools: ' + compact_json(list(tools.values()))
     return instructions, tools
-
-
-def _decode(reply):
-    reply = re.sub(r'^```(?:json)?\s*|\s*```$', '', reply.strip())
-    value = json.loads(reply)
-    if not isinstance(value, dict):
-        raise ValueError('The assistant returned an invalid response object')
-    return value
 
 
 def _tool(name, args, context):
@@ -174,6 +175,40 @@ def _tool(name, args, context):
         c.execute('UPDATE assistant_skill_sessions SET state_json=?,updated_at=CURRENT_TIMESTAMP WHERE conversation_id=? AND active_operation=?',
                   (compact_json(context['state']), context['conversation_id'], context['operation_id']))
     return output
+
+
+def read_turn(operation_id, conversation_id, path=None):
+    """Read a saved receipt without repeating model calls or tool operations."""
+    with connect(path) as c:
+        row = c.execute('SELECT status,events_json FROM assistant_skill_turns WHERE operation_id=? AND conversation_id=?',
+                        (operation_id, conversation_id)).fetchone()
+    if row is None:
+        raise KeyError('Chat response not found')
+    return {'status': row['status'], 'events': json.loads(row['events_json'])}
+
+
+def _receipts(results):
+    """Carry confirmed outcomes across allowance failures without full prescriptions."""
+    receipts = []
+    for entry in results[-8:]:
+        value = entry.get('result') or {}
+        if not isinstance(value, dict):
+            continue
+        receipt = {k: value[k] for k in ('status', 'message', 'error', 'request', 'revision', 'activity', 'workout_type', 'topic', 'fingerprint') if k in value}
+        if receipt:
+            receipts.append({'tool': entry.get('tool'), 'result': receipt})
+    return receipts
+
+
+def _result_status(results):
+    for result in reversed(results):
+        value = result.get('result') or {}
+        proposal = value.get('target_proposal') or value
+        if proposal.get('status') == 'proposal':
+            return 'review'
+        if proposal.get('status') == 'needs_input':
+            return 'awaiting_information'
+    return 'completed'
 
 
 def stream(message, history, timezone_name, path, *, conversation_id=None, settings=None, **options):
@@ -208,8 +243,9 @@ def stream(message, history, timezone_name, path, *, conversation_id=None, setti
     context['history'] = history
     runtime = Runtime()
     context['runtime'] = runtime
-    events, evidence, results = [], [], []
+    events, evidence, results, messages = [], [], [], []
     status, reply = 'blocked', ''
+    stage = 'starting'
     def emit(event):
         events.append(event)
         return compact_json(event) + '\n'
@@ -221,49 +257,59 @@ def stream(message, history, timezone_name, path, *, conversation_id=None, setti
             instructions, tools = _instructions(context)
             training = any(s.startswith('training.') for s in state.get('skills', []))
             nutrition = any(s.startswith('nutrition.') for s in state.get('skills', []))
-            from .ai_budget import compact_app_context
-            payload = {'message': text, 'recent_exchange': bounded_history(history, 16000, 10),
+            from .ai_budget import compact_app_context, compact_training_proposal
+            payload = {'message': text, 'recent_exchange': bounded_history(history, 8000, 6),
                 'task_memory': _memory(state), 'active_skills': state.get('skills', []),
-                'retained_references': {k: state[k] for k in ('last_training_proposal', 'planning_preview') if training and k in state},
+                'previous_turn_results': state.get('last_turn_results', []),
+                'retained_references': {k: compact_training_proposal(state[k]) if k == 'last_training_proposal' else state[k]
+                    for k in ('last_training_proposal', 'planning_preview') if training and k in state},
                 'nutrition_context': state.get('nutrition', {}) if nutrition else None,
                 'ui_references': compact_app_context({'ride': options.get('ride_context'), 'sections': options.get('section_context'),
-                    'plots': options.get('plot_context'), 'coaching': options.get('coaching_context') if training else None}),
-                'results': results}
+                    'plots': options.get('plot_context'), 'coaching': options.get('coaching_context') if training else None})}
+            current_input = {'role': 'user', 'content': compact_json(payload)}
+            if messages:
+                messages[0] = current_input
+            else:
+                messages.append(current_input)
             token = CURRENT.set(runtime)
             try:
-                decision = _decode(active_provider(path).generate(compact_json(payload), instructions, timeout_seconds=180))
+                stage = 'model_response'
+                decision = active_provider(path).respond(messages, instructions, list(tools.values()), timeout_seconds=180)
             finally:
                 CURRENT.reset(token)
+            stage = 'native_response'
+            messages.extend(decision.get('messages', []))
             calls = decision.get('calls') or []
             if not calls:
                 reply = decision.get('reply')
                 if not isinstance(reply, str) or not reply.strip():
                     raise ValueError('The assistant returned no answer. The current task is retained.')
-                status = decision.get('status', 'completed')
+                status = decision.get('status') or _result_status(results)
                 if status not in ('completed', 'awaiting_information', 'review'):
                     status = 'completed'
                 break
-            if not isinstance(calls, list) or len(calls) > 4:
-                raise ValueError('Use at most four tool calls per step')
+            if not isinstance(calls, list):
+                raise ValueError('The provider returned invalid native tool calls')
             step_results = []
             for call in calls:
                 name, args = call.get('name'), call.get('arguments', {})
                 if name not in tools:
-                    step_results.append({'tool': name, 'result': {'error': 'Load the appropriate skill before using this tool.'}})
-                    continue
-                token = CURRENT.set(runtime)
-                try:
-                    output = _tool(name, args, context)
-                finally:
-                    CURRENT.reset(token)
+                    output = {'result': {'error': 'Load the appropriate skill before using this tool.'}, 'evidence': None}
+                else:
+                    token = CURRENT.set(runtime)
+                    try:
+                        stage = 'tool:' + name
+                        output = _tool(name, args, context)
+                    finally:
+                        CURRENT.reset(token)
+                messages.append(tool_result_message(call, output['result'], decision.get('transport', 'responses')))
                 step_results.append({'tool': name, 'arguments': args, 'result': output['result']})
                 if output['evidence']:
                     evidence.append(output['evidence'])
                     yield emit({'type': 'tool', 'evidence': output['evidence']})
             results.extend(step_results)
-            # Catalog cards and old skill instructions need not be replayed after selection.
-            if any(c.get('name') in ('load_skill', 'replace_skills') for c in calls):
-                results = [r for r in results if r['tool'] not in ('find_skills', 'list_skill_children', 'load_skill', 'replace_skills')]
+            # Keep native function-call/output pairs and opaque reasoning items in
+            # their original order. Skill instructions/schemas are replaced above.
             if len(compact_json(results)) > 64000:
                 results = results[-4:]
                 results.insert(0, {'note': 'Older results omitted from this step; record references and task memory remain. Re-query narrowly if needed.'})
@@ -281,11 +327,16 @@ def stream(message, history, timezone_name, path, *, conversation_id=None, setti
             public = str(error) if isinstance(error, BudgetExceeded) else 'The assistant could not finish this turn. Its task context and confirmed results are retained. Check saved results before retrying.'
         state['status'] = 'blocked'
         state['last_error'] = public
+        state['last_failure'] = {'stage': stage, 'type': type(error).__name__, 'operation_id': operation}
+        state['history'] = bounded_history([*history, {'role': 'user', 'content': text, 'local_date': today},
+            {'role': 'assistant', 'content': public, 'local_date': today}], 24000, 20)
         yield emit({'type': 'error', 'message': public})
         yield emit({'type': 'complete', 'provider': provider, 'model': model, 'workflow': 'skills',
                     'evidence': evidence, 'skills': state.get('skills', []), 'task_status': 'blocked', 'usage': runtime.summary()})
-        logging.getLogger('uvicorn.error').warning('skill_agent_turn_failed %s', type(error).__name__)
+        logging.getLogger('uvicorn.error').warning('skill_agent_turn_failed %s', compact_json(state['last_failure']))
     finally:
+        if results:
+            state['last_turn_results'] = _receipts(results)
         if not events or events[-1]['type'] != 'complete':
             state['status'] = 'interrupted'
             events.extend([{'type': 'error', 'message': 'The turn was interrupted. Inspect confirmed results before retrying.'},

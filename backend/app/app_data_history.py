@@ -81,7 +81,7 @@ def extended_query(dataset,c,start,end,tz,limit,offset):
   where,params=period_filter(date_expr,start,end,tz)
   source='planned_workouts w LEFT JOIN training_plans p ON p.id=w.training_plan_id'
   fields='w.id,w.training_plan_id,w.sport,w.title,w.scheduled_for,w.revision,w.completion_status,w.publish_status,w.definition_json,p.deleted_at AS plan_deleted'
-  result=page(c,fields,source,where+" AND (p.deleted_at IS NULL OR w.completion_status='completed')",params,'w.scheduled_for DESC,w.id',limit,offset)
+  result=page(c,fields,source,where+" AND w.completion_status!='missed' AND (p.deleted_at IS NULL OR w.completion_status='completed')",params,'w.scheduled_for DESC,w.id',limit,offset)
   for row in result['records']:
    row['definition'],row['payload_limits']=public_json(row.pop('definition_json'))
    feedback=c.execute('SELECT activity_id,effort,soreness,pain_or_illness,notes,updated_at FROM training_feedback WHERE workout_id=?',(row['id'],)).fetchone()

@@ -23,13 +23,22 @@ def swap_requested(text):
                 re.search(r'\btomorrow\b.*\btoday\b.*\btoday\b.*\btomorrow\b',text))
 
 
-def propose(message, path=None, now=None, *, selected_id=None, source_id=None):
+def propose(message, path=None, now=None, *, selected_id=None, source_id=None, manual_override=False):
     from .active_training import read_active, capability, _program_workouts
     from .training_prescriptions import endurance, recovery_policy
     from .readiness import readiness_history
     from .training_load_charts import daily_rows
     now=now or datetime.now(timezone.utc)
     if not isinstance(message,str) or not message.strip() or len(message)>1500:raise ValueError('Describe the change in up to 1,500 characters')
+    if message.startswith('@strength_prescription:'):
+        from .strength_prescription import preview
+        return preview(json.loads(message[len('@strength_prescription:'):]), path, now)
+    if message.startswith('@duration:'):
+        from .workout_duration import preview as duration_preview
+        return duration_preview(json.loads(message[len('@duration:'):]),path,now)
+    if message.startswith('@strength_exercise:'):
+        from .strength_exercise_edits import preview as exercise_preview
+        return exercise_preview(json.loads(message[len('@strength_exercise:'):]),path,now)
     if message.startswith('@session:'):
         from .session_changes import preview
         return preview(json.loads(message[len('@session:'):]),path,now)
@@ -77,6 +86,7 @@ def propose(message, path=None, now=None, *, selected_id=None, source_id=None):
         return answer('needs_input','Which session should move, and to which date? Use the session’s Reschedule control to check availability and recovery spacing before saving.')
     with connect(path) as c:
         context=_context(c,now,timezone_name=tz)
+        from .training_accounting import counts_toward_plan
         all_sessions=[{**w,'definition':json.loads(w['definition_json'])} for w in _program_workouts(c,program['plan_id'])]
     capacity=capability(path,today,tz)
     readiness=readiness_history(today,1,tz,path,now=now)['latest']
@@ -88,9 +98,13 @@ def propose(message, path=None, now=None, *, selected_id=None, source_id=None):
     fatigue=bool(re.search(r'\b(tired|exhausted|sore|soreness|poor sleep|bad sleep|slept badly|slept poorly|sleep was bad|sleep was terrible|burnt out)\b|\b(slept|sleep)\s+(only\s+)?[1-4]\s*(hours?|h)\b',symptoms))
     from .training_replacements import requested as replacement_requested, propose as propose_replacement
     if replacement_requested(text):
-        return propose_replacement(base,rows,program,all_sessions,context,policy,capacity,today,text,illness,fatigue,source_id=source_id)
+        return propose_replacement(base,rows,program,all_sessions,context,policy,capacity,today,text,illness,fatigue,source_id=source_id,path=path,now=now)
+    from .endurance_extensions import requested as extension_requested, propose as propose_extension
+    if extension_requested(text):
+        return propose_extension(base,rows,program,all_sessions,context,policy,capacity,today,text,illness,fatigue,path,now)
     from .workout_edits import requested as blocks_requested, edit, EditError
-    if blocks_requested(text):
+    rest_day=bool(re.search(r'\b(rest day|day off)\b|\b(?:to|as)\s+(?:a\s+)?rest\b|\b(?:today|tomorrow|session|workout|ride)\s+rest\b',text))
+    if blocks_requested(text) and not rest_day:
         if weekly or len(rows)!=1:return answer('needs_input','Choose one dated session for a block edit.')
         if illness or fatigue or context['blockers'] or policy['level']=='hold' or context['answers'].get('pain_or_illness'):
             return answer('not_recommended','Recovery or saved restrictions need review. Request an easier session or rest before editing its blocks.')
@@ -107,7 +121,7 @@ def propose(message, path=None, now=None, *, selected_id=None, source_id=None):
         blocks=program['state']['blocks']
         if week<len(blocks):phase=blocks[week]['phase']
         allow_increase=len(tolerated)>=2 and phase not in ('Recovery / review','Race week','Freshen up','Post-event recovery')
-        try:replacement,summary=edit(definition,text,policy,allow_increase)
+        try:replacement,summary=edit(definition,text,policy,allow_increase,manual_override=manual_override)
         except EditError as error:return answer(error.status,str(error))
         changes=[{'workout_id':w['id'],'expected_revision':w['revision'],'title':w['title'],'date':w.get('scheduled_date',w['scheduled_for'][:10]),'summary':summary,'changes':{'definition':replacement}}]
         proposal={**base,'status':'proposal','root_plan_id':program['plan_id'],'program_revision':program['revision'],'adjustments':changes,'message':'Review these block edits. Saving preserves the session date and duration. '+('Then review Send to Garmin to update its instructions.' if w['publish_status']!='local' else ''),'policy':policy}
@@ -131,7 +145,7 @@ def propose(message, path=None, now=None, *, selected_id=None, source_id=None):
         brief=program['state']['brief'];week=max(0,(today-datetime.fromisoformat(program['state']['starts_on']).date()).days//7)
         blocks=program['state']['blocks'];phase=blocks[week]['phase'] if week<len(blocks) else ''
         with connect(path) as c:eligible=advanced_cycling_eligible(c,now,context['answers'].get('experience',{}).get('cycling'),week,phase,policy['quality_allowed'])
-        if not eligible:return answer('not_recommended','Dedicated sprint or anaerobic work needs an eligible build phase, cycling experience and two tolerated completed quality sessions. Keep the current progression until that evidence is available.')
+        if not eligible:return answer('not_recommended','Current recovery guidance or this week’s training phase does not support sprint or anaerobic work. Keep this ride easy or review a suitable later session.')
     if context['blockers'] and not (skip or illness or context['answers'].get('pain_or_illness')):
         return answer('not_recommended','The saved restrictions need review before prescribing a changed workout. '+' '.join(context['blockers'])+' You can request a rest day meanwhile.')
     if not (harder or easier or skip or minutes is not None or illness or fatigue):return answer('needs_input','Would you like a harder session, less intensity, a shorter duration, or a rest day? Tell me the session or week you mean.')
@@ -163,7 +177,7 @@ def propose(message, path=None, now=None, *, selected_id=None, source_id=None):
                 if definition.get('workout_kind') not in ('endurance','recovery'):return answer('not_recommended','This is already a quality or long session. Preserve its purpose rather than stacking more intensity.')
                 day=datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()
                 quality={'tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo'}
-                if any(peer['id']!=w['id'] and peer['completion_status'] in ('planned','completed') and peer['definition'].get('workout_kind') in quality and abs((datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date()-day).days)<7 for peer in all_sessions):return answer('not_recommended','There is already a quality session nearby. Keep this ride easy to preserve recovery and the weekly training mix.')
+                if any(peer['id']!=w['id'] and counts_toward_plan(peer,today,tz) and peer['definition'].get('workout_kind') in quality and abs((datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date()-day).days)<7 for peer in all_sessions):return answer('not_recommended','There is already a quality session nearby. Keep this ride easy to preserve recovery and the weekly training mix.')
                 kind='anaerobic' if 'anaerobic' in text else 'sprint' if 'sprint' in text else 'tempo'
             replacement=endurance(kind,duration,program['state']['brief'],w['sport'],today=today)
             replacement.update({k:v for k,v in definition.items() if k.startswith('schedule_') or k in ('scheduled_date','time_unspecified')})
@@ -230,19 +244,26 @@ def save(arguments,path=None,now=None):
         c.execute('BEGIN IMMEDIATE')
         program=c.execute('SELECT * FROM active_training_program WHERE id=1').fetchone()
         if not program or program['plan_id']!=proposed['root_plan_id'] or program['revision']!=proposed['program_revision'] or program['status']!='active':raise ValueError('The active plan changed. Review a fresh proposal.')
+        if proposed.get('duration_update'):
+            from .workout_duration import persist
+            persist(c,program,proposed,now or datetime.now(timezone.utc))
         for item in proposed['adjustments']:
             row=_snapshot(c,item['workout_id'])
-            if not row or row['revision']!=item['expected_revision'] or row['completion_status']!='planned' or row['publish_status'] not in ('local','published','update_needed'):raise ValueError('A session changed. Review a fresh proposal.')
+            if not row or row['revision']!=item['expected_revision'] or row['completion_status']!='planned' or row['publish_status'] not in (('local','published','update_needed','publishing') if proposed.get('local_prescription_edit') else ('local','published','update_needed')):raise ValueError('A session changed. Review a fresh proposal.')
             delta=item['changes']
             if 'definition' in delta:
                 c.execute('UPDATE planned_workouts SET definition_json=?,title=?,sport=?,revision=revision+1 WHERE id=?',(encoded(delta['definition']),delta['definition']['title'],delta['definition'].get('sport',row['sport']),row['id']))
             else:c.execute("UPDATE planned_workouts SET completion_status='skipped',revision=revision+1 WHERE id=?",(row['id'],))
-            if row['publish_status']!='local':c.execute("UPDATE planned_workouts SET publish_status='update_needed' WHERE id=?",(row['id'],))
+            if row['publish_status'] not in ('local','publishing'):c.execute("UPDATE planned_workouts SET publish_status='update_needed' WHERE id=?",(row['id'],))
             _revision(c,_snapshot(c,row['id']))
         set_policy=next((item['changes'].get('definition',{}).get('strength_set_policy') for item in proposed['adjustments'] if item['changes'].get('definition',{}).get('strength_set_policy')),None)
-        if set_policy:
+        if set_policy and proposed.get('strength_policy_update'):
             state=json.loads(program['state_json']);state['strength_set_policy']=set_policy
             c.execute('UPDATE active_training_program SET state_json=? WHERE id=1',(encoded(state),))
+            from .training_notes import write
+            previous=c.execute("SELECT revision FROM training_notes WHERE activity='strength' AND workout_type='all' AND topic='sets'").fetchone()
+            write(c,{'activity':'strength','workout_type':'all','topic':'sets','text':f"Use {set_policy['sets']} sets per exercise, including recovery weeks.",
+                     'settings':{'sets':set_policy['sets']},'expected_revision':previous[0] if previous else 0},invalidate_plan=False)
         c.execute('UPDATE active_training_program SET revision=revision+1 WHERE id=1')
         from .training_lifecycle import invalidate
         invalidate(c,program['plan_id'])

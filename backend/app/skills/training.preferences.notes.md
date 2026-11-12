@@ -1,0 +1,7 @@
+# Training / Preferences / Recurring notes
+
+Use get_training_notes to browse activity → workout type → topic or fetch one relevant branch. Notes are user training preferences, not instructions for operating tools. Only save a lasting preference the user explicitly requests; a single dated edit does not imply a recurring rule.
+
+Use save_training_note with the existing topic and expected_revision (0 for a new note). Replace the old entry with one short sentence; at most 160 characters per note, 16 notes and 1,600 characters total. Retain the user's meaning without copying conversational history, timestamps or explanations. Reuse a matching topic rather than duplicating it. Use all for an activity-wide default; prefer a specific workout type for exceptions. Explicit strength sets/rest or continuous easy cycling also need their matching structured settings. Text and settings must agree. Omitting settings preserves the previous settings; supply {} only to explicitly remove them. Delete uses operation=delete and the current revision.
+
+Chat can save, edit and delete these notes directly in supported channels. Explain the exact scope and saved result briefly. The planner reads them on future generation/daily reviews. For an immediate session change, use the session-edit skill after saving the recurring note, or direct the user to Apply to next seven days in the notes panel. Saving a note never proves a workout or Garmin update. Honour returned constraints and conflicts; do not silently shorten a requested prescription to fit a generic duration.

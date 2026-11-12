@@ -29,6 +29,7 @@ SPECS=(
  ('band_squat','squat','bands','BANDED_EXERCISES','SQUAT'),
  ('pushup','push','bodyweight','PUSH_UP','PUSH_UP'),
 )
+ADDITIONAL_SPECS=(('calf_raise','calf','bodyweight','CALF_RAISE','CALF_RAISE'),)
 
 
 @lru_cache(maxsize=1)
@@ -37,16 +38,16 @@ def repertoire():
  return tuple((name,category,exercise) for name,category,exercise in _RAW)
 
 
-def planner_exercises():
+def planner_exercises(include_additions=False):
  names={(category,exercise):name for name,category,exercise in repertoire()}
  # Missing entries after a dependency update are ineligible, never approximated.
  return tuple(dict(id=identifier,name=names[(category,exercise)],movement=movement,
                    equipment=equipment,garmin_category=category,garmin_exercise=exercise)
-              for identifier,movement,equipment,category,exercise in SPECS if (category,exercise) in names)
+              for identifier,movement,equipment,category,exercise in SPECS+(ADDITIONAL_SPECS if include_additions else ()) if (category,exercise) in names)
 
 
 def mappings():
- return {e['id']:(e['garmin_category'],e['garmin_exercise']) for e in planner_exercises()}
+ return {e['id']:(e['garmin_category'],e['garmin_exercise']) for e in planner_exercises(include_additions=True)}
 
 
 def catalog(arguments=None,path=None):
@@ -56,7 +57,7 @@ def catalog(arguments=None,path=None):
  if type(limit) is not int or not 1<=limit<=100 or type(offset) is not int or offset<0:raise ValueError('Use limit 1–100 and a nonnegative offset')
  if category is not None and not isinstance(category,str):raise ValueError('Choose a catalog category')
  if type(args.get('planner_only',False)) is not bool:raise ValueError('planner_only must be boolean')
- reviewed={(e['garmin_category'],e['garmin_exercise']):e for e in planner_exercises()}
+ reviewed={(e['garmin_category'],e['garmin_exercise']):e for e in planner_exercises(include_additions=True)}
  rows=[]
  for name,group,exercise in repertoire():
   metadata=reviewed.get((group,exercise))

@@ -1,6 +1,8 @@
 import SortableCards from './SortableCards';
+import SettingsGroup from './SettingsGroup';
 import {coalescedFetch} from './request';
 import {GarminPublicationHistory} from './GarminWorkoutPublish';
+import TrainingNotes from './TrainingNotes';
 import PlanDeleteButton from './PlanDeleteButton';
 import TrainingScheduleEditor,{VolumeEstimates,type ScheduleDay,type WeeklyCaps,type VolumeEstimate,type TrainingSport,trainingSports} from './TrainingScheduleEditor';
 import {displayPower,workoutEffortText} from './workoutPower';
@@ -25,7 +27,7 @@ type History = { plans: Array<{ id: string; name: string; status: string; plan_r
 
 const sports: Sport[] = trainingSports.map(s=>s.id);
 const equipment = ["bike", "trainer", "bodyweight", "dumbbells", "bands", "gym", "barbell", "mat", "pull_up_bar", "dip_bars"];
-const movements = ["squat", "hinge", "push", "pull", "core"];
+const movements = ["squat", "hinge", "push", "pull", "core", "calf"];
 const initial: Answers = { week_schedule:[],weekly_caps:{},sports: [], priority: "general", availability: [], experience: {}, equipment: [], weekly_minutes: {}, blocked_sports: [], blocked_movements: [], restrictions_notes: "", pain_or_illness: null };
 async function api(url: string, body?: unknown, method = "POST") {
   const response = await coalescedFetch(url, body === undefined ? undefined : { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -71,29 +73,27 @@ export default function TrainingPanel({ timezone, refreshToken }: { timezone: st
     setEditing(workout); setEdit({ template_id: workout.definition.template_id, duration_minutes: workout.definition.duration_minutes, completion_status: workout.completion_status, effort: workout.feedback?.effort?.toString() ?? "", soreness: workout.feedback?.soreness?.toString() ?? "", pain_or_illness: Boolean(workout.feedback?.pain_or_illness), notes: workout.feedback?.notes ?? "", activity_id: workout.feedback?.activity_id ?? "" });
   };
   return <SortableCards id="training:cards" className="training-panel" pageSections>
-    <section><h2>Training coach</h2><p>Use the shared chat for coaching, plan changes and ride follow-ups.</p><button type="button" onClick={()=>window.dispatchEvent(new CustomEvent('open-unified-chat',{detail:{}}))}>Open chat</button></section>
     <ActiveTrainingPlan timezone={timezone} revision={JSON.stringify([history.plans.map(p=>[p.id,p.status]),history.workouts.map(w=>[w.id,w.revision])])} onChanged={()=>{void api('/api/training?compact=true').then(setHistory).catch(e=>setMessage(e.message));}} onEdit={id=>{void api('/api/training?compact=true').then((h:History)=>{setHistory(h);const workout=h.workouts.find(w=>w.id===id);if(workout){openEdit(workout);setTimeout(()=>document.getElementById('training-session-editor')?.scrollIntoView({behavior:'smooth',block:'start'}),0);}}).catch(e=>setMessage(e.message));}}/>
-    <div className="section-heading"><div><p>Personal training</p><h2 id="training-title">Your training</h2></div></div>
     {message && <p role="status" className="training-message">{message}</p>}
-    <TodayWorkout timezone={timezone}/><details className="training-publication-link"><summary>Garmin publication</summary><GarminPublicationHistory timezone={timezone}/></details>
-    <TrainingCoachPanel timezone={timezone} week={week} onWeekChange={setWeek} plans={history.plans} onDraftSaved={() => { void api("/api/training?compact=true").then(setHistory).catch(e=>setMessage(e.message)); }} />
+    <TrainingNotes timezone={timezone}/><TodayWorkout timezone={timezone}/><details className="training-publication-link"><summary>Garmin publication</summary><GarminPublicationHistory timezone={timezone}/></details>
+    <details className="journal-plan-proposals"><summary>Plan proposals and events</summary><TrainingCoachPanel timezone={timezone} week={week} onWeekChange={setWeek} plans={history.plans} onDraftSaved={() => { void api("/api/training?compact=true").then(setHistory).catch(e=>setMessage(e.message)); }} /></details>
     {context && <>
 
       {context.blockers.map(blocker => <p key={blocker} className="training-notice">{blocker}</p>)}
-      <details id="training-preferences"><summary>Training preferences</summary>
+      <details id="training-preferences"><summary><strong>Training preferences</strong><span className="settings-current-value">{answers.sports.join(' + ') || 'Set up your week'}</span></summary>
       {context.questions.length > 0 && <div className="training-notice"><strong>Saved preferences still to complete (your chat draft may contain newer answers)</strong><ul>{context.questions.map(question => <li key={question.field}>{question.question} ({question.reason})</li>)}</ul></div>}
         <form onSubmit={event => { event.preventDefault(); void perform(async () => { const saved = await api("/api/training/preferences", { answers:((({availability,weekly_minutes,...current})=>current)(answers)), expected_revision: context.revision }, "PUT"); setContext(saved); setAnswers({ ...initial, ...saved.answers }); setMessage("Training preferences saved locally. Active-plan changes require review and approval.");window.dispatchEvent(new Event('training-plan-changed')); }); }}>
-          <fieldset><legend>Sports</legend>{sports.map(sport => <label key={sport}><input type="checkbox" checked={answers.sports.includes(sport)} onChange={() => toggle("sports", sport)} />{sport}</label>)}</fieldset>
+          <SettingsGroup title="Sports & direction" value={`${answers.sports.length} sports · ${answers.priority}`}><fieldset><legend>Sports</legend>{sports.map(sport => <label key={sport}><input type="checkbox" checked={answers.sports.includes(sport)} onChange={() => toggle("sports", sport)} />{sport}</label>)}</fieldset>
           <label>Immediate priority<select value={answers.priority} onChange={event => setAnswers({ ...answers, priority: event.target.value })}>{["general", "endurance", "strength", "mixed"].map(value => <option key={value}>{value}</option>)}</select></label>
-          <TrainingScheduleEditor schedule={answers.week_schedule} caps={answers.weekly_caps} sports={Array.from(new Set([...answers.sports,...Object.keys(answers.weekly_minutes)]))} onChange={week_schedule=>setAnswers({...answers,week_schedule})} onCapsChange={weekly_caps=>setAnswers({...answers,weekly_caps})}/>
-          <VolumeEstimates estimates={context.volume_estimates}/>{Object.keys(answers.weekly_minutes).length>0&&<p className="graph-meta">Legacy weekly limits retained until explicitly replaced or cleared: {Object.entries(answers.weekly_minutes).map(([sport,minutes])=>`${sport}: ${minutes} min`).join(' · ')}. These are limits, not measured fitness.</p>}
+          </SettingsGroup><SettingsGroup title="Weekly availability" description="Your recurring schedule and optional weekly limits" value={`${answers.week_schedule.length} days set`}><TrainingScheduleEditor schedule={answers.week_schedule} caps={answers.weekly_caps} sports={Array.from(new Set([...answers.sports,...Object.keys(answers.weekly_minutes)]))} onChange={week_schedule=>setAnswers({...answers,week_schedule})} onCapsChange={weekly_caps=>setAnswers({...answers,weekly_caps})}/>
+          </SettingsGroup><SettingsGroup title="Volume & experience" description="History-based estimates and your experience"><VolumeEstimates estimates={context.volume_estimates}/>{Object.keys(answers.weekly_minutes).length>0&&<p className="graph-meta">Legacy weekly limits retained until explicitly replaced or cleared: {Object.entries(answers.weekly_minutes).map(([sport,minutes])=>`${sport}: ${minutes} min`).join(' · ')}. These are limits, not measured fitness.</p>}
           <div className="training-fields">{answers.sports.filter(sport=>['cycling','running','strength'].includes(sport)).map(sport=><label key={sport}>Experience in {sport}<select value={answers.experience[sport]??''} onChange={event=>setAnswers({...answers,experience:{...answers.experience,[sport]:event.target.value}})}><option value="">Use available history / ask if needed</option>{['new','regular','experienced'].map(value=><option key={value}>{value}</option>)}</select></label>)}</div>
-          <fieldset><legend>Available equipment</legend>{equipment.map(item => <label key={item}><input type="checkbox" checked={answers.equipment.includes(item)} onChange={() => toggle("equipment", item)} />{item.replaceAll("_", " ")}</label>)}</fieldset>
-          <fieldset><legend>Exclude sports (leave unchecked for none)</legend>{sports.map(item => <label key={item}><input type="checkbox" checked={answers.blocked_sports.includes(item)} onChange={() => toggle("blocked_sports", item)} />{item.replaceAll("_", " ")}</label>)}</fieldset>
+          </SettingsGroup><SettingsGroup title="Equipment" value={`${answers.equipment.length} available`}><fieldset><legend>Available equipment</legend>{equipment.map(item => <label key={item}><input type="checkbox" checked={answers.equipment.includes(item)} onChange={() => toggle("equipment", item)} />{item.replaceAll("_", " ")}</label>)}</fieldset>
+          </SettingsGroup><SettingsGroup title="Restrictions & wellbeing" value={answers.pain_or_illness?"Needs review":answers.restrictions_notes||answers.blocked_sports.length||answers.blocked_movements.length?"Restrictions saved":"No reported restrictions"}><fieldset><legend>Exclude sports (leave unchecked for none)</legend>{sports.map(item => <label key={item}><input type="checkbox" checked={answers.blocked_sports.includes(item)} onChange={() => toggle("blocked_sports", item)} />{item.replaceAll("_", " ")}</label>)}</fieldset>
           <fieldset><legend>Exclude strength movements (leave unchecked for none)</legend>{movements.map(item => <label key={item}><input type="checkbox" checked={answers.blocked_movements.includes(item)} onChange={() => toggle("blocked_movements", item)} />{item.replaceAll("_", " ")}</label>)}</fieldset>
           <label>Other restrictions or clinician instructions<textarea maxLength={1500} placeholder="Leave blank if none. Written restrictions block automatic generation until reviewed." value={answers.restrictions_notes} onChange={event => setAnswers({ ...answers, restrictions_notes: event.target.value })} /></label>
           <label>Current pain or illness affecting training<select required value={answers.pain_or_illness === null ? "" : answers.pain_or_illness ? "yes" : "no"} onChange={event => setAnswers({ ...answers, pain_or_illness: event.target.value === "" ? null : event.target.value === "yes" })}><option value="">Choose an answer</option><option value="no">No</option><option value="yes">Yes — review before planning</option></select></label>
-          <button disabled={busy} type="submit">Save training answers</button>
+          </SettingsGroup><button disabled={busy} type="submit">Save training answers</button>
         </form>
       </details>
     </>}

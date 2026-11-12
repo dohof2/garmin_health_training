@@ -13,7 +13,7 @@ from .time_utils import timezone_info
 
 from .training_constraints import SPORTS,SPORT_CATALOG,resolve as resolve_schedule,availability as schedule_availability,capacity as schedule_capacity,optional_cap,merge_answers,schedule as validate_schedule,caps as validate_caps
 EQUIPMENT = ('bike', 'trainer', 'bodyweight', 'dumbbells', 'bands', 'gym', 'barbell', 'mat', 'pull_up_bar', 'dip_bars')
-MOVEMENTS = ('squat', 'hinge', 'push', 'pull', 'core')
+MOVEMENTS = ('squat', 'hinge', 'push', 'pull', 'core', 'calf')
 FIELDS = ('sports','priority','week_schedule','experience','equipment','blocked_sports','blocked_movements','restrictions_notes','pain_or_illness')
 QUESTIONS = {
     'sports':'Which sports should this plan include?', 'priority':'What is the immediate training priority? A long-term goal is optional.',
@@ -108,6 +108,7 @@ def _timestamp(value):
 
 
 def _context(c,now,candidate_answers=None,brief=None,timezone_name="UTC"):
+    from .training_notes import rows as training_notes
     prefs=_preferences(c)
     if candidate_answers:
         patch=validate_answers(candidate_answers)
@@ -150,7 +151,7 @@ def _context(c,now,candidate_answers=None,brief=None,timezone_name="UTC"):
     if 'strength' in answers.get('sports',[]):
         movements={e['movement'] for e in EXERCISES if e['equipment'] in answers.get('equipment',[]) and e['movement'] not in answers.get('blocked_movements',[])}
         if len(movements)<2:blockers.append('Equipment and exclusions leave fewer than two supported strength movements.')
-    return {**prefs,'answers':answers,'raw_answers':raw_answers,'sport_catalog':list(SPORT_CATALOG.values()),'legacy_schedule':resolved['legacy'],'unanswered_weekdays':sorted(set(range(7))-{day['weekday'] for day in resolved['days']}),'planning_limits':operational,'volume_estimates':volume_estimates,'missing':missing,'stale':stale,'questions':[{'field':f,'question':QUESTIONS[f],'reason':'missing' if f in missing else 'stale'} for f in missing+stale],
+    return {**prefs,'training_notes':training_notes(c),'answers':answers,'raw_answers':raw_answers,'sport_catalog':list(SPORT_CATALOG.values()),'legacy_schedule':resolved['legacy'],'unanswered_weekdays':sorted(set(range(7))-{day['weekday'] for day in resolved['days']}),'planning_limits':operational,'volume_estimates':volume_estimates,'missing':missing,'stale':stale,'questions':[{'field':f,'question':QUESTIONS[f],'reason':'missing' if f in missing else 'stale'} for f in missing+stale],
             'blockers':blockers,'ready':not(missing or stale or blockers),'templates':list(TEMPLATES),'rule_version':RULE_VERSION,
             'goals':[dict(r) for r in c.execute("SELECT id,title,goal_type FROM goals WHERE status='active'")],
             'recent_feedback':recent_feedback,'recent_strength_performance':[dict(r) for r in c.execute("SELECT s.*,w.title FROM training_strength_performance s JOIN planned_workouts w ON w.id=s.workout_id WHERE w.completion_status='completed' AND s.recorded_at>=? ORDER BY s.recorded_at DESC LIMIT 100",((now-timedelta(days=90)).isoformat(),))]}
@@ -173,6 +174,9 @@ def save_preferences(answers,expected_revision,path:Path|None=None,now=None):
         confirmed={**current['confirmed_at'],**{k:now.isoformat() for k in patch}};revision=expected_revision+1
         c.execute('INSERT INTO training_preferences(id,revision,answers_json,confirmed_json) VALUES (1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,answers_json=excluded.answers_json,confirmed_json=excluded.confirmed_json,updated_at=CURRENT_TIMESTAMP',(revision,encoded(merged),encoded(confirmed)))
         c.execute('INSERT INTO training_preference_revisions(revision,answers_json,confirmed_json) VALUES (?,?,?)',(revision,encoded(merged),encoded(confirmed)))
+        if 'week_schedule' in patch:
+            from .workout_duration import sync_schedule
+            sync_schedule(c,current['answers'],merged,now)
         c.execute('DELETE FROM training_review_gate')
         return _context(c,now)
 
@@ -212,6 +216,9 @@ def _snapshot(c,identifier):
 
 
 def _revision(c,row):
+    row=dict(row)
+    from .workout_timing import preserve_saved_timing
+    preserve_saved_timing(c,row)
     feedback=c.execute('SELECT * FROM training_feedback WHERE workout_id=?',(row['id'],)).fetchone()
     c.execute('INSERT INTO training_workout_revisions(workout_id,revision,snapshot_json) VALUES (?,?,?)',(row['id'],row['revision'],encoded({**row,'feedback':dict(feedback) if feedback else None,'strength_performance':[dict(r) for r in c.execute('SELECT * FROM training_strength_performance WHERE workout_id=?',(row['id'],))]})))
 
@@ -231,7 +238,7 @@ def list_training(path:Path|None=None, *, compact=False):
         plans=[{**dict(r),'context':json.loads(r['context_json'])} for r in c.execute('SELECT * FROM training_plans WHERE deleted_at IS NULL ORDER BY starts_on DESC,created_at DESC')]
         for plan in plans:plan['status']=plan['context'].get('lifecycle_status',plan['status'])
         workouts=[]
-        for row in c.execute('SELECT * FROM planned_workouts ORDER BY scheduled_for,id'):
+        for row in c.execute("SELECT * FROM planned_workouts WHERE completion_status!='missed' ORDER BY scheduled_for,id"):
             parent=c.execute('SELECT deleted_at FROM training_plans WHERE id=?',(row['training_plan_id'],)).fetchone()
             removed=bool(parent and parent['deleted_at'])
             if removed and row['completion_status']!='completed':continue
@@ -308,7 +315,9 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
         schedule_metadata={key:definition[key] for key in ('scheduled_date','time_unspecified','schedule_timezone','schedule_slot_id','schedule_slot_label') if key in definition}
         restoring=row['completion_status'] in ('cancelled','skipped') and changes.get('completion_status') in ('planned','completed')
         if 'template_id' in changes or 'duration_minutes' in changes or restoring:
-            context=_context(c,datetime.now(timezone.utc))
+            current_time=datetime.now(timezone.utc)
+            from .training_accounting import counts_toward_plan
+            context=_context(c,current_time)
             if not context['ready']:raise ValueError('Preferences require review before changing training')
             if definition['template_id'] in ('fixed_commitment','cycling_controlled_intervals'): raise ValueError('Revise the coaching brief and preview a replacement week to change a coached session; feedback can be saved here.')
             template=changes.get('template_id',definition['template_id']);minutes=changes.get('duration_minutes',definition['duration_minutes'])
@@ -331,6 +340,7 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
                     if peer_def.get('schedule_slot_id')==assigned['slot_id']:raise ValueError('This activity slot is already occupied')
             if day_total>day_limit(context['answers']['week_schedule'],local.weekday()):raise ValueError('Edit exceeds the shared day limit')
             for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND completion_status NOT IN ('cancelled','skipped')",(identifier,)):
+                if not counts_toward_plan(dict(other),current_time.astimezone(local.tzinfo).date(),str(local.tzinfo)):continue
                 start=datetime.fromisoformat(other['scheduled_for']);other_def=json.loads(other['definition_json'])
                 if not(definition.get('time_unspecified') or other_def.get('time_unspecified')) and local<start+timedelta(minutes=other_def['duration_minutes']) and start<local+timedelta(minutes=minutes):raise ValueError('Edit conflicts with another workout')
             weekly_total=minutes
@@ -340,6 +350,7 @@ def update_workout(identifier,expected_revision,changes,path:Path|None=None):
             anchor=date.fromisoformat(root['starts_on'])
             monday=anchor+timedelta(weeks=(local.date()-anchor).days//7)
             for other in c.execute("SELECT * FROM planned_workouts WHERE id!=? AND sport=? AND completion_status NOT IN ('cancelled','skipped')",(identifier,definition['sport'])):
+                if not counts_toward_plan(dict(other),current_time.astimezone(local.tzinfo).date(),str(local.tzinfo)):continue
                 started=datetime.fromisoformat(other['scheduled_for'])
                 if monday<=started.astimezone(local.tzinfo).date()<=monday+timedelta(days=6):weekly_total+=json.loads(other['definition_json'])['duration_minutes']
                 if definition['sport']=='strength' and abs((started.astimezone(local.tzinfo).date()-local.date()).days)<2:raise ValueError('Strength sessions need a recovery day between them')

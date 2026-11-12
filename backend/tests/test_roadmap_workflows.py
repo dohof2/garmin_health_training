@@ -115,23 +115,28 @@ class RoadmapTests(unittest.TestCase):
    for d in definitions:self.assertEqual(sum(s['duration_seconds'] for s in d['steps']),3600);self.assertTrue(d['sources'])
   with self.assertRaises(ValueError):endurance('sprint',60,b,variant='made-up')
  def test_rolling_requires_initial_approved_window_and_repeated_sync_is_idempotent(self):
+  from test_daily_training import ready_sync,readiness
+  ready_sync(self.path,NOW.date())
   client=FakeGarmin();factory=lambda p:client;root,_=self.rows()
   with connect(self.path) as c:ids=window(c,root,TZ,NOW)
   p=preview({'workout_ids':ids,'timezone':TZ,'enable_rolling':True},self.path,factory,NOW)
   self.assertFalse(status(self.path)['enabled']);approve(p['id'],self.path,factory,NOW);self.assertFalse(status(self.path)['enabled'])
   run(p['id'],self.path,factory);self.assertEqual(view(p['id'],self.path)['status'],'verified');self.assertTrue(status(self.path)['enabled'])
   creates=client.creates;schedules=client.schedules
-  with patch('app.active_training.review'):
+  with patch('app.active_training.review'),patch('app.readiness.readiness_history',return_value=readiness(NOW.date())):
    sync(self.path,factory,NOW);sync(self.path,factory,NOW)
   self.assertEqual(client.creates,creates);self.assertEqual(client.schedules,schedules)
   self.assertEqual(status(self.path)['status'],'up_to_date')
   disable(self.path);self.assertFalse(status(self.path)['enabled'])
  def test_rolling_refuses_partial_window_and_account_switch(self):
+  from test_daily_training import ready_sync,readiness
+  ready_sync(self.path,NOW.date())
   client=FakeGarmin();factory=lambda p:client;root,rows=self.rows()
   with self.assertRaises(ValueError):preview({'workout_ids':[rows[0]['id']],'timezone':TZ,'enable_rolling':True},self.path,factory,NOW)
   with connect(self.path) as c:ids=window(c,root,TZ,NOW)
   p=preview({'workout_ids':ids,'timezone':TZ,'enable_rolling':True},self.path,factory,NOW);approve(p['id'],self.path,factory,NOW);run(p['id'],self.path,factory)
-  client.display_name='another-account';creates=client.creates;sync(self.path,factory,NOW)
+  client.display_name='another-account';creates=client.creates
+  with patch('app.readiness.readiness_history',return_value=readiness(NOW.date())):sync(self.path,factory,NOW)
   self.assertEqual(status(self.path)['status'],'attention');self.assertEqual(creates,client.creates)
  def add_stream(self,missing=False):
   self.add_activity('stream',seconds=300)

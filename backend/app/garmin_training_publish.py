@@ -61,24 +61,32 @@ def history(path=None):
     return {'jobs':[view(identifier,path) for identifier in ids],'pending_updates':pending,'local_workouts':local}
 
 
-def preview(arguments,path=None,client_factory=load_client,now=None):
+def preview(arguments,path=None,client_factory=load_client,now=None,*,pending_blocks=None):
     now=now or utcnow();tz=arguments.get('timezone') or 'UTC';ZoneInfo(tz)
-    identifiers=arguments.get('workout_ids') or [];definition=arguments.get('definition')
     if arguments.get('next_workouts') is not None:
-        if type(arguments['next_workouts']) is not int or arguments['next_workouts']!=7 or identifiers or definition:raise ValueError('Choose the next seven saved workouts without explicit IDs or a standalone definition')
+        if type(arguments['next_workouts']) is not int or arguments['next_workouts']!=7 or arguments.get('next_days') is not None:raise ValueError('Choose the next seven calendar days')
+        arguments={**arguments,'next_days':7}
+        arguments.pop('next_workouts')
+    identifiers=arguments.get('workout_ids') or [];definition=arguments.get('definition')
+    calendar_window=arguments.get('next_days') is not None
+    desired=set();generation_warnings=[]
+    if calendar_window:
+        if type(arguments['next_days']) is not int or arguments['next_days']!=7 or identifiers or definition or arguments.get('next_workouts') is not None or arguments.get('schedule',True) is not True:
+            raise ValueError('Choose seven calendar days with scheduling enabled')
         from .rolling_publication import window
-        from .active_training import review
-        review(path,tz,now,trigger='manual')
+        from .active_training import _fill
         with connect(path) as c:
-            program=c.execute("SELECT plan_id FROM active_training_program WHERE id=1 AND status='active'").fetchone()
-            if not program:raise ValueError('Activate a program before publishing its next workouts')
-            identifiers=window(c,program['plan_id'],tz,now,include_pending=False)
-        if not identifiers:return {'status':'blocked','blocked':[],'items':[],'message':'There are no upcoming planned workouts to publish.'}
+            c.execute('BEGIN IMMEDIATE')
+            program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+            if not program:raise ValueError('Activate a program before publishing its next seven days')
+            generation_warnings=_fill(c,program['plan_id'],json.loads(program['state_json']),now.astimezone(ZoneInfo(tz)).date(),now,calendar_days=7)
+            identifiers=window(c,program['plan_id'],tz,now,include_pending=False,calendar_days=7)
+            desired={'workout:'+identifier for identifier in identifiers}
     if not isinstance(identifiers,list) or len(identifiers)>21 or len(set(identifiers))!=len(identifiers):raise ValueError('Choose up to 21 distinct saved sessions')
-    if bool(identifiers)==bool(definition):raise ValueError('Choose saved sessions or one standalone workout')
+    if not calendar_window and bool(identifiers)==bool(definition):raise ValueError('Choose saved sessions or one standalone workout')
     schedule=arguments.get('schedule',True)
     if type(schedule) is not bool:raise ValueError('Choose whether to schedule on the calendar')
-    today=now.astimezone(ZoneInfo(tz)).date();snapshots=[];blocked=[]
+    today=now.astimezone(ZoneInfo(tz)).date();snapshots=[];blocked=[{'title':'Upcoming schedule','reason':message} for message in generation_warnings]
     with connect(path) as c:
         for identifier in identifiers:
             row=_snapshot(c,identifier)
@@ -100,10 +108,13 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
         with connect(path) as c:
             program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active'").fetchone()
             if not program:raise ValueError('Activate a program before enabling rolling publication')
-            if set(identifiers)!=set(window(c,program['plan_id'],tz,now,include_pending=False)):raise ValueError('Review the next seven workouts before enabling daily automatic publication')
+            if set(identifiers)!=set(window(c,program['plan_id'],tz,now,include_pending=False)):raise ValueError('Review the next seven days before enabling daily automatic publication')
             rolling_root=program['plan_id']
+    pending_blocks=pending_blocks or {}
     candidates=[]
     for snapshot in snapshots:
+        if snapshot['identity'] in pending_blocks:
+            blocked.append(pending_blocks[snapshot['identity']]);continue
         try:
             if snapshot['completion_status'] not in ('planned','skipped','cancelled'):raise ValueError('Completed sessions are not published')
             if snapshot['date']<today.isoformat():raise ValueError('Choose a current or future session')
@@ -111,8 +122,25 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
             payload,warnings=workout_payload(snapshot['definition'],'training-app:'+digest(snapshot['identity'])[:24])
             snapshot['warnings']=warnings;candidates.append((snapshot,payload))
         except (ValueError,TypeError,KeyError) as error:blocked.append({'title':snapshot['definition'].get('title','Workout'),'reason':str(error)})
-    if not candidates:return {'status':'blocked','blocked':blocked,'items':[],'message':'None of the selected sessions can be sent. No Garmin changes were made.'}
+    if not candidates and not calendar_window:return {'status':'blocked','blocked':blocked,'items':[],'message':'None of the selected sessions can be sent. No Garmin changes were made.'}
     client=client_factory(path);key,label=account(client);job_id=str(uuid.uuid4())
+    if calendar_window:
+        # Keep only the current saved workouts in this date window. Ownership
+        # comes from this account's verified app mapping, never a title match.
+        with connect(path) as c:
+            links=c.execute('SELECT * FROM garmin_publication_links WHERE account_key=? AND scheduled_date>=? AND scheduled_date<? AND remote_schedule_id IS NOT NULL',
+                            (key,today.isoformat(),(today+timedelta(days=7)).isoformat())).fetchall()
+            for link in links:
+                if link['identity_key'] in desired:continue
+                if link['identity_key'] in pending_blocks:
+                    blocked.append(pending_blocks[link['identity_key']]);continue
+                previous=c.execute('SELECT snapshot_json FROM garmin_publication_items WHERE account_key=? AND identity_key=? ORDER BY rowid DESC LIMIT 1',(key,link['identity_key'])).fetchone()
+                if not previous or not link['verified_hash'] or not link['verified_payload_json']:
+                    raise ValueError('An older app calendar entry needs reconciliation before it can be removed')
+                snapshot=json.loads(previous['snapshot_json'])
+                snapshot.update(workout_id=None,revision=None,completion_status='cancelled',identity=link['identity_key'],date=link['scheduled_date'],cleanup=True)
+                candidates.append((snapshot,json.loads(link['verified_payload_json'])))
+        if not candidates:return {'status':'blocked' if blocked else 'verified','items':[],'blocked':blocked,'message':'No workouts can be sent. See the blocked sessions below.' if blocked else 'No workouts are scheduled in the next seven days and no older app entries need removing.'}
     with connect(path) as c:
         c.execute('BEGIN IMMEDIATE')
         c.execute('INSERT INTO garmin_publication_jobs(id,account_key,account_label,timezone,created_at,expires_at) VALUES(?,?,?,?,?,?)',(job_id,key,label,tz,now.isoformat(),(now+timedelta(minutes=30)).isoformat()))
@@ -132,7 +160,67 @@ def preview(arguments,path=None,client_factory=load_client,now=None):
             c.execute('INSERT INTO garmin_publication_items(id,job_id,account_key,identity_key,workout_id,workout_revision,snapshot_json,payload_json,payload_hash,scheduled_date,action,remote_workout_id,remote_schedule_id) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)',
                 (str(uuid.uuid4()),job_id,key,snapshot['identity'],snapshot['workout_id'],snapshot['revision'],encoded(snapshot),encoded(payload),payload_hash,target_date,action,link['remote_workout_id'] if link else None,link['remote_schedule_id'] if link else None))
         if not c.execute('SELECT 1 FROM garmin_publication_items WHERE job_id=?',(job_id,)).fetchone():raise ValueError('These sessions are not scheduled in Garmin; nothing needs sending or removing.')
-    return {**view(job_id,path),'blocked':blocked,'message':'Review exactly what will be sent. Garmin has not been changed.'+(' Approving also enables daily publication of this program’s next seven workouts while the app is open with current sync evidence. Existing app-owned workouts are updated instead of duplicated; unrelated Garmin workouts are preserved.' if rolling else '')}
+    return {**view(job_id,path),'blocked':blocked,'message':'Review exactly what will be sent. Garmin has not been changed.'+(' Approving also enables publication of this program’s rolling next seven days while the app is open with current sync evidence. Existing app-owned workouts are updated instead of duplicated; unrelated Garmin workouts are preserved.' if rolling else '')}
+
+
+def send(arguments,path=None,client_factory=load_client,now=None):
+    """A Publish click authorizes preparation and approval in one request."""
+    now=now or utcnow()
+    pending_blocks={}
+    if arguments.get('next_workouts')==7 and arguments.get('next_days') is None:
+        arguments={**arguments,'next_days':7};arguments.pop('next_workouts')
+    if arguments.get('next_days')==7:
+        client=client_factory(path);key,_=account(client)
+        tz=arguments.get('timezone') or 'UTC';today=now.astimezone(ZoneInfo(tz)).date()
+        with connect(path) as c:
+            from .training_accounting import session_day
+            pending=[];end=today+timedelta(days=7)
+            for old_job in c.execute("SELECT id FROM garmin_publication_jobs WHERE account_key=? AND status IN ('attention','queued') ORDER BY created_at",(key,)).fetchall():
+                for item in c.execute('SELECT workout_id,snapshot_json FROM garmin_publication_items WHERE job_id=?',(old_job['id'],)).fetchall():
+                    old_date=date.fromisoformat(json.loads(item['snapshot_json'])['date'])
+                    current=_snapshot(c,item['workout_id']) if item['workout_id'] else None
+                    if today<=old_date<end or current and today<=session_day(current,tz)<end:
+                        pending.append(old_job['id']);break
+        for identifier in pending:
+            stale_unresolved=False
+            with connect(path) as c:
+                c.execute('BEGIN IMMEDIATE')
+                if c.execute('SELECT status FROM garmin_publication_jobs WHERE id=?',(identifier,)).fetchone()[0]=='running':
+                    raise ValueError('An earlier Garmin send is still running. Wait for its result before publishing the changed schedule.')
+                for item in c.execute("SELECT * FROM garmin_publication_items WHERE job_id=? AND state NOT IN ('verified','superseded')",(identifier,)).fetchall():
+                    current=_snapshot(c,item['workout_id']) if item['workout_id'] else None;snapshot=json.loads(item['snapshot_json'])
+                    from .training_accounting import session_day
+                    stale=bool(item['workout_id']) and (not current or json.loads(current['definition_json'])!=snapshot['definition'] or current['completion_status']!=snapshot['completion_status'] or session_day(current,tz).isoformat()!=snapshot['date'])
+                    link=c.execute('SELECT * FROM garmin_publication_links WHERE account_key=? AND identity_key=?',(key,item['identity_key'])).fetchone()
+                    safe=item['state'] in ('queued','retryable') and ((link and link['verified_hash'] and link['remote_workout_id']==item['remote_workout_id']) or (not link and not item['remote_workout_id']))
+                    if not stale and not (item['state']=='retryable' and safe):continue
+                    if not safe:
+                        stale_unresolved=True
+                        continue
+                    c.execute("UPDATE garmin_publication_items SET state='superseded',error='Replaced by the current saved plan.' WHERE id=?",(item['id'],))
+                    c.execute('UPDATE garmin_publication_jobs SET rolling_requested=0 WHERE id=?',(identifier,))
+            if not stale_unresolved:run(identifier,path,lambda p:client)
+            result=view(identifier,path)
+            if result['status']!='verified':
+                with connect(path) as c:
+                    for item in c.execute("SELECT * FROM garmin_publication_items WHERE job_id=? AND state NOT IN ('verified','superseded')",(identifier,)).fetchall():
+                        snapshot=json.loads(item['snapshot_json'])
+                        pending_blocks[item['identity_key']]={'title':snapshot['definition'].get('title','Workout'),
+                            'reason':item['error'] or 'An earlier upload for this workout needs reconciliation. Other workouts can still be published.'}
+        with connect(path) as c:
+            removed=c.execute("""SELECT w.id FROM planned_workouts w JOIN garmin_publication_links l ON l.workout_id=w.id
+                WHERE l.account_key=? AND l.remote_schedule_id IS NULL AND l.scheduled_date IS NULL AND l.verified_hash IS NOT NULL
+                AND w.publish_status='update_needed' AND w.completion_status IN ('skipped','cancelled')
+                AND substr(w.scheduled_for,1,10)>=? AND substr(w.scheduled_for,1,10)<?""",
+                (key,today.isoformat(),(today+timedelta(days=7)).isoformat())).fetchall()
+            for row in removed:
+                c.execute("UPDATE planned_workouts SET publish_status='published',revision=revision+1 WHERE id=?",(row['id'],))
+                _revision(c,_snapshot(c,row['id']))
+        client_factory=lambda p,client=client:client
+    result=preview(arguments,path,client_factory,now,pending_blocks=pending_blocks)
+    if not result.get('id'):return result
+    approved=approve(result['id'],path,client_factory,now)
+    return {**approved,'blocked':result.get('blocked',[]),'message':'Publishing to Garmin…'}
 
 
 def approve(job_id,path=None,client_factory=load_client,now=None):
@@ -148,7 +236,8 @@ def approve(job_id,path=None,client_factory=load_client,now=None):
                 snapshot=json.loads(item['snapshot_json'])
                 if item['workout_id']:
                     row=_snapshot(c,item['workout_id'])
-                    if not row or row['revision']!=item['workout_revision'] or json.loads(row['definition_json'])!=snapshot['definition']:raise ValueError('A workout changed. Preview again.')
+                    from .training_accounting import session_day
+                    if not row or row['revision']!=item['workout_revision'] or json.loads(row['definition_json'])!=snapshot['definition'] or session_day(row,job['timezone']).isoformat()!=snapshot['date']:raise ValueError('A workout changed. Preview again.')
                     parent=c.execute('SELECT deleted_at,status FROM training_plans WHERE id=?',(row['training_plan_id'],)).fetchone()
                     if not parent or parent['deleted_at'] or parent['status'] not in ('active','accepted'):raise ValueError('The plan is no longer active. Preview again.')
                 link=c.execute('SELECT * FROM garmin_publication_links WHERE account_key=? AND identity_key=?',(key,item['identity_key'])).fetchone()
@@ -170,6 +259,7 @@ def _set(item_id,path,**values):
 def _schedule_id(response):
     if not isinstance(response,dict):return None
     value=response.get('workoutScheduleId') or response.get('scheduleId')
+    if value is None and response.get('workoutId') and response.get('itemType','workout')=='workout':value=response.get('id')
     return str(value) if str(value).isdigit() and int(value)>0 else None
 
 
@@ -214,9 +304,28 @@ def _process(item,client,path):
     was_unknown=item['state']=='unknown'
     if was_unknown:_reconcile(item,client,path)
     with connect(path) as c:link=c.execute('SELECT * FROM garmin_publication_links WHERE account_key=? AND identity_key=?',(item['account_key'],item['identity_key'])).fetchone()
-    already_applied=False
-    if item['remote_workout_id'] and action in ('update','reschedule','unschedule') and not was_unknown:
-        current=client.get_workout_by_id(item['remote_workout_id'])
+    already_applied=False;missing_remote=False
+    if item['remote_workout_id'] and action in ('update','reschedule','unschedule','unchanged') and not was_unknown:
+        from garminconnect import GarminConnectNotFoundError
+        try:current=client.get_workout_by_id(item['remote_workout_id'])
+        except GarminConnectNotFoundError:
+            if not link or not link['verified_hash']:raise ValueError('The missing Garmin workout has no verified app mapping; reconcile it before sending again.')
+            missing_remote=True
+            current=json.loads(link['verified_payload_json'])
+            if item['remote_schedule_id']:
+                day=date.fromisoformat(link['scheduled_date']);calendar=client.get_scheduled_workouts(day.year,day.month)
+                entries=calendar.get('calendarItems') if isinstance(calendar,dict) else None
+                if not isinstance(entries,list):raise ValueError('Could not check the old Garmin calendar entry for the missing workout.')
+                found=next((r for r in entries if _schedule_id(r)==item['remote_schedule_id']),None)
+                if found:
+                    if str(found.get('workoutId'))!=item['remote_workout_id']:raise ValueError('The Garmin calendar entry now belongs to another workout; it was not removed.')
+                    _set(item['id'],path,state='scheduling')
+                    client.unschedule_workout(item['remote_schedule_id'])
+                    entries=client.get_scheduled_workouts(day.year,day.month).get('calendarItems')
+                    if not isinstance(entries,list) or any(_schedule_id(r)==item['remote_schedule_id'] for r in entries):raise RuntimeError('Could not verify calendar removal')
+                item['remote_schedule_id']=None;_set(item['id'],path,remote_schedule_id=None,state='created')
+            if action!='unschedule':
+                item['remote_workout_id']=None;_set(item['id'],path,remote_workout_id=None,state='queued')
         already_applied=action=='update' and canonical(current)==canonical(payload)
         if not already_applied and (not link or digest(canonical(current))!=link['verified_hash']):raise ValueError('The Garmin workout was edited outside this app. Review the conflict; it was not overwritten.')
     if not item['remote_workout_id']:
@@ -226,7 +335,7 @@ def _process(item,client,path):
         item['remote_workout_id']=str(identifier);_set(item['id'],path,remote_workout_id=str(identifier),state='created')
     elif action=='update' and not already_applied and item['state'] in ('queued','retryable'):
         _set(item['id'],path,state='updating');client.update_workout(item['remote_workout_id'],payload);_set(item['id'],path,state='created')
-    remote=client.get_workout_by_id(item['remote_workout_id'])
+    remote=current if missing_remote and action=='unschedule' else client.get_workout_by_id(item['remote_workout_id'])
     if action!='unschedule' and canonical(remote)!=canonical(payload):raise ValueError('Garmin read-back differs from the approved instructions or targets. Review in Garmin before retrying.')
     if item['remote_schedule_id'] and (action=='unschedule' or link and item['remote_schedule_id']==link['remote_schedule_id'] and item['scheduled_date']!=link['scheduled_date']):
         _set(item['id'],path,state='scheduling')
@@ -250,9 +359,16 @@ def _process(item,client,path):
         c.execute("UPDATE garmin_publication_items SET state='verified',error=NULL WHERE id=?",(item['id'],))
         if item['workout_id']:
             current=_snapshot(c,item['workout_id'])
-            changed=not current or json.loads(current['definition_json'])!=snapshot['definition']
+            from .training_accounting import session_day
+            job_timezone=c.execute('SELECT timezone FROM garmin_publication_jobs WHERE id=?',(item['job_id'],)).fetchone()[0]
+            changed=not current or json.loads(current['definition_json'])!=snapshot['definition'] or session_day(current,job_timezone).isoformat()!=snapshot['date'] or current['completion_status']!=snapshot['completion_status']
             if current:
                 c.execute('UPDATE planned_workouts SET garmin_workout_id=?,publish_status=?,revision=revision+1 WHERE id=?',(item['remote_workout_id'],'update_needed' if changed else 'published',item['workout_id']));_revision(c,_snapshot(c,item['workout_id']))
+        elif snapshot.get('cleanup') and link and link['workout_id']:
+            current=_snapshot(c,link['workout_id'])
+            if current and current['completion_status'] in ('skipped','cancelled'):
+                c.execute("UPDATE planned_workouts SET publish_status='published',revision=revision+1 WHERE id=?",(current['id'],))
+                _revision(c,_snapshot(c,current['id']))
 
 
 def run(job_id,path=None,client_factory=load_client):
@@ -264,7 +380,7 @@ def run(job_id,path=None,client_factory=load_client):
     try:
         client=client_factory(path);key,_=account(client)
         if key!=job['account_key']:raise ValueError('Garmin account changed. Reconnect the approved account.')
-        with connect(path) as c:items=[dict(r) for r in c.execute("SELECT * FROM garmin_publication_items WHERE job_id=? AND state!='verified' ORDER BY rowid",(job_id,))]
+        with connect(path) as c:items=[dict(r) for r in c.execute("SELECT * FROM garmin_publication_items WHERE job_id=? AND state NOT IN ('verified','superseded') ORDER BY rowid",(job_id,))]
         for item in items:
             try:_process(item,client,path)
             except Exception as error:
@@ -275,12 +391,12 @@ def run(job_id,path=None,client_factory=load_client):
                 status=re.search(r'(?:API Error|HTTP)\s*(400|401|403|404|409|422|429)\b',str(error))
                 rejected=isinstance(error,(GarminConnectAuthenticationError,GarminConnectTooManyRequestsError)) or bool(status)
                 ambiguous=state in ('creating','updating','scheduling','unknown') and not rejected
-                _set(item['id'],path,state='unknown' if ambiguous else 'retryable',error='Garmin outcome needs read-back reconciliation; a possibly successful operation will not be repeated blindly.' if ambiguous else 'Could not verify this workout. Check Garmin/account access or a remote edit conflict, then reconcile. No verified success is claimed.')
+                _set(item['id'],path,state='unknown' if ambiguous else 'retryable',error='Garmin outcome needs read-back reconciliation; a possibly successful operation will not be repeated blindly.' if ambiguous else str(error) if isinstance(error,ValueError) else 'Could not verify this workout. Check Garmin/account access or a remote edit conflict, then reconcile. No verified success is claimed.')
     except Exception:
         with connect(path) as c:c.execute("UPDATE garmin_publication_jobs SET error='Garmin account is unavailable or changed. Reconnect the approved account and retry.' WHERE id=?",(job_id,))
     finally:
         with connect(path) as c:
-            pending=c.execute("SELECT COUNT(*) FROM garmin_publication_items WHERE job_id=? AND state!='verified'",(job_id,)).fetchone()[0]
+            pending=c.execute("SELECT COUNT(*) FROM garmin_publication_items WHERE job_id=? AND state NOT IN ('verified','superseded')",(job_id,)).fetchone()[0]
             c.execute('UPDATE garmin_publication_jobs SET status=? WHERE id=?',('attention' if pending else 'verified',job_id))
             if not pending and c.execute('SELECT rolling_requested FROM garmin_publication_jobs WHERE id=?',(job_id,)).fetchone()[0]:
                 program=c.execute("SELECT * FROM active_training_program WHERE id=1 AND status='active' AND plan_id=?",(job['rolling_root'],)).fetchone()

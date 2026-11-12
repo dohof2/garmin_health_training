@@ -25,9 +25,28 @@ def answer(reply='Done.', status='completed'):
     return {'reply': reply, 'status': status}
 
 
+class NativeProviderFixture:
+    """Script model decisions through the same native-call boundary as live providers."""
+    def __init__(self, generate):
+        self.generate = generate
+        self.serial = 0
+
+    def respond(self, messages, instructions, tools, **kwargs):
+        payload = json.loads(messages[0]['content'])
+        calls = {m['call_id']: m for m in messages if m.get('type')=='function_call'}
+        payload['results'] = [{'tool':calls[m['call_id']]['name'],
+            'arguments':json.loads(calls[m['call_id']]['arguments']), 'result':json.loads(m['output'])}
+            for m in messages if m.get('type')=='function_call_output']
+        decision = json.loads(self.generate(json.dumps(payload), instructions+'\nNative tools: '+json.dumps(tools), **kwargs))
+        self.serial += 1
+        native_calls = [{**c,'id':f'fixture-{self.serial}-{i}'} for i,c in enumerate(decision.get('calls',[]))]
+        items = [{'type':'function_call','call_id':c['id'],'name':c['name'],'arguments':json.dumps(c.get('arguments',{}))} for c in native_calls]
+        return {**decision,'calls':native_calls,'messages':items,'transport':'responses'}
+
+
 class CatalogTests(unittest.TestCase):
     def test_complete_catalog_has_unique_versioned_instructions_and_working_tools(self):
-        self.assertEqual(len(catalog()['skills']), 32)
+        self.assertEqual(len(catalog()['skills']), 33)
         available = available_definitions()
         for skill in catalog()['skills']:
             loaded = load_skill(skill['id'])
@@ -43,7 +62,7 @@ class CatalogTests(unittest.TestCase):
 
     def test_hierarchy_and_direct_lookup(self):
         self.assertEqual(len(children()['branches']), 8)
-        self.assertEqual({b['path'] for b in children('Training')['branches']}, {'Training / Sessions','Training / Programs'})
+        self.assertEqual({b['path'] for b in children('Training')['branches']}, {'Training / Sessions','Training / Programs','Training / Preferences'})
         self.assertEqual(children('Training')['skills'], [])
         self.assertTrue(all(s['id'].startswith('training.programs.') for s in children('Training / Programs')['skills']))
         self.assertEqual(load_skill('training.programs.build')['id'], 'training.programs.build')
@@ -79,7 +98,7 @@ class AgentTests(unittest.TestCase):
             self.prompts.append(json.loads(prompt))
             self.instructions.append(instructions)
             return json.dumps(next(responses))
-        with patch('app.ai_providers._active_provider', return_value=SimpleNamespace(generate=generate)):
+        with patch('app.ai_providers._active_provider', return_value=NativeProviderFixture(generate)):
             return [json.loads(line) for line in chat_stream(message, [], TZ, self.path,
                 conversation_id=options.pop('conversation_id', 'shared'),
                 operation_id=options.pop('operation_id', str(self.operation)), message_time=NOW, **options)]
@@ -164,6 +183,61 @@ class AgentTests(unittest.TestCase):
         self.assertEqual(proposal['status'], 'proposal', proposal)
         self.assertEqual([r['workout_id'] for r in proposal['adjustments']], [self.rows[1]['id']])
 
+    def test_published_strength_replacement_updates_existing_garmin_workout(self):
+        from test_garmin_publication import FakeGarmin
+        from app.garmin_training_publish import preview, approve, run, view
+        from app.session_changes import preview as preview_change
+        self.replacement_fixture()
+        identifier = self.rows[1]['id']
+        client = FakeGarmin()
+        factory = lambda path: client
+        def send():
+            proposal = preview({'workout_ids':[identifier], 'timezone':TZ}, self.path, factory, NOW)
+            approve(proposal['id'], self.path, factory, NOW)
+            run(proposal['id'], self.path, factory)
+            result = view(proposal['id'], self.path)
+            self.assertEqual(result['status'], 'verified', result)
+            return result
+        send()
+        before = list_training(self.path)
+        row = next(w for w in before['workouts'] if w['id']==identifier)
+        calendar = dict(client.calendar)
+        remote_id = row['garmin_workout_id']
+        proposal = preview_change({'workout_id':identifier, 'expected_revision':row['revision'],
+            'action':'replace_with_endurance', 'minutes':30}, self.path, NOW)
+        self.assertEqual(proposal['status'], 'proposal', proposal)
+        self.assertIn('Send to Garmin', proposal['message'])
+        self.assertEqual(before, list_training(self.path))
+        self.assertEqual(client.updates, 0)
+        save({'message':proposal['request'], 'fingerprint':proposal['fingerprint']}, self.path, NOW)
+        rows = {w['id']:w for w in list_training(self.path)['workouts']}
+        self.assertEqual(rows[identifier]['sport'], 'cycling')
+        self.assertEqual(rows[identifier]['publish_status'], 'update_needed')
+        self.assertEqual(rows[identifier]['garmin_workout_id'], remote_id)
+        self.assertEqual(client.updates, 0)
+        self.assertEqual(rows[self.rows[0]['id']], next(w for w in before['workouts'] if w['id']==self.rows[0]['id']))
+        result = send()
+        self.assertEqual(result['items'][0]['action'], 'update')
+        self.assertEqual((client.creates, client.schedules, client.updates), (1,1,1))
+        self.assertEqual(client.calendar, calendar)
+        self.assertEqual(client.workouts[remote_id]['sportType']['sportTypeKey'], 'cycling')
+        self.assertEqual(next(w for w in list_training(self.path)['workouts'] if w['id']==identifier)['publish_status'], 'published')
+
+    def test_unresolved_garmin_strength_replacement_requires_reconciliation(self):
+        from app.session_changes import preview
+        self.replacement_fixture()
+        identifier = self.rows[1]['id']
+        for status in ('published', 'publishing', 'update_needed'):
+            with self.subTest(status=status):
+                with connect(self.path) as c:
+                    c.execute('UPDATE planned_workouts SET publish_status=?,garmin_workout_id=? WHERE id=?', (status,'unverified',identifier))
+                before = list_training(self.path)
+                result = preview({'workout_id':identifier,'expected_revision':1,
+                    'action':'replace_with_endurance','minutes':30}, self.path, NOW)
+                self.assertEqual(result['status'], 'not_recommended')
+                self.assertIn('reconciliation', result['message'])
+                self.assertEqual(before, list_training(self.path))
+
     def test_skill_cannot_call_an_unloaded_tool(self):
         before = list_training(self.path)
         self.run_chat('Discuss a possible workout change', [call('preview_session_change', workout_id=self.rows[0]['id'], expected_revision=1, action='skip'), answer('We can discuss that.')])
@@ -245,7 +319,7 @@ class AgentTests(unittest.TestCase):
             return json.dumps(answer('Hello.'))
         def dispatch(message, history, tz, **kwargs):
             return chat_stream(message, history, tz, self.path, **kwargs)
-        with patch.dict('os.environ', {'HT_APP_DATA_DIR': self.tmp.name}), patch('app.main.chat_stream', side_effect=dispatch), patch('app.ai_providers._active_provider', return_value=SimpleNamespace(generate=generate)), TestClient(app) as client:
+        with patch.dict('os.environ', {'HT_APP_DATA_DIR': self.tmp.name}), patch('app.main.chat_stream', side_effect=dispatch), patch('app.ai_providers._active_provider', return_value=NativeProviderFixture(generate)), TestClient(app) as client:
             body = {'message':'Hello', 'timezone':TZ, 'conversation_id':'http', 'operation_id':'http-one'}
             first = client.post('/api/ai/chat', json=body)
             second = client.post('/api/ai/chat', json=body)
@@ -330,7 +404,7 @@ class AgentTests(unittest.TestCase):
         def generate(*args, **kwargs):
             return json.dumps(next(messages))
         authorized = []
-        with patch('app.ai_providers._active_provider', return_value=SimpleNamespace(generate=generate)):
+        with patch('app.ai_providers._active_provider', return_value=NativeProviderFixture(generate)):
             result = conversation_reply('I ate 100 grams of eggs', [], TZ, self.path, operation_id='telegram:1:1', sent_at=NOW.timestamp(), authorizer=lambda c:authorized.append(True))
         self.assertEqual(result['reply'], 'Logged.')
         self.assertTrue(authorized)
@@ -342,7 +416,7 @@ class AgentTests(unittest.TestCase):
             raise ValueError('Channel disabled before commit')
         messages = iter([call('load_skill', skill_id='nutrition.log'),
             call('nutrition_conversation', intent='log', ingredients=[{'name':'Eggs','grams':100}]), answer('The channel was disabled; nothing was saved.')])
-        with patch('app.ai_providers._active_provider', return_value=SimpleNamespace(generate=lambda *a,**k:json.dumps(next(messages)))):
+        with patch('app.ai_providers._active_provider', return_value=NativeProviderFixture(lambda *a,**k:json.dumps(next(messages)))):
             conversation_reply('I ate eggs', [], TZ, self.path, operation_id='telegram:1:2', sent_at=NOW.timestamp(), authorizer=denied)
         with connect(self.path) as c:
             self.assertEqual(c.execute('SELECT COUNT(*) FROM meals').fetchone()[0], 0)
@@ -500,7 +574,7 @@ class AgentTests(unittest.TestCase):
             c.execute("UPDATE ai_settings SET active_provider='chatgpt',chatgpt_model='gpt-6.1-sol',assistant_workflow='efficient'")
             state={'resolved_request':'replace strength on 2026-10-19','nutrition_context':{'day':'2026-10-19','pending_foods':[{'name':'Yogurt'}]}}
             c.execute('INSERT INTO assistant_tasks(id,conversation_id,role,kind,status,request,timezone,anchor_date,state_json) VALUES(?,?,?,?,?,?,?,?,?)',('old-task','old-chat','trainer','training_edit','awaiting_information','Replace strength',TZ,'2026-10-19',json.dumps(state)))
-        self.assertEqual(migrate(prior), ['039_skill_agent.sql'])
+        self.assertEqual(migrate(prior), ['039_skill_agent.sql','040_training_notes.sql'])
         self.assertEqual(get_ai_settings(prior)['chatgpt_model'], 'gpt-6.1-sol')
         self.assertNotIn('assistant_workflow',get_ai_settings(prior))
         with connect(prior) as c:

@@ -3,7 +3,7 @@ from __future__ import annotations
 import uuid
 
 from contextlib import asynccontextmanager
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from pathlib import Path
 import os
 from .time_utils import timezone_info
@@ -24,7 +24,7 @@ from .training import training_context, save_preferences, draft_week, list_train
 from .training_coach import read_brief, save_brief, preview as coach_preview, create_draft as coach_draft, parse_request
 from .nutrition import food_search, preview_meal, save_meal, remove_meal,delete_meal, daily_status, save_library, list_library, scale_library, target_preview, save_target, target_history
 from .food_vision import analyze_photo, analyze_text
-from .database import migrate, schema_status
+from .database import connect, migrate, schema_status
 from .extended_archive_import import (
     ExtendedArchiveImportError,
     import_extended_archive,
@@ -92,6 +92,12 @@ async def lifespan(_: FastAPI):
     recover_interrupted_sync_jobs()
     from .garmin_training_publish import recover
     recover()
+    from .training_completion import reconcile_active
+    from .workout_timing import repair_saved_timing
+    with connect() as connection:
+        connection.execute('BEGIN IMMEDIATE')
+        repair_saved_timing(connection)
+        reconcile_active(connection, datetime.now(timezone.utc))
     from .telegram_bot import TelegramWorker
     telegram_worker = TelegramWorker()
     telegram_worker.start()
@@ -116,6 +122,7 @@ app.include_router(telegram_router)
 
 
 class GarminPublicationPreview(BaseModel):
+    next_days: int | None = Field(default=None,strict=True,ge=7,le=7)
     next_workouts: int | None = Field(default=None,strict=True,ge=7,le=7)
     enable_rolling: bool = False
     model_config={'extra':'forbid'}
@@ -130,6 +137,45 @@ class GarminPublicationPreview(BaseModel):
 def rolling_publication_status():
     from .rolling_publication import status
     return status()
+
+
+class TrainingNoteRequest(BaseModel):
+    model_config={'extra':'forbid'}
+    activity: str
+    workout_type: str = 'all'
+    topic: str
+    text: str = Field(default='',max_length=160)
+    settings: dict[str,object] | None = None
+    expected_revision: int = Field(strict=True,ge=0)
+    operation: Literal['upsert','delete'] = 'upsert'
+
+
+@app.get('/api/training/notes')
+def read_training_notes(activity: str | None = None,workout_type: str | None = None):
+    from .training_notes import read
+    return read(activity=activity,workout_type=workout_type)
+
+
+@app.post('/api/training/notes')
+def save_training_note(payload: TrainingNoteRequest):
+    from .training_notes import save
+    try:return save(payload.model_dump(exclude_none=True))
+    except ValueError as error:raise HTTPException(409,str(error)) from error
+
+
+@app.post('/api/training/notes/apply')
+def apply_training_notes(timezone_name: str = 'UTC'):
+    from .training_notes import apply_current
+    from .time_utils import timezone_info
+    try:
+        timezone_info(timezone_name)
+        with connect() as c:
+            c.execute('BEGIN IMMEDIATE')
+            program=c.execute("SELECT plan_id FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+            if not program:raise ValueError('Activate a plan before applying notes to its next seven days.')
+            changes,warnings=apply_current(c,program['plan_id'],datetime.now(timezone.utc),timezone_name)
+        return {'status':'saved','changes':changes,'warnings':warnings,'message':f'Updated {len(changes)} planned sessions locally. Send pending Garmin updates to update their remote instructions.'}
+    except ValueError as error:raise HTTPException(409,str(error)) from error
 
 
 @app.post('/api/training/publication/rolling/disable')
@@ -157,6 +203,18 @@ def preview_garmin_publication(payload: GarminPublicationPreview):
 def list_garmin_publications():
     from .garmin_training_publish import history
     return history()
+
+
+@app.post('/api/training/publication/send')
+def send_garmin_publication(payload: GarminPublicationPreview):
+    from .garmin_training_publish import send, run
+    try:
+        result=send(payload.model_dump(mode='json',exclude_none=True))
+        if result.get('id') and result['status']=='queued':
+            return JSONResponse(result,background=BackgroundTask(run,result['id']))
+        return result
+    except ValueError as error:raise HTTPException(409,str(error)) from error
+    except Exception as error:raise HTTPException(400,'Could not publish to Garmin. Check the Garmin connection and try again.') from error
 
 
 @app.get('/api/training/publication/jobs/{job_id}')
@@ -641,6 +699,15 @@ def confirm_ai_settings_change(proposal_id: str) -> dict[str, object]:
         raise HTTPException(status_code=409, detail=str(error)) from error
 
 
+@app.get("/api/ai/chat/turns/{operation_id}")
+def ai_chat_turn(operation_id: str, conversation_id: str = Query(min_length=1, max_length=120)):
+    from .skill_agent import read_turn
+    try:
+        return JSONResponse(read_turn(operation_id, conversation_id), headers={'Cache-Control': 'no-store'})
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail='Chat response not found') from error
+
+
 @app.post("/api/ai/chat")
 def ai_chat(payload: AIChatRequest) -> StreamingResponse:
     return StreamingResponse(
@@ -880,6 +947,13 @@ def save_training_adaptation(payload: TrainingAdaptationRequest):
     except (ValueError,KeyError) as error:raise HTTPException(409,str(error)) from error
 
 
+@app.post('/api/training/active/duration/preview')
+def preview_training_duration(payload: dict[str,object]):
+    from .workout_duration import preview
+    try:return preview(payload)
+    except (ValueError,KeyError) as error:raise HTTPException(400,str(error)) from error
+
+
 @app.post('/api/training/active/change')
 def change_active_training(payload: ActiveTrainingRequest):
     from .active_training import request_change, set_status
@@ -1086,6 +1160,24 @@ def activity_full_stats(activity_id: str, timezone: str | None = None) -> dict[s
         return inspect({'activity_id': activity_id, 'timezone': timezone, 'message_type': 'session_mesgs', 'limit': 200})
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
+
+
+@app.get('/api/activities/{activity_id}/strength-exercises')
+def activity_strength_exercises(activity_id: str):
+    from .activity_strength import exercises
+    try:
+        return JSONResponse(exercises(activity_id), headers={'Cache-Control': 'no-store'})
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail='Activity not found') from error
+
+
+@app.get('/api/activities/{activity_id}/route')
+def activity_route(activity_id: str):
+    from .activity_route import route
+    try:
+        return JSONResponse(route(activity_id), headers={'Cache-Control': 'no-store'})
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail='Activity not found') from error
 
 
 @app.get("/api/activities/{activity_id}")

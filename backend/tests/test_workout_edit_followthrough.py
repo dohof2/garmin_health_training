@@ -116,6 +116,8 @@ class FollowthroughTests(unittest.TestCase):
    choice,evidence=select(c,'threshold',NOW.date(),TZ);self.assertEqual(choice,'sustained_threshold');self.assertEqual(evidence['tolerated_recordings'],2)
    self.assertEqual(select(c,'threshold',NOW.date(),TZ,False)[0],'split_threshold')
  def test_rolling_publication_applies_edited_blocks_once(self):
+  from test_daily_training import ready_sync,readiness
+  ready_sync(self.path,NOW.date())
   from app.rolling_publication import window,sync,status
   client=FakeGarmin();factory=lambda p:client
   with connect(self.path) as c:
@@ -125,7 +127,7 @@ class FollowthroughTests(unittest.TestCase):
   self.assertTrue(status(self.path)['enabled'])
   p=propose('Change today cycling to 2 x 4 minutes, recovery to 3 minutes',self.path,NOW);self.save(p)
   creates=client.creates;schedules=client.schedules
-  with patch('app.active_training.review'):
+  with patch('app.active_training.review'),patch('app.readiness.readiness_history',return_value=readiness(NOW.date())):
    sync(self.path,factory,NOW);sync(self.path,factory,NOW)
   self.assertEqual(status(self.path)['status'],'up_to_date');self.assertEqual((client.creates,client.schedules,client.updates),(creates,schedules,1))
  def test_strength_edit_reaches_garmin_rep_load_and_rest_readback(self):

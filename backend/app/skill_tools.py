@@ -17,14 +17,31 @@ STRING = {'type': 'string'}
 INTEGER = {'type': 'integer'}
 OBJECT = {'type': 'object'}
 LOCAL = [
+    definition('preview_workout_duration','Preview an explicit duration/time allowance change. scope=once selects a workout ID or date; scope=plan updates settings, every matching scheduled workout and future generation for the remaining plan. Use sport/workout_type=all for all. Save applies atomically; no writes here.',
+        {'scope':{'type':'string','enum':['once','plan']},'minutes':INTEGER,'sport':STRING,'workout_type':STRING,'workout_id':STRING,'date':STRING},('scope','minutes')),
+    definition('get_training_notes','Read concise recurring preferences by activity and workout type. Omit filters to browse the small note tree.',
+        {'activity':STRING,'workout_type':STRING}),
+    definition('save_training_note','Save or delete an explicitly requested recurring training preference. Replace its existing topic; never append conversation history. One line, at most 160 characters. This saves a note, not a workout or Garmin update.',
+        {'activity':STRING,'workout_type':STRING,'topic':STRING,'text':{'type':'string','maxLength':160},
+         'settings':{'type':'object','properties':{'sets':INTEGER,'rest_seconds':INTEGER,'continuous_endurance':{'type':'boolean','enum':[True]}},'additionalProperties':False},
+         'expected_revision':INTEGER,'operation':{'type':'string','enum':['upsert','delete']}},
+        ('activity','workout_type','topic','expected_revision')),
     definition('lookup_workouts', 'Read scoped planned/completed workouts. Prefer IDs or dates. Full instructions for at most two results; never all history by default.',
         {'id': STRING, 'date': STRING, 'start_date': STRING, 'end_date': STRING, 'sport': STRING,
          'limit': {'type': 'integer', 'minimum': 1, 'maximum': 14}, 'details': {'type': 'boolean'}}),
     definition('lookup_program', 'Read the active program brief, dates and blocks, without full workout/history snapshots.', {}),
-    definition('preview_session_change', 'Preview a change to exactly one selected workout. No save. Choose adjust with a focused request, skip, or replace_with_endurance (optional source workout or duration).',
-        {'workout_id': STRING, 'expected_revision': INTEGER, 'action': {'type': 'string', 'enum': ['adjust', 'skip', 'replace_with_endurance']},
+    definition('preview_session_change', 'Preview one selected workout. For interval count/work/recovery edits choose edit_intervals with intervals; total duration and other blocks/targets stay fixed. Otherwise adjust, skip, or replace_with_endurance.',
+        {'workout_id': STRING, 'expected_revision': INTEGER, 'action': {'type': 'string', 'enum': ['adjust', 'edit_intervals', 'skip', 'replace_with_endurance']},
+         'intervals':{'type':'object','properties':{'count':INTEGER,'work_seconds':INTEGER,'recovery_seconds':INTEGER},'additionalProperties':False},
+         'manual_override': {'type': 'boolean', 'description': 'True for a concrete interval/block change explicitly requested by the user. Warn above 20% instead of rejecting; Save is required. Never use for automatic planning.'},
          'request': {'type': 'string', 'maxLength': 800}, 'source_workout_id': STRING, 'minutes': INTEGER},
         ('workout_id', 'expected_revision', 'action')),
+    definition('preview_strength_prescription', 'Preview sets/rest on 1–7 exact strength workouts together. Sets means total sets. Preserve reps and loads; recalculate duration. Explicit edits may be saved locally while Garmin reconciliation remains separate. No save or send.',
+        {'workouts':{'type':'array','maxItems':7,'items':{'type':'object','properties':{'workout_id':STRING,'expected_revision':INTEGER},'required':['workout_id','expected_revision'],'additionalProperties':False}}, 'sets':INTEGER,'rest_seconds':INTEGER}, ('workouts',)),
+    definition('preview_strength_exercise_addition','Preview adding a reviewed bodyweight exercise to 1–7 exact strength sessions in one atomic proposal. Preserve existing exercises. Missing reps/rest use common values from each routine and are shown in the review. No save.',
+        {'workouts':{'type':'array','maxItems':7,'items':{'type':'object','properties':{'workout_id':STRING,'expected_revision':INTEGER},'required':['workout_id','expected_revision'],'additionalProperties':False}},
+         'exercise':{'type':'object','properties':{'id':STRING,'sets':INTEGER,'repetitions':INTEGER,'rest_seconds':INTEGER},'required':['id','sets'],'additionalProperties':False}},
+        ('workouts','exercise')),
     definition('preview_schedule_change', 'Preview swapping two exact workouts or moving one to an ISO date; no save. Supply both revisions for a swap.',
         {'workout_id': STRING, 'expected_revision': INTEGER, 'other_workout_id': STRING, 'other_expected_revision': INTEGER,
          'date': STRING, 'start_time': STRING}, ('workout_id', 'expected_revision')),
@@ -49,7 +66,7 @@ LOCAL = [
          'dataset': {'type': 'string', 'enum': ['activities', 'metrics']}, 'workout_ids': {'type': 'array', 'items': STRING, 'maxItems': 14}}, ('workflow',)),
 ]
 LOCAL_BY_NAME = {item['name']: item for item in LOCAL}
-READ_TOOLS = {'lookup_workouts', 'lookup_program', 'get_activity_detail', 'nutrition_day', 'find_food', 'app_status'}
+READ_TOOLS = {'get_training_notes','lookup_workouts', 'lookup_program', 'get_activity_detail', 'nutrition_day', 'find_food', 'app_status'}
 
 
 def available_definitions():
@@ -96,7 +113,7 @@ def validate(defn, arguments):
 
 
 def lookup_workouts(args, path, today):
-    clauses = ["p.deleted_at IS NULL", "w.completion_status!='cancelled'"]
+    clauses = ["p.deleted_at IS NULL", "w.completion_status NOT IN ('cancelled','missed')"]
     values = []
     for key, column, operator in [('id', 'w.id', '='), ('date', 'substr(w.scheduled_for,1,10)', '='),
             ('start_date', 'substr(w.scheduled_for,1,10)', '>='), ('end_date', 'substr(w.scheduled_for,1,10)', '<='), ('sport', 'w.sport', '=')]:
@@ -130,7 +147,7 @@ def lookup_program(path):
         return {'program': None}
     state = json.loads(row['state_json'])
     return {'program': {key: row[key] for key in ('plan_id', 'status', 'revision')},
-        **{key: state[key] for key in ('timezone', 'starts_on', 'ends_on', 'brief') if key in state},
+        **{key: state[key] for key in ('timezone', 'starts_on', 'ends_on', 'brief', 'duration_settings', 'duration_week_allowances') if key in state},
         'blocks': [{k: b[k] for k in ('week', 'starts_on', 'phase', 'focus') if k in b} for b in state.get('blocks', [])]}
 
 
@@ -167,7 +184,14 @@ def execute(name, arguments, context):
         args['timezone'] = tz
     operation = str(uuid.uuid5(uuid.NAMESPACE_URL, context['operation_id'] + ':' + canonical_call(name, arguments)))
     evidence_name = name
-    if name == 'lookup_workouts':
+    if name == 'get_training_notes':
+        from .training_notes import read
+        notes=read(path,**args)
+        result={'notes':notes['notes']} if args.get('activity') else {'branches':{sport:{kind:[n['topic'] for n in entries] for kind,entries in kinds.items()} for sport,kinds in notes['tree'].items()},'limits':notes['limits']}
+    elif name == 'save_training_note':
+        from .training_notes import save
+        result=save(args,path)
+    elif name == 'lookup_workouts':
         result = lookup_workouts(args, path, today)
     elif name == 'lookup_program':
         result = lookup_program(path)
@@ -177,6 +201,8 @@ def execute(name, arguments, context):
         from .training_coach import read_brief
         settings = get_settings(path)
         result = {'tool': name, 'profile': settings['profile'], 'goals': settings['goals']}
+        from .training_notes import read
+        result['training_notes']=read(path)['notes']
         skills = state.get('skills', [])
         if any(s != 'profile.personal' for s in skills):
             if any(s.startswith('training.programs.') for s in skills):
@@ -186,11 +212,26 @@ def execute(name, arguments, context):
                 with connect(path) as c:
                     result['training'] = _preferences(c)
             result['coaching_brief'] = read_brief(path)
-    elif name == 'preview_session_change':
-        from .session_changes import preview
-        args['request'] = (args.get('request', '') + '\n' + context['message']).strip()
+    elif name == 'preview_workout_duration':
+        from .workout_duration import preview
         result = preview(args, path, context['now'])
         evidence_name = 'propose_training_adjustment'
+    elif name == 'preview_session_change':
+        from .session_changes import preview
+        # The model has already scoped this action to one workout. Appending the
+        # whole turn can mix in a different day's edit or reclassify a skip.
+        if args.get('action') != 'skip' and not args.get('request'):
+            args['request'] = context['message'].strip()
+        result = preview(args, path, context['now'])
+        evidence_name = 'propose_training_adjustment'
+    elif name == 'preview_strength_prescription':
+        from .strength_prescription import preview
+        result = preview(args, path, context['now'])
+        evidence_name = 'propose_training_adjustment'
+    elif name == 'preview_strength_exercise_addition':
+        from .strength_exercise_edits import preview
+        result=preview(args,path,context['now'])
+        evidence_name='propose_training_adjustment'
     elif name == 'preview_schedule_change':
         from .session_changes import schedule
         result = schedule(args, path, context['now'])
@@ -257,9 +298,12 @@ def execute(name, arguments, context):
         evidence['action_link'] = {'url': result['url'], 'label': labels[args['workflow']]}
     if name in ('log_maintenance', 'update_maintenance', 'undo_maintenance'):
         evidence['maintenance'] = result
-    if name in ('preview_session_change', 'preview_schedule_change', 'preview_workout_feedback', 'preview_strength_progression', 'preview_program_format'):
+    if name in ('preview_strength_prescription','preview_workout_duration','preview_session_change', 'preview_strength_exercise_addition','preview_schedule_change', 'preview_workout_feedback', 'preview_strength_progression', 'preview_program_format'):
         state['last_training_proposal'] = result
     model_result = compact_result(result)
+    if isinstance(result, dict) and result.get('tool') == 'propose_training_adjustment':
+        from .ai_budget import compact_training_proposal
+        model_result = compact_training_proposal(result)
     if name == 'get_training_context':
         model_result = compact_training_context(result, context['message'], today)
     elif name == 'preview_training_plan':

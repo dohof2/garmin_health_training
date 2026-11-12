@@ -43,27 +43,34 @@
         "What is today's workout?",
         "Explain the strength session"
       ],
-      "version": 1,
+      "version": 2,
       "tools": [
         "lookup_workouts",
-        "lookup_program"
+        "lookup_program",
+        "get_training_notes"
       ]
     },
     {
       "id": "training.sessions.edit",
       "path": "Training / Sessions / Edit or replace",
-      "summary": "Change duration, intensity, blocks, exercises, or replace the sport of one planned session.",
+      "summary": "Change duration, intensity, blocks, exercises, or replace the sport of one session or matching scheduled and future workouts.",
       "examples": [
         "Remove today's strength and add yesterday's endurance ride",
-        "Make the second interval four minutes"
+        "Make the second interval four minutes",
+        "Give strength workouts 60 minutes for the rest of the plan"
       ],
-      "version": 1,
+      "version": 7,
       "tools": [
         "lookup_workouts",
         "lookup_program",
         "preview_session_change",
+        "preview_workout_duration",
         "get_training_readiness",
-        "get_garmin_strength_catalog"
+        "get_garmin_strength_catalog",
+        "get_training_notes",
+        "save_training_note",
+        "preview_strength_exercise_addition",
+        "preview_strength_prescription"
       ]
     },
     {
@@ -119,7 +126,7 @@
         "Build a new 12-week training plan",
         "Plan my season for a race"
       ],
-      "version": 1,
+      "version": 2,
       "tools": [
         "lookup_program",
         "lookup_workouts",
@@ -132,7 +139,8 @@
         "get_cycling_workout_variants",
         "get_garmin_strength_catalog",
         "preview_training_plan",
-        "propose_training_setup"
+        "propose_training_setup",
+        "get_training_notes"
       ]
     },
     {
@@ -143,7 +151,7 @@
         "Rebuild the remaining plan after my trip",
         "Change my program direction"
       ],
-      "version": 1,
+      "version": 2,
       "tools": [
         "lookup_program",
         "lookup_workouts",
@@ -153,7 +161,9 @@
         "preview_training_plan",
         "propose_training_setup",
         "preview_strength_progression",
-        "preview_program_format"
+        "preview_program_format",
+        "get_training_notes",
+        "save_training_note"
       ]
     },
     {
@@ -538,6 +548,30 @@
       "tools": [
         "query_app_data",
         "open_app_workflow"
+      ]
+    },
+    {
+      "id": "training.preferences.notes",
+      "path": "Training / Preferences / Recurring notes",
+      "summary": "Read, replace or remove concise lasting training preferences by activity, workout type and topic.",
+      "examples": [
+        "Remember two sets for every strength exercise",
+        "Change my recurring workout notes",
+        "Keep endurance rides continuous"
+      ],
+      "keywords": [
+        "remember",
+        "persistent",
+        "lasting",
+        "notes",
+        "preference",
+        "concise"
+      ],
+      "version": 1,
+      "tools": [
+        "get_training_notes",
+        "save_training_note",
+        "get_training_context"
       ]
     }
   ]

@@ -159,7 +159,10 @@ class NutritionTests(unittest.TestCase):
    c.execute("INSERT INTO training_plans(id,name,status) VALUES ('p','Test','draft')")
    c.execute("INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json) VALUES ('w','p','running','Test','2026-10-09T22:30:00+00:00','{}')")
   self.assertEqual(self.day()['target']['calories_kcal'],2000)
-  with connect(self.path) as c:c.execute("UPDATE training_plans SET status='active' WHERE id='p'")
+  with connect(self.path) as c:
+   c.execute("UPDATE training_plans SET status='active' WHERE id='p'")
+   self.assertEqual(self.day()['target']['calories_kcal'],2000)
+   c.execute("UPDATE planned_workouts SET completion_status='completed' WHERE id='w'")
   self.assertEqual(self.day()['target']['calories_kcal'],2200)
   self.assertEqual(self.day(tz='UTC')['target']['calories_kcal'],2000)
  def test_partial_nutrients_suppress_remaining_only_where_unknown(self):

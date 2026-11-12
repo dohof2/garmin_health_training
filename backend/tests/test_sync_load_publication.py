@@ -54,26 +54,28 @@ class DailyWindowTests(unittest.TestCase):
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup);self.path=Path(self.tmp.name)/'test.sqlite';migrate(self.path)
   with connect(self.path) as c:c.execute("INSERT INTO training_plans(id,name,status) VALUES('root','Fictional plan','active')")
- def test_window_is_seven_workouts_not_seven_days_and_keeps_removals(self):
+ def test_window_is_seven_calendar_days_and_keeps_removals(self):
   with connect(self.path) as c:
    for i in range(9):
     day=(DAY+timedelta(days=i*3)).isoformat()
     c.execute("INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json) VALUES(?,'root','cycling','Ride',?,'{}')",(str(i),day+'T12:00:00Z'))
    c.execute("INSERT INTO planned_workouts(id,training_plan_id,sport,title,scheduled_for,definition_json,completion_status,publish_status,garmin_workout_id) VALUES('remove','root','cycling','Canceled',?,'{}','cancelled','update_needed','remote')",(DAY.isoformat()+'T12:00:00Z',))
-   self.assertEqual(window(c,'root','UTC',NOW,False),[str(i) for i in range(7)])
-   self.assertEqual(window(c,'root','UTC',NOW),[str(i) for i in range(7)]+['remove'])
+   self.assertEqual(window(c,'root','UTC',NOW,False),[str(i) for i in range(3)])
+   self.assertEqual(window(c,'root','UTC',NOW),[str(i) for i in range(3)]+['remove'])
  def test_daily_worker_requires_opt_in_fresh_core_data_and_new_local_day(self):
   worker=DailyPublicationWorker(self.path)
   with patch('app.rolling_publication.sync') as publish:
    worker.tick(NOW);publish.assert_not_called()
    with connect(self.path) as c:c.execute("INSERT INTO garmin_rolling_publication(id,enabled,account_key,root_plan_id,timezone) VALUES(1,1,'fake','root','UTC')")
    ensure_sync_checkpoints(self.path);worker.tick(NOW);publish.assert_not_called()
-   with connect(self.path) as c:c.execute("UPDATE sync_checkpoints SET status='synced',coverage_end=?",(DAY.isoformat(),))
+   from test_daily_training import ready_sync
+   ready_sync(self.path,DAY)
    worker.tick(NOW);publish.assert_called_once();publish.reset_mock()
-   with connect(self.path) as c:c.execute('UPDATE garmin_rolling_publication SET detail_json=?',(json.dumps({'last_success_date':DAY.isoformat()}),))
+   from app.rolling_publication import schedule_signature
+   with connect(self.path) as c:c.execute('UPDATE garmin_rolling_publication SET detail_json=?',(json.dumps({'last_success_date':DAY.isoformat(),'last_success_signature':schedule_signature(c,'root','UTC',NOW)}),))
    worker.tick(NOW);publish.assert_not_called()
    worker.tick(NOW+timedelta(days=1));publish.assert_not_called()
-   with connect(self.path) as c:c.execute("UPDATE sync_checkpoints SET coverage_end=?",((DAY+timedelta(days=1)).isoformat(),))
+   ready_sync(self.path,DAY+timedelta(days=1))
    worker.tick(NOW+timedelta(days=1));publish.assert_called_once()
  def test_two_long_rides_in_distinct_weeks_use_shorter_duration_not_outlier_average(self):
   ensure_sync_checkpoints(self.path)
@@ -99,7 +101,8 @@ class DailyWindowTests(unittest.TestCase):
    rows=[dict(r) for r in c.execute('SELECT * FROM planned_workouts')]
    self.assertEqual(_observed_cycling_minutes(c,rows,DAY-timedelta(days=2),DAY,'UTC'),137)
    c.execute("UPDATE sync_checkpoints SET status='syncing' WHERE data_type='activities'")
-   self.assertIsNone(_observed_cycling_minutes(c,rows,DAY-timedelta(days=2),DAY,'UTC'))
+   # Already committed rides remain performed load during a partial/retried sync.
+   self.assertEqual(_observed_cycling_minutes(c,rows,DAY-timedelta(days=2),DAY,'UTC'),137)
  def test_new_week_preview_preserves_two_hour_friday_with_explicit_allowance(self):
   from app.training_coach import preview,DEFAULT
   ensure_sync_checkpoints(self.path)

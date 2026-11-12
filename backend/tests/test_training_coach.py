@@ -72,7 +72,7 @@ class CoachTests(unittest.TestCase):
   self.assertEqual(list_training(self.path)['plans'],[])
  def test_fixed_wednesday_preserved_and_no_extra_quality(self):
   b,_=parse_request('8 weeks. Increase FTP. Wednesday hard 3 hours at 08:00 ride',DEFAULT,WEEK)
-  p=self.preview(b);self.assertEqual(p['status'],'ready');self.assertEqual(p['weekly_minutes']['cycling'],300)
+  p=self.preview(b);self.assertEqual(p['status'],'ready');self.assertEqual(p['weekly_minutes']['cycling'],180)
   fixed=next(s for s in p['sessions'] if s['definition']['template_id']=='fixed_commitment')
   self.assertEqual(fixed['scheduled_for'],'2026-10-14T08:00:00+03:00');self.assertEqual(fixed['definition']['duration_minutes'],180)
   self.assertEqual({d['date'] for d in p['protected_days']},{'2026-10-13','2026-10-15'})
@@ -81,14 +81,38 @@ class CoachTests(unittest.TestCase):
   p=self.preview();quality=[s for s in p['sessions'] if s['definition'].get('workout_kind')=='threshold']
   self.assertEqual(len(quality),1);self.assertEqual(quality[0]['definition']['effort_target']['method'],'perceived_effort')
   self.assertEqual(sum(s['duration_seconds'] for s in quality[0]['definition']['steps']),quality[0]['definition']['duration_minutes']*60)
-  confirmed=self.preview(self.brief(ftp_watts=250,calibration={'power_access':'outdoor','ftp_confirmed_on':'2026-10-11','hr_sensor':False}));self.assertTrue(any(step.get('target',{}).get('lower')==225 and step['target']['upper']==237.5 for step in confirmed['sessions'][0]['definition']['steps']))
+  confirmed=self.preview(self.brief(ftp_watts=250,calibration={'power_access':'outdoor','ftp_confirmed_on':'2026-10-11','hr_sensor':False}))
+  threshold=next(s['definition'] for s in confirmed['sessions'] if s['definition']['workout_kind']=='threshold')
+  work=[step for step in threshold['steps'] if step['type'].startswith('work_lap')]
+  self.assertTrue(work)
+  for step in work:
+   self.assertEqual(step['target']['type'],'power')
+   self.assertEqual((step['target']['lower'],step['target']['upper']),(225,262.5))
+   self.assertAlmostEqual((step['target']['lower']+step['target']['upper'])/2,250*.975)
  def test_long_trip_over_budget_is_not_shortened(self):
   b,_=parse_request('8 weeks. Increase FTP. Wednesday hard 6 hours at 08:00 trip',DEFAULT,WEEK)
   p=self.preview(b);self.assertEqual(p['status'],'needs_input');self.assertEqual(p['sessions'][0]['definition']['duration_minutes'],360)
  def test_endurance_prioritizes_longest_slot(self):
   answers=copy.deepcopy(ANSWERS);answers['availability']=[{'weekday':0,'start_time':'18:00','minutes':30},{'weekday':5,'start_time':'08:00','minutes':120}];answers['weekly_minutes']['cycling']=120
   save_preferences(answers,1,self.path,NOW)
-  p=self.preview(self.brief(goal='endurance'));self.assertEqual(p['sessions'][0]['scheduled_for'][:10],'2026-10-17');self.assertEqual(p['sessions'][0]['definition']['duration_minutes'],120)
+  with connect(self.path) as c:
+   for i in range(4):
+    c.execute("INSERT INTO activities(id,source_name,activity_type,started_at,duration_seconds) VALUES(?,'garmin_export','cycling',?,7200)",('long-'+str(i),(NOW-timedelta(days=1+i*7)).isoformat()))
+  p=self.preview(self.brief(goal='endurance'))
+  self.assertEqual(p['status'],'ready',p['questions'])
+  by_day={s['scheduled_for'][:10]:s['definition']['duration_minutes'] for s in p['sessions']}
+  # Sessions are returned chronologically. The long slot gets the remaining
+  # budget after reserving a purposeful 30-minute weekday ride.
+  self.assertEqual(by_day,{'2026-10-12':30,'2026-10-17':90})
+  self.assertEqual(p['weekly_minutes']['cycling'],120)
+ def test_long_slot_is_availability_not_evidence_of_two_hour_capacity(self):
+  answers=copy.deepcopy(ANSWERS);answers['availability']=[{'weekday':0,'start_time':'18:00','minutes':30},{'weekday':5,'start_time':'08:00','minutes':120}];answers['weekly_minutes']['cycling']=120
+  save_preferences(answers,1,self.path,NOW)
+  p=self.preview(self.brief(goal='endurance'))
+  self.assertEqual(p['status'],'ready',p['questions'])
+  self.assertEqual([s['scheduled_for'][:10] for s in p['sessions']],['2026-10-12','2026-10-17'])
+  self.assertEqual(next(s['definition']['duration_minutes'] for s in p['sessions'] if s['scheduled_for'][:10]=='2026-10-17'),60)
+  self.assertLessEqual(sum(s['definition']['duration_minutes'] for s in p['sessions']),120)
  def test_race_requires_demands_and_running_is_not_cycling(self):
   p=self.preview(self.brief(goal='race',goal_sport='running',target_date='2026-10-25'))
   self.assertEqual(p['status'],'needs_input');self.assertTrue(any('race' in q for q in p['questions']));self.assertTrue(any('sport' in q for q in p['questions']))
@@ -101,7 +125,9 @@ class CoachTests(unittest.TestCase):
   history=self.draft();old=history['plans'][0]['id'];count=len(history['workouts']);new=self.draft(self.brief(goal='general'),replace_plan_id=old)
   self.assertEqual(next(p for p in new['plans'] if p['id']==old)['status'],'draft');self.assertEqual(sum(w['completion_status']=='cancelled' for w in new['workouts']),0)
  def test_existing_week_consumes_budget_instead_of_double_training(self):
-  self.draft();p=self.preview();self.assertEqual(p['status'],'needs_review');self.assertEqual(p['weekly_minutes']['cycling'],300);self.assertEqual(p['sessions'],[])
+  existing=self.draft();p=self.preview();self.assertEqual(p['status'],'needs_review')
+  self.assertEqual(p['weekly_minutes']['cycling'],sum(w['definition']['duration_minutes'] for w in existing['workouts'] if w['sport']=='cycling'))
+  self.assertEqual(p['weekly_minutes']['cycling'],180);self.assertEqual(p['sessions'],[])
  def test_completed_sessions_cannot_be_replaced_feedback_still_works(self):
   h=self.draft();w=h['workouts'][0]
   with patch('app.training.datetime',Clock):update_workout(w['id'],w['revision'],{'completion_status':'completed','effort':6},self.path)
@@ -132,7 +158,10 @@ class CoachTests(unittest.TestCase):
   p=preview(b,WEEK,'Asia/Jerusalem',self.path,NOW,candidate_answers=changes)
   self.assertEqual(training_context(self.path,NOW),before)
   approve(b,WEEK,'Asia/Jerusalem',p['fingerprint'],self.path,NOW,candidate_answers=changes)
-  self.assertEqual(training_context(self.path,NOW)['answers']['weekly_minutes']['cycling'],240)
+  after=training_context(self.path,NOW)
+  self.assertEqual(after['raw_answers']['weekly_minutes']['cycling'],240)
+  self.assertEqual(after['volume_estimates']['cycling']['optional_cap_minutes'],240)
+  self.assertEqual(after['answers']['weekly_minutes']['cycling'],180)
  def test_approval_failure_rolls_back_program_and_brief(self):
   from app.training_coach import approve
   b=self.brief(duration_confirmed=True);p=self.preview(b)

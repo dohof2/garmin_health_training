@@ -1,6 +1,7 @@
 """Structured session selection around existing prescription/save validators."""
 import hashlib
 import json
+import re
 from datetime import datetime, timezone
 
 from .database import connect
@@ -10,7 +11,7 @@ PREFIX = '@session:'
 
 
 def preview(arguments, path=None, now=None):
-    allowed = {'workout_id', 'expected_revision', 'action', 'request', 'source_workout_id', 'minutes'}
+    allowed = {'workout_id', 'expected_revision', 'action', 'request', 'source_workout_id', 'minutes', 'intervals', 'manual_override'}
     if set(arguments) - allowed:
         raise ValueError('Unsupported session-change fields')
     request = PREFIX + encoded(arguments)
@@ -31,6 +32,10 @@ def build(arguments, path=None, now=None):
     if type(arguments.get('expected_revision')) is not int or row['revision'] != arguments['expected_revision']:
         raise ValueError('The selected workout changed. Read it again before preparing an edit.')
     action = arguments.get('action')
+    manual_override = arguments.get('manual_override', False)
+    if type(manual_override) is not bool or manual_override and action not in ('adjust', 'edit_intervals'):
+        raise ValueError('Manual override applies only to an explicitly requested block edit')
+    if action!='edit_intervals' and arguments.get('intervals') is not None:raise ValueError('Use action=edit_intervals for structured interval values')
     message = arguments.get('request') or ''
     if action == 'replace_with_endurance':
         if row['sport'] != 'strength':
@@ -39,13 +44,36 @@ def build(arguments, path=None, now=None):
         if minutes is not None and (type(minutes) is not int or not 10 <= minutes <= 180):
             raise ValueError('Choose a ride duration between 10 and 180 minutes')
         message = 'Replace strength with an endurance ride' + (f' for {minutes} minutes' if minutes else '')
+    elif action=='edit_intervals':
+        values=arguments.get('intervals')
+        if not isinstance(values,dict) or not values or set(values)-{'count','work_seconds','recovery_seconds'}:raise ValueError('Specify interval count, work seconds or between-effort recovery seconds')
+        for key,value in values.items():
+            if type(value) is not int or not (0 if key=='recovery_seconds' else 1)<=value<=(20 if key=='count' else 3600):raise ValueError('Use 1–20 intervals, 1–3600 work seconds and 0–3600 recovery seconds')
+        parts=[]
+        if 'count' in values:parts.append(f"use {values['count']} intervals")
+        if 'work_seconds' in values:parts.append(f"work duration to {values['work_seconds']} seconds")
+        if 'recovery_seconds' in values:parts.append(f"recovery to {values['recovery_seconds']} seconds")
+        message='Change this session: '+', '.join(parts)
     elif action == 'skip':
         message = 'Skip this session'
     elif action != 'adjust' or not isinstance(message, str) or not message.strip():
-        raise ValueError('Choose adjust, skip, or replace_with_endurance and describe the intended change')
-    if action != 'adjust' and arguments.get('request'):
+        raise ValueError('Choose adjust, edit_intervals, skip, or replace_with_endurance and describe the intended change')
+    if action == 'replace_with_endurance' and arguments.get('request'):
         message += '\n' + arguments['request']
-    result = propose(message, path, now, selected_id=row['id'], source_id=arguments.get('source_workout_id'))
+    if action=='adjust' and row['sport']=='strength':
+        sets = re.search(r'\b(\d+)\s+(?:total\s+)?sets?\b', message, re.I)
+        rest = re.search(r'\b(\d+)\s*(?:seconds?|secs?|s)\s+rest\b', message, re.I)
+        broad = re.search(r'\b(every|each|all)\b', message, re.I)
+        if broad and sets and not re.search(r"\b(don't|do not|without)\b", message, re.I):
+            from .strength_prescription import preview as prescription_preview
+            result = prescription_preview({'workouts':[{'workout_id':row['id'],'expected_revision':row['revision']}],
+                'sets':int(sets[1]), **({'rest_seconds':int(rest[1])} if rest else {})}, path, now)
+            return result
+    if action=='adjust':
+        from .strength_exercise_edits import requested,from_message,preview as exercise_preview
+        if requested(message):return exercise_preview({'workouts':[{'workout_id':row['id'],'expected_revision':row['revision']}],
+                                                     'exercise':from_message(message)},path,now)
+    result = propose(message, path, now, selected_id=row['id'], source_id=arguments.get('source_workout_id'), manual_override=manual_override)
     result['request'] = PREFIX + encoded(arguments)
     return result
 

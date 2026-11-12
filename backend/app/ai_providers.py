@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from pathlib import Path
 from typing import Protocol
 from urllib.error import HTTPError, URLError
@@ -27,6 +28,40 @@ def shared_allowance_message(error):
 
 class AIProvider(Protocol):
     def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str: ...
+    def respond(self, messages: list, instructions: str, tools: list, *, timeout_seconds: float = 120) -> dict: ...
+
+
+def response_tools(definitions):
+    return [{'type': 'function', 'name': d['name'], 'description': d['description'],
+             'parameters': d['input_schema'], 'strict': False} for d in definitions]
+
+
+def response_result(items, text=''):
+    """Normalize native Responses items without discarding opaque reasoning state."""
+    output, calls, content = [], [], []
+    for item in items or []:
+        value = item if isinstance(item, dict) else item.model_dump(exclude_none=True)
+        output.append(value)
+        if value.get('type') == 'function_call':
+            arguments = value.get('arguments', '{}')
+            if isinstance(arguments, str):
+                try:
+                    arguments = json.loads(arguments)
+                except json.JSONDecodeError:
+                    # Deliver invalid tool arguments to the validator as data,
+                    # so the model can correct this one call without losing the turn.
+                    arguments = None
+            calls.append({'id': value['call_id'], 'name': value['name'], 'arguments': arguments})
+        elif value.get('type') == 'message':
+            content.extend(part.get('text', '') for part in value.get('content', []) if part.get('type') == 'output_text')
+    return {'reply': text or ''.join(content), 'calls': calls, 'messages': output, 'transport': 'responses'}
+
+
+def tool_result_message(call, result, transport='responses'):
+    serialized = json.dumps(result, ensure_ascii=False, separators=(',', ':'), default=str)
+    if transport == 'ollama':
+        return {'role': 'tool', 'tool_name': call['name'], 'content': serialized}
+    return {'type': 'function_call_output', 'call_id': call['id'], 'output': serialized}
 
 
 def _model_name(value: object, field: str) -> str:
@@ -137,6 +172,23 @@ class OllamaProvider:
     def __init__(self, model: str) -> None:
         self.model = model
 
+    def respond(self, messages, instructions, tools, *, timeout_seconds=120):
+        from .agent_runtime import CURRENT, observe
+        runtime = CURRENT.get()
+        payload = {'model': self.model, 'stream': False,
+            'messages': [{'role': 'system', 'content': instructions}, *messages],
+            'tools': [{'type': 'function', 'function': {'name': d['name'], 'description': d['description'], 'parameters': d['input_schema']}} for d in tools]}
+        if runtime:
+            payload['options'] = {'num_predict': runtime.output_limit}
+        request = Request(f'{OLLAMA_BASE_URL}/api/chat', data=json.dumps(payload).encode(), headers={'Content-Type': 'application/json'}, method='POST')
+        with urlopen(request, timeout=timeout_seconds) as response:
+            value = json.loads(response.read().decode())
+        if type(value.get('prompt_eval_count')) is int:
+            observe({'input_tokens': value['prompt_eval_count'], 'output_tokens': value.get('eval_count', 0)})
+        message = value['message']
+        calls = [{'id': str(uuid.uuid4()), 'name': c['function']['name'], 'arguments': c['function'].get('arguments', {})} for c in message.get('tool_calls', [])]
+        return {'reply': message.get('content') or '', 'calls': calls, 'messages': [message], 'transport': 'ollama'}
+
     def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str:
         from .agent_runtime import CURRENT
         runtime=CURRENT.get()
@@ -170,6 +222,16 @@ class OpenAIProvider:
             raise RuntimeError("OPENAI_API_KEY is not configured")
         self.model = model
 
+    def respond(self, messages, instructions, tools, *, timeout_seconds=120):
+        from .agent_runtime import output_options, observe
+        response = OpenAI(timeout=timeout_seconds, max_retries=0).responses.create(
+            model=self.model, instructions=instructions, input=messages,
+            tools=response_tools(tools), store=False, **output_options())
+        observe(getattr(response, 'usage', None))
+        if getattr(response, 'status', 'completed') != 'completed':
+            raise RuntimeError('The model response did not complete.')
+        return response_result(response.output, getattr(response, 'output_text', ''))
+
     def generate(self, prompt: str, instructions: str, *, timeout_seconds: float = 120) -> str:
         from .agent_runtime import output_options,observe
         response = OpenAI(timeout=timeout_seconds, max_retries=0).responses.create(
@@ -200,6 +262,35 @@ def active_provider(path: Path | None = None) -> AIProvider:
 
 class ChatGPTProvider:
     def __init__(self,model,path=None):self.model=model;self.path=path
+    def respond(self, messages, instructions, tools, *, timeout_seconds=120):
+        from .chatgpt_auth import access_token
+        from .agent_runtime import output_options, observe
+        if not self.model:
+            raise RuntimeError('Select a ChatGPT model in Settings.')
+        client = OpenAI(api_key=access_token(self.path), base_url='https://api.openai.com/v1', timeout=timeout_seconds, max_retries=0)
+        reasoning = {'reasoning': {'effort': 'low'}} if '-sol' in self.model else {}
+        items, text, completed = [], [], False
+        for event in client.responses.create(model=self.model, instructions=instructions, input=messages,
+                tools=response_tools(tools), store=False, stream=True, **reasoning, **output_options()):
+            if event.type == 'response.output_text.delta':
+                text.append(event.delta)
+            elif event.type == 'response.output_item.done':
+                items.append(event.item)
+            elif event.type == 'response.completed':
+                completed = True
+                response = getattr(event, 'response', None)
+                observe(getattr(response, 'usage', None))
+                # Some subscription streams have metadata-only terminal events.
+                # Use streamed items in that case, retaining function calls and reasoning.
+                final = getattr(response, 'output', None)
+                if final:
+                    items = final
+            elif event.type in {'response.failed', 'response.incomplete', 'error'}:
+                raise RuntimeError('ChatGPT request failed or was incomplete. Check account access and usage in Settings.')
+        if not completed:
+            raise RuntimeError('ChatGPT stream ended before completion.')
+        return response_result(items, ''.join(text))
+
     def generate(self,prompt,instructions,*,timeout_seconds=120):
         from .chatgpt_auth import access_token
         if not self.model:raise RuntimeError('Select a ChatGPT model in Settings.')

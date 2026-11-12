@@ -52,9 +52,9 @@ CASES=[
  ('Increase cycling time this week by 20%','not_recommended'),
  ('Make Friday a longer ride','not_recommended'),
  ('Add more time to my weekly training','not_recommended'),
- ('Give me sprint training today','not_recommended'),
- ('Can we do anaerobic intervals today?','not_recommended'),
- ('Give me spritns today','not_recommended'),
+ ('Give me sprint training today','proposal'),
+ ('Can we do anaerobic intervals today?','proposal'),
+ ('Give me spritns today','proposal'),
  ('Make tomorrow easier','needs_input'),
  ('Make next week lighter','needs_input'),
  ('I only have 5 minutes today','needs_input'),
@@ -111,6 +111,11 @@ class TrainingAdjustmentQC(unittest.TestCase):
                 proposal=propose(message,path,NOW)
                 self.assertEqual(proposal['status'],expected,proposal)
                 self.assertEqual(before,list_training(path),'Preview must not write')
+                if index in (35,36,37):
+                    definition=proposal['adjustments'][0]['changes']['definition']
+                    self.assertEqual(definition['workout_kind'],'anaerobic' if index==36 else 'sprint')
+                    self.assertEqual(proposal['policy']['level'],'normal')
+                    self.assertTrue(proposal['policy']['quality_allowed'])
                 if expected=='proposal':
                     saved=save({'message':message,'fingerprint':proposal['fingerprint']},path,NOW)
                     self.assertEqual(saved['count'],len(proposal['adjustments']))
@@ -153,6 +158,24 @@ class TrainingAdjustmentQC(unittest.TestCase):
             state=json.loads(c.execute('SELECT state_json FROM active_training_program').fetchone()[0]);state['blocks'][0]['phase']='Recovery / review'
             c.execute('UPDATE active_training_program SET state_json=?',(encoded(state),))
         self.assertIn('recovery',propose('Make today harder',self.path,NOW)['message'])
+
+    def test_sprint_requests_yield_to_fatigue_load_and_deliberate_recovery(self):
+        before=list_training(self.path)
+        for message in ('I am exhausted but give me sprint training today',
+                        'I am sore but want anaerobic intervals today'):
+            with self.subTest(message=message):
+                self.assertEqual(propose(message,self.path,NOW)['status'],'not_recommended')
+        with patch('app.training_load_charts.daily_rows',return_value=[{'date':NOW.date().isoformat(),'acute':800,'high':400}]):
+            self.assertEqual(propose('Give me sprint training today',self.path,NOW)['status'],'not_recommended')
+        with connect(self.path) as c:
+            state=json.loads(c.execute('SELECT state_json FROM active_training_program WHERE id=1').fetchone()[0])
+            state['blocks'][0]['phase']='Recovery / review'
+            c.execute('UPDATE active_training_program SET state_json=? WHERE id=1',(encoded(state),))
+        result=propose('Give me sprint training today',self.path,NOW)
+        self.assertEqual(result['status'],'not_recommended')
+        self.assertIn('phase',result['message'])
+        self.assertNotIn('two tolerated',result['message'])
+        self.assertEqual(before,list_training(self.path),'A rejected request must preserve every workout')
 
     def test_no_active_plan_and_ambiguous_session(self):
         with connect(self.path) as c:c.execute("UPDATE active_training_program SET status='paused'")

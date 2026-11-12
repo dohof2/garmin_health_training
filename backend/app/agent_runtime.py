@@ -14,8 +14,8 @@ class Runtime:
     def __init__(self):
         self.kind = 'conversation'
         self.output_limit = 6000
-        self.input_limit = 100000
-        self.call_limit = 14
+        self.input_limit = 125000
+        self.call_limit = 16
         self.output_ceiling = 24000
         self.usage = {k: 0 for k in ('model_calls', 'input_estimate', 'output_estimate',
                                     'input_tokens', 'output_tokens', 'reasoning_tokens', 'usage_reported')}
@@ -65,6 +65,12 @@ class BudgetedProvider:
         self.runtime.reserve(prompt, instructions)
         result = self.provider.generate(prompt, instructions, timeout_seconds=timeout_seconds)
         self.runtime.usage['output_estimate'] += math.ceil(len(result.encode()) / 2)
+        return result
+
+    def respond(self, messages, instructions, tools, *, timeout_seconds=120):
+        self.runtime.reserve({'messages': messages, 'tools': tools}, instructions)
+        result = self.provider.respond(messages, instructions, tools, timeout_seconds=timeout_seconds)
+        self.runtime.output(json.dumps({'reply': result.get('reply'), 'calls': result.get('calls')}, ensure_ascii=False))
         return result
 
 

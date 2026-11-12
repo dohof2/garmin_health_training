@@ -134,7 +134,9 @@ def _target_for_day(c,day,timezone_name):
     target=c.execute('SELECT * FROM nutrition_targets WHERE effective_from<=? ORDER BY effective_from DESC,revision DESC,created_at DESC,rowid DESC LIMIT 1',(day,)).fetchone()
     if not target:return None
     result=dict(target);assumptions=json.loads(result['assumptions_json'])
-    training=any(datetime.fromisoformat(r['scheduled_for'].replace('Z','+00:00')).astimezone(zone(timezone_name)).date().isoformat()==day for r in c.execute("SELECT scheduled_for FROM planned_workouts WHERE scheduled_for IS NOT NULL AND completion_status NOT IN ('cancelled','skipped') AND training_plan_id IN (SELECT id FROM training_plans WHERE status='active')"))
+    from .training_accounting import counts_toward_plan, session_day
+    today=datetime.now(zone(timezone_name)).date()
+    training=any(counts_toward_plan(dict(r),today,timezone_name) and session_day(dict(r),timezone_name).isoformat()==day for r in c.execute("SELECT * FROM planned_workouts WHERE scheduled_for IS NOT NULL AND completion_status IN ('planned','completed') AND training_plan_id IN (SELECT id FROM training_plans WHERE status='active')"))
     result['day_type']='training' if training else 'rest'
     if training and assumptions.get('training_calories_kcal') is not None:result['calories_kcal']=assumptions['training_calories_kcal']
     result['assumptions']=assumptions

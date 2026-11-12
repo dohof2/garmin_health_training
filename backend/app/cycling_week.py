@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from itertools import combinations
 from zoneinfo import ZoneInfo
 
-POLICY='cycling-week-v2-two-intervals'
+POLICY='cycling-week-v3-deload-endurance'
 QUALITY={'tempo','threshold','vo2','short_efforts','sprint','anaerobic','long_tempo'}
 EASY_PHASES={'Recovery / review','Freshen up','Post-event recovery','Race week','Outside plan'}
 LABELS={'TEMPO':'tempo','THRESHOLD':'threshold','LACTATE_THRESHOLD':'threshold',
@@ -38,7 +38,8 @@ def assignments(c,entries,week,today,now,tz,brief,block,recovery,focus,priority_
     from .training_prescriptions import cycling_mix
     actual=observations(c,today,now,tz)
     end=week+timedelta(days=7)
-    rows=[e for e in entries if e['sport']=='cycling' and week<=e['day']<end and e.get('status','planned') in ('planned','completed')]
+    entries=[e for e in entries if e.get('status','planned')=='completed' or e.get('status','planned')=='planned' and e['day']>=today]
+    rows=[e for e in entries if e['sport']=='cycling' and week<=e['day']<end]
     editable=[e for e in rows if e['mutable'] and e.get('status','planned')=='planned' and e['day']>=today]
     locked=[e for e in rows if e not in editable]
     hard_days={r['day'] for r in actual if r['hard']}
@@ -117,15 +118,15 @@ def assignments(c,entries,week,today,now,tz,brief,block,recovery,focus,priority_
         kind=min(set(rotation),key=rank);targets[entry['id']]=kind;used.add(kind)
         used_families.add('anaerobic' if kind in ('sprint','anaerobic','short_efforts') else 'high_aerobic')
     if not normal:
-        targets={key:'recovery' for key in targets}
-    else:
-        for entry in editable:
-            if entry['day']<=today+timedelta(days=1) and recovery['level'] in ('easy','recovery','hold'):
-                targets[entry['id']]='recovery' if recovery['level'] in ('recovery','hold') else 'endurance'
-    evidence={'policy':POLICY,'aim':{'intervals':2,'long':1,'long_optional':True,'base':1},'phase':block.get('phase'),
+        targets={key:'endurance' for key in targets}
+    # A deload block is base riding, not an acute recovery prescription.
+    for entry in editable:
+        if entry['day']<=today+timedelta(days=1) and recovery['level'] in ('easy','recovery','hold'):
+            targets[entry['id']]='recovery' if recovery['level'] in ('recovery','hold') else 'endurance'
+    evidence={'policy':POLICY,'aim':{'intervals':limit,'long':1 if normal else 0,'long_optional':True,'base':1},'phase':block.get('phase'),
               'recorded_hard_this_week':hard_count,'selected_intervals':len(selected),
               'recent_activity_ids':[r['id'] for r in actual],'load_focus_status':focus.get('status'),
-              'reason':'Aim for two separated intervals and one base ride, plus a desirable optional long ride when it fits; actual riding, recovery, block and available time can reduce the target.'}
+              'reason':('Reduced block: preserve base ride duration and omit VO₂, threshold and sprint intervals. Acute recovery rides depend on current recovery needs.' if block.get('phase') in EASY_PHASES else 'Aim for two separated intervals and one base ride, plus a desirable optional long ride when it fits; actual riding, recovery, block and available time can reduce the target.')}
     return targets,evidence
 
 
@@ -136,7 +137,7 @@ def apply_definition(c,definition,kind,brief,today,tz,focus,evidence):
     variant,selection=select(c,kind,today,tz,kind in QUALITY)
     result=endurance(kind,definition['duration_minutes'],brief,today=today,variant=variant)
     result=adjust_workout(result,focus)
-    for key in ('scheduled_date','time_unspecified','schedule_timezone','training_block','schedule_slot_id','schedule_slot_label','duration_guidance','planning_policy_version'):
+    for key in ('scheduled_date','time_unspecified','schedule_timezone','training_block','schedule_slot_id','schedule_slot_label','duration_guidance','planning_policy_version','daily_base_definition'):
         if key in definition:result[key]=definition[key]
     result.update(variant_selection=selection,weekly_mix=evidence)
     result['rationale'].append(evidence['reason'])

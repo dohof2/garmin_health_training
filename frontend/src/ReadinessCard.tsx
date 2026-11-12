@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import {coalescedFetch} from './request';
+import { useEffect, useId, useRef, useState } from "react";
 import StatusDial, { readinessBands } from "./StatusDial";
 
 type Reading = { value: number; unit: string; wake_date: string; source_name: string } | null;
@@ -58,6 +59,11 @@ const labels: Record<string, string> = {
   load_ratio_threshold:"Load-ratio soft threshold",chronic_load_floor:"Minimum stable chronic load",
   sleep_recovery_fraction:"Sleep correction fraction (experimental)",sleep_recovery_cap_hours:"Sleep correction cap (hours per night)",
 };
+export function readinessTime(timestamp:string,timezone:string) {
+  const normalized=timestamp.replace(' ','T');
+  const instant=new Date(/(?:Z|[+-]\d{2}:?\d{2})$/i.test(normalized)?normalized:`${normalized}Z`);
+  return Number.isNaN(instant.getTime())?'Time unavailable':instant.toLocaleTimeString([],{timeZone:timezone,hour:'2-digit',minute:'2-digit'});
+}
 function value(result: Result) {
   if (result.score !== null) return `${result.score} / 100`;
   if (result.score_range) return `${result.score_range.low}–${result.score_range.high} / 100`;
@@ -74,7 +80,9 @@ function RecoverySummary({recovery,projected=false}:{recovery:Recovery;projected
   </div>;
 }
 
-export function ReadinessCard({ timezone, refreshToken }: { timezone: string; refreshToken: string }) {
+export type ReadinessSignals = {date:string;hrv:number|null;sleepScore:number|null};
+export function ReadinessCard({ timezone, refreshToken, compact = false, onSignals }: { timezone: string; refreshToken: string; compact?: boolean; onSignals?:(signals:ReadinessSignals|null)=>void }) {
+  const explanationTitle = useId();
   const [clock,setClock]=useState(()=>Date.now());
   useEffect(()=>{const timer=window.setInterval(()=>setClock(Date.now()),60000);return()=>window.clearInterval(timer);},[]);
   const today = new Intl.DateTimeFormat("en-CA", { timeZone: timezone, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(clock));
@@ -112,17 +120,17 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
   useEffect(() => {
     const controller = new AbortController();
     setLoading(true); setError(null);setForecastError(null);setForecast(null);setData(previous=>previous?.latest.date===selectedDate?previous:null);
-    const current=fetch(`/api/readiness?end_date=${selectedDate}&days=14&timezone=${encodeURIComponent(timezone)}`, { signal: controller.signal, cache: "no-store" })
+    const current=coalescedFetch(`/api/readiness?end_date=${selectedDate}&days=14&timezone=${encodeURIComponent(timezone)}`, { signal: controller.signal, cache: "no-store" })
       .then(async response => {
         if (!response.ok) throw new Error("Readiness could not be loaded.");
         return response.json() as Promise<Response>;
       })
       ;
-    const projection=selectedDate===today ? fetch(`/api/readiness/forecast?timezone=${encodeURIComponent(timezone)}`,{signal:controller.signal,cache:"no-store"}).then(async response=>{if(!response.ok) throw new Error('Tomorrow’s readiness forecast could not be loaded.');return response.json() as Promise<Forecast>;}).catch(error=>{if(!controller.signal.aborted&&error.name!=='AbortError')setForecastError(error.message);return null;}) : Promise.resolve(null);
+    const projection=selectedDate===today && !compact ? coalescedFetch(`/api/readiness/forecast?timezone=${encodeURIComponent(timezone)}`,{signal:controller.signal,cache:"no-store"}).then(async response=>{if(!response.ok) throw new Error('Tomorrow’s readiness forecast could not be loaded.');return response.json() as Promise<Forecast>;}).catch(error=>{if(!controller.signal.aborted&&error.name!=='AbortError')setForecastError(error.message);return null;}) : Promise.resolve(null);
     void current.then(result=>{if(controller.signal.aborted)return;setData(result);setDraft(result.settings.parameters);}).catch(error=>{if(!controller.signal.aborted&&error.name!=='AbortError')setError(error.message);}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});
     void projection.then(value=>{if(!controller.signal.aborted)setForecast(value);});
     return () => controller.abort();
-  }, [selectedDate, today, timezone, refreshToken, revision, Math.floor(clock/300000)]);
+  }, [selectedDate, today, timezone, refreshToken, revision, compact, Math.floor(clock/300000)]);
   useEffect(()=>{if(data?.latest.status==='awaiting_morning'&&clock>=Date.parse(data.latest.cutoff))setRevision(r=>r+1);},[clock,data?.latest.cutoff,data?.latest.status]);
   const save = async (event: React.FormEvent) => {
     event.preventDefault(); setSaving(true); setError(null);
@@ -134,35 +142,36 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
     finally { setSaving(false); }
   };
   const result = data?.latest;
+  useEffect(() => { onSignals?.(result ? {date:result.date,hrv:result.inputs.hrv?.value??null,sleepScore:result.inputs.sleep_score?.value??null} : null); }, [result,onSignals]);
   const rhr=result?.inputs.rhr_selection?result.inputs.rhr:result?.inputs.rhr??result?.inputs.rhr_previous_day;
   const rhrSelection=result?.inputs.rhr_selection;
   const rhrLabel=rhrSelection?.kind==='same_day'?'Same-day resting heart rate':rhrSelection?.kind==='projected'?'Projected resting heart rate':rhrSelection?.kind==='missing'?'Resting heart rate unavailable':'Previous-day resting heart rate (fallback)';
   if(result&&result.formula_version!=='readiness-v7')return <section className="readiness-today"><h3>Readiness update ready</h3><p>Quit and reopen the app to load the new readiness calculation and forecast.</p></section>;
-  return <>
+  return <div className={compact ? "journal-readiness" : "readiness-full"}>
     <div className="readiness-overview"><section className="readiness-today" aria-label={selectedDate===today?"Today’s measured readiness":"Selected day’s measured readiness"}>
     <div className="readiness-card-heading"><h3 className="readiness-day-title">{selectedDate===today?"Today’s readiness":"Recorded readiness"}</h3><button type="button" className="readiness-info-button" aria-label="Explain today's readiness" onClick={()=>setExplanation('today')}>i</button></div>
     <p className="readiness-compact-meta">{selectedDate} · App estimate</p>
-    {result ? <StatusDial
+    {compact ? <><p className="journal-readiness-value">{result ? result.score !== null ? result.score : result.score_range ? `${result.score_range.low}–${result.score_range.high}` : "—" : loading ? "…" : "—"}{result && (result.score !== null || result.score_range) && <small> / 100</small>}</p><p className="journal-readiness-label">{result ? result.score !== null ? result.score < 50 ? "Recovery focus" : result.score < 80 ? "Ready with care" : "Well prepared" : result.score_range ? "Incomplete evidence · possible range" : result.status === "awaiting_morning" ? "Awaiting morning measurements" : "Insufficient data" : error ? "Unavailable" : "Loading today’s estimate…"}</p>{result && <small className="journal-readiness-freshness">Calculated {readinessTime(result.calculated_at,timezone)} · {result.data_quality} data</small>}</> : result ? <StatusDial
       value={result.score !== null ? String(result.score) : result.score_range ? `${result.score_range.low}–${result.score_range.high}` : '—'}
       unit="/ 100" bands={readinessBands}
       position={result.score !== null ? result.score / 100 : null}
       range={result.score === null && result.score_range ? { low: result.score_range.low / 100, high: result.score_range.high / 100 } : null}
       interpretation={result.score !== null ? result.score < 50 ? 'Recovery focus · prioritize rest or an easy session.' : result.score < 80 ? 'Ready with care · keep the session manageable.' : 'Well prepared · measured recovery signals are favorable.' : result.score_range ? 'Possible range for this day · incomplete measurements prevent a single score.' : result.status === 'awaiting_morning' ? 'Awaiting morning measurements' : 'Not enough data to assess readiness'}
     /> : <h3>{loading ? 'Loading…' : '—'}</h3>}
-    {result && result.score===null && result.score_range && <p className="readiness-range-key">Outer arc: possible readiness <strong>{result.score_range.low}–{result.score_range.high} / 100</strong> for {result.date}. These are the lower and upper bounds for the same day.</p>}
+    {!compact && result && result.score===null && result.score_range && <p className="readiness-range-key">Outer arc: possible readiness <strong>{result.score_range.low}–{result.score_range.high} / 100</strong> for {result.date}. These are the lower and upper bounds for the same day.</p>}
     {loading&&result&&<p role="status">Refreshing readiness…</p>}
     {error && <p role="alert" className="form-error">{error}</p>}
     </section>
-    {forecastError&&<p role="alert">{forecastError}</p>}
-    {forecast&&selectedDate===today&&!loading&&<section className="readiness-forecast" aria-label="Tomorrow’s projected training readiness">
+    {!compact&&forecastError&&<p role="alert">{forecastError}</p>}
+    {!compact&&forecast&&selectedDate===today&&!loading&&<section className="readiness-forecast" aria-label="Tomorrow’s projected training readiness">
       <div className="readiness-card-heading"><h3 className="readiness-day-title">Tomorrow’s forecast</h3><button type="button" className="readiness-info-button" aria-label="Explain tomorrow's forecast" onClick={()=>setExplanation('forecast')}>i</button></div>
       <p className="readiness-compact-meta">{forecast.date} · Projection</p>
       {forecast.score!==null ? <StatusDial value={String(forecast.score)} unit="/ 100 · forecast" bands={readinessBands} position={forecast.score/100} interpretation={forecast.score<50?'Projected recovery focus':forecast.score<80?'Projected ready with care':'Projected favorable recovery signals'}/> : <p>{forecast.reason??'Not enough history to project tomorrow.'}</p>}
       {forecast.range&&<p className="readiness-compact-meta">Expected range: <strong>{forecast.range.low}–{forecast.range.high} / 100</strong></p>}
     </section>}
     </div>
-    <dialog ref={explanationDialog} className="readiness-modal" aria-labelledby="readiness-explanation-title" onClose={()=>setExplanation(null)}>
-      <div className="readiness-modal-heading"><h3 id="readiness-explanation-title">{explanation==='forecast'?"Tomorrow’s forecast explained":"Today’s readiness explained"}</h3><button type="button" aria-label="Close readiness explanation" onClick={()=>setExplanation(null)}>Close</button></div>
+    <dialog ref={explanationDialog} className="readiness-modal" aria-labelledby={explanationTitle} onClose={()=>setExplanation(null)}>
+      <div className="readiness-modal-heading"><h3 id={explanationTitle}>{explanation==='forecast'?"Tomorrow’s forecast explained":"Today’s readiness explained"}</h3><button type="button" aria-label="Close readiness explanation" onClick={()=>setExplanation(null)}>Close</button></div>
       {explanation==='today'&&<><p>{result?.date} · {timezone}</p>
     {result && <>
       <p><strong>{Math.round(result.groups.reduce((sum,group)=>sum+group.penalty_min,0))} points deducted</strong>{result.score===null?' from the available evidence; missing inputs leave the final score uncertain.':` · ${result.score} / 100 remaining.`}</p>
@@ -195,7 +204,7 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
       </>}
     </dialog>
     <button type="button" disabled={loading} onClick={()=>setRevision(r=>r+1)}>Refresh readiness</button>
-    <details className="readiness-details">
+    <details className="readiness-details" hidden={compact}>
       <summary>Why this result? View trend and assumptions</summary>
       <label>Morning date <input aria-label="Readiness morning date" type="date" max={today} value={selectedDate} onChange={event => { if (event.target.value) setSelectedDate(event.target.value); }} /></label>
       {selectedDate !== today && <button type="button" onClick={() => setSelectedDate(today)}>Return to today</button>}
@@ -238,5 +247,5 @@ export function ReadinessCard({ timezone, refreshToken }: { timezone: string; re
         <small>{result.formula_version} · {result.calculation_id!=null?`calculation ${result.calculation_id}`:'Calculated from current data · history save pending'} · {result.config_version}</small>
       </>}
     </details>
-  </>;
+  </div>;
 }

@@ -11,6 +11,8 @@ from .training import encoded, _snapshot, _revision
 
 def requested(message):
     text=message.lower().replace('-', ' ')
+    from .training_replacements import requested as replacement_requested
+    if replacement_requested(text):return False
     if re.search(r"do not remove|don.t remove|keep (?:the )?(?:warm\s*up|cool\s*down)",text):return False
     return bool(re.search(r'warm\s*up|cool\s*down|continuous|single block',text) and
                 re.search(r'\b(endurance|edurance|steady|base|recovery|easy)\b',text) and

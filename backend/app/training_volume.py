@@ -82,10 +82,21 @@ def estimates(c,answers,brief,today,tz):
   estimate=max(20 if sport=='cycling' else 15,round((baseline+increment)*(REDUCTIONS['recovery'] if adverse or elevated else 1)))
   cap,cap_source=optional_cap(answers,sport);effective=min(available,cap if cap is not None else 5040,estimate)
   explicit_range=answers.get('weekly_caps',{}).get(sport) or {}
+  if sport=='strength' and explicit_range.get('range_min_minutes') is None:
+   program=c.execute("SELECT state_json FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+   state=json.loads(program[0]) if program else {}
+   allowance=state.get('strength_set_policy',{}).get('weekly_allowance_minutes')
+   if allowance and brief.get('program_start')==state.get('starts_on'):
+    if cap is not None:allowance=min(allowance,cap)
+    explicit_range={'max_minutes':allowance,'range_min_minutes':allowance};cap=allowance;cap_source='approved_strength_progression'
   confirmed_range=explicit_range.get('range_min_minutes') is not None and not adverse and not elevated and not recovery_week and not answers.get('pain_or_illness')
   # A deliberately confirmed range is a user-chosen allowance, not automatic
   # growth from elapsed weeks. Recovery/taper reductions still take priority.
   if confirmed_range:effective=min(available,explicit_range['max_minutes'])
+  confirmed_strength=sport=='strength' and explicit_range.get('range_min_minutes') is not None and not answers.get('pain_or_illness')
+  if confirmed_strength:
+   confirmed_range=True
+   effective=min(available,round(explicit_range['max_minutes']*(.7 if adverse or elevated else 1)))
   durations=[row['minutes'] for row in selected if row['date']>=(today-timedelta(days=28)).isoformat()];longs=[minutes for minutes in durations if minutes>=90] if sport=='cycling' else durations
   long_weeks={date.fromisoformat(row['date']).isocalendar()[:2] for row in selected if row['date']>=(today-timedelta(days=28)).isoformat() and row['minutes']>=90}
   long=min(estimate,round(median(longs) if len(longs)>=3 and (sport!='cycling' or len(long_weeks)>=2) else median(durations) if len(durations)>=3 else min(durations+[60 if sport=='cycling' else 30])))
@@ -94,6 +105,27 @@ def estimates(c,answers,brief,today,tz):
   if sport=='cycling' and len(longs)==2 and len(long_weeks)>=2:
    long=min(estimate,round(min(longs)))
   if sport=='strength' and not selected:long=min(30,estimate)
+  if confirmed_strength:
+   slots=sum(slot['sport']=='strength' for day in days if day['mode']=='training' for slot in day['activities'])
+   long=min(effective,max(20,round(explicit_range['max_minutes']/max(1,slots))))
+  if sport=='strength' and not adverse and not elevated and not answers.get('pain_or_illness'):
+   program=c.execute("SELECT plan_id FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+   if program:
+    overrides=c.execute("""SELECT json_extract(w.definition_json,'$.strength_week_override.minutes') AS minutes
+     FROM planned_workouts w JOIN training_plans p ON p.id=w.training_plan_id
+     WHERE p.deleted_at IS NULL AND w.completion_status IN ('planned','completed')
+     AND json_extract(w.definition_json,'$.strength_week_override.root_plan_id')=?
+     AND json_extract(w.definition_json,'$.strength_week_override.week_start')=?
+     AND (p.id=? OR json_extract(p.context_json,'$.program_id')=?)""",(program[0],week_start.isoformat(),program[0],program[0])).fetchall()
+    requested=max((r['minutes'] for r in overrides if type(r['minutes']) in (int,float)),default=0)
+    hard_cap,_=optional_cap(answers,sport)
+    effective=min(available,hard_cap if hard_cap is not None else 5040,max(effective,requested))
+  duration_program=c.execute("SELECT state_json FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+  duration_state=json.loads(duration_program[0]) if duration_program else {}
+  if brief.get('program_start')==duration_state.get('starts_on'):
+   dated_allowance=duration_state.get('duration_week_allowances',{}).get(week_start.isoformat()+':'+sport,0)
+   plan_allowance=duration_state.get('duration_plan_allowances',{}).get(sport,0)
+   effective=max(effective,dated_allowance,round(plan_allowance*(.7 if adverse or elevated or recovery_week else 1)))
   result[sport]={'policy_version':POLICY_VERSION,'estimate_minutes':estimate,'effective_ceiling_minutes':effective,'availability_ceiling_minutes':available,'optional_cap_minutes':cap,'cap_source':cap_source,'baseline_minutes':baseline,'weekly_reference':reference,'increment_minutes':increment,'long_session_minutes':long,'evidence_window':{'start':begin.isoformat(),'end':today.isoformat()},'weeks':weeks,'recorded_activity_count':len(selected),'status':'history_based' if len(observed)>=2 else 'provisional','load':{'status':load_status,'latest':latest,'scope':'overall_mixed_sport','chronic_rising':chronic_rising,'note':'Recorded load is not converted into sport minutes or split between sports.'},'progression':{'maximum_increase_percent':20 if sport=='cycling' else None,'reference':'completed_four_week_average','recovery_week':recovery_week,'requires_recorded_tolerance':True},'factors':{'adverse_feedback':adverse,'tolerated_completions':len(tolerance),'reduction':REDUCTIONS['recovery'] if adverse or elevated else 1},'rationale':'Weekly baseline uses the average of up to four completed seven-day periods, excluding today; unknown weeks are not counted as zero. Available minutes and optional caps are ceilings. Completed sport-specific volume and tolerance determine this provisional estimate; Cycling can add up to 20% above this baseline only with tolerated completions and normal load, never in recovery/taper weeks; elapsed plan weeks alone do not cause growth.'}
   result[sport]['explicit_weekly_range']=explicit_range if confirmed_range else None
   if confirmed_range:result[sport]['rationale']+=' The user-confirmed weekly range supplies a separate allowance; the historical estimate remains a reference, not a hidden cap on that explicit instruction.'

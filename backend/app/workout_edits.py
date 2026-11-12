@@ -47,7 +47,17 @@ def widen_power_range(definition,message):
     return validate_workout(result),summary
 
 
+def interval_edit_requested(message):
+    """Identify the edited interval clause, not an endurance clause elsewhere."""
+    for clause in re.split(r'[.;\n]|\b(?:and|but|while)\b',message.lower()):
+        if re.match(r'\s*\d+\s*[x×]\s*\d',clause):return True
+        if not re.search(r'\b(?:change|set|use|make|increase|add|replace|progress)\b',clause):continue
+        if re.search(r'\d+\s*[x×]\s*\d|\b(?:reps?|repetitions?|interval count|work intervals?|work repetitions?)\b',clause):return True
+    return False
+
+
 def requested(message):
+    if interval_edit_requested(message):return True
     if widening_requested(message):return True
     if re.search(r'\b(building blocks?|training blocks?|phases?|weeks?)\b',message,re.I) and not re.search(r'\b(work interval|work block|step)\s+\d',message,re.I):return False
     return bool(re.search(r'\b(set|change|reduce|increase|make|use|replace)\b', message, re.I) and
@@ -58,13 +68,24 @@ def parse(message):
     text = message.lower().replace('–', '-').replace('×', 'x')
     if re.search(r"\b(don't|do not|without changing|leave unchanged|no changes)\b",text):raise EditError('No change prepared. State the values you want changed explicitly.')
     values = {}
+    def clock(value):
+        parts=[int(p) for p in value.split(':')]
+        return sum(n*60**i for i,n in enumerate(reversed(parts)))
+    # Workout clocks are durations, not a new target or an ambiguous repetition.
+    combo_clock=re.search(r'\b(\d+)\s*x\s*(\d+:[0-5]\d(?::[0-5]\d)?)\b',text)
     combo = re.search(r'\b(\d+)\s*x\s*(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?)\b', text)
-    if combo:
+    if combo_clock:
+        values.update(count=int(combo_clock[1]),work_seconds=clock(combo_clock[2]))
+    elif combo:
         values['count'] = int(combo[1])
         values['work_seconds'] = float(combo[2]) * (60 if combo[3].startswith('m') else 1)
     elif re.search(r'\b\d+\s*x',text):raise EditError('Specify intervals as a positive count × work time with seconds or minutes.')
     count = re.search(r'\b(?:to|use|make|with)\s+(\d+)\s+(?:work\s+)?(?:intervals?|reps?|repetitions?)\b|\b(?:reps?|repetitions?|interval count)\s+(?:to\s+)?(\d+)\b', text)
     if count: values['count'] = int(count[1] or count[2])
+    work_clock=re.search(r'\b(\d+:[0-5]\d(?::[0-5]\d)?)\s*(?:vo[₂2](?:\s*max)?\s+)?work\s+(?:repetition|interval|effort)\b',text)
+    if work_clock:values['work_seconds']=clock(work_clock[1])
+    recovery_clock=re.search(r'\b(\d+:[0-5]\d(?::[0-5]\d)?)\s*(?:easy\s+)?recover(?:y|ies)\b|\brecovery(?:\s+between\s+(?:intervals|efforts))?\s+(?:to\s+)?(\d+:[0-5]\d(?::[0-5]\d)?)\b',text)
+    if recovery_clock:values['recovery_seconds']=clock(recovery_clock[1] or recovery_clock[2])
     for key, noun in [('work_seconds', r'(?:work intervals?|work blocks?|work duration|each interval)'), ('recovery_seconds', r'(?:recovery between intervals|recoveries|recovery|rest)')]:
         match = re.search(r'\b' + noun + r'\s+(?:(?:duration|time)\s+)?(?:to\s+)?(\d+(?:\.\d+)?)\s*(seconds?|secs?|minutes?|mins?)\b', text)
         if match: values[key] = float(match[1]) * (60 if match[2].startswith('m') else 1)
@@ -125,7 +146,7 @@ def expanded_steps(steps,path=(),depth=0):
     return result
 
 
-def targeted_edit(definition,message,selector,policy,allow_increase):
+def targeted_edit(definition,message,selector,policy,allow_increase,manual_override=False):
     noun,path=selector[1].lower(),selector[2]
     body=message[:selector.start()]+('recovery' if noun.startswith('recovery') else 'work duration')+message[selector.end():]
     values=parse(body)
@@ -164,24 +185,29 @@ def targeted_edit(definition,message,selector,policy,allow_increase):
         changed|=step!=old
     if not changed:raise EditError('Those values already match the saved step.')
     new_work=work_seconds({'steps':steps})
-    if new_work>old_work*1.2:raise EditError('This exceeds the small-edit work-time limit; review a replacement week.','not_recommended')
-    if (new_work>old_work or target_increase) and (not allow_increase or policy['level']!='normal' or not policy['quality_allowed']):raise EditError('Increasing demand needs two tolerated completed sessions and recovery clearance.','not_recommended')
+    warnings=[]
+    if new_work>old_work*1.2:
+        if not manual_override:raise EditError('This exceeds the small-edit work-time limit; review a replacement week.','not_recommended')
+        warnings.append(f'Warning: hard interval work increases by {(new_work/old_work-1)*100:.1f}%, above the planner’s 20% limit. This may be too much; Save accepts your explicit manual override.')
+    if (new_work>old_work or target_increase) and (not allow_increase or policy['level']!='normal' or not policy['quality_allowed']):
+        if not manual_override or policy['level']=='hold':raise EditError('Increasing demand needs two tolerated completed sessions and recovery clearance.','not_recommended')
+        warnings.append('Warning: recorded tolerance, the training block or recovery guidance does not support automatic progression; this is a manual edit. '+ '; '.join(policy.get('reasons',[])))
     filler=next((s for s in steps if s.get('name')=='Steady endurance' and not any(s is item for item in selected)),None)
     if delta:
         if filler is None or filler['duration_seconds']*filler.get('repetitions',1)-delta<0:raise EditError('The change cannot preserve total duration with the available steady riding. Review a replacement session.')
         filler['duration_seconds']-=delta/filler.get('repetitions',1)
     result['steps']=[{k:v for k,v in s.items() if k!='_edit_path'} for s in steps if s['duration_seconds']>0]
     validate_workout(result)
-    summary=[f'{noun.title()} {path}: '+('; '.join(f"{s.get('name','Step')} · {duration_label(s['duration_seconds'])} · {target_text(s['target'])}" for s in selected))+'. Other blocks and total duration are preserved.']
+    summary=warnings+[f'{noun.title()} {path}: '+('; '.join(f"{s.get('name','Step')} · {duration_label(s['duration_seconds'])} · {target_text(s['target'])}" for s in selected))+'. Other blocks and total duration are preserved.']
     result.update(user_adjusted=True,variant_id=None,variant_label=None,edit_summary=summary)
     result['effort_target']={'method':result['steps'][0]['target']['type'],'description':'; '.join(f"{s.get('name','Step')}: {duration_label(s['duration_seconds'])} · {s['effort']}" for s in result['steps'])}
     return result,summary
 
 
-def edit(definition, message, policy, allow_increase=False):
+def edit(definition, message, policy, allow_increase=False, *, manual_override=False):
     if widening_requested(message):return widen_power_range(definition,message)
     selector=re.search(r'\b(work interval|work block|interval|recovery block|recovery|step|block)\s+(\d+(?:\.\d+)*)(?![\d.])',message,re.I)
-    if selector and definition['sport']!='strength':return targeted_edit(definition,message,selector,policy,allow_increase)
+    if selector and definition['sport']!='strength':return targeted_edit(definition,message,selector,policy,allow_increase,manual_override)
     values = parse(message)
     result = copy.deepcopy(definition)
     summary = []
@@ -200,6 +226,8 @@ def edit(definition, message, policy, allow_increase=False):
             if key == 'recovery_seconds' and values[key] < (old or 0): raise EditError('Keep the prescribed lifting rest; shortening it requires a progression review.', 'not_recommended')
             exercise[field] = values[key]
             summary.append(f"{exercise['name']} · {field.replace('_', ' ')}: {old} → {values[key]:g}")
+        from .training_notes import strength_timing
+        strength_timing(result,definition.get('strength_set_policy'))
         if values.get('count', 1) > 100: raise EditError('Choose at most 100 strength repetitions.')
     else:
         if set(values) & {'sets','load'}: raise EditError('Sets and lifting loads require a named strength exercise.')
@@ -217,8 +245,19 @@ def edit(definition, message, policy, allow_increase=False):
         if 'target' in values and (target['type'] != old_target['type'] or target['unit'] != old_target['unit']): raise EditError('Keep the current target method and units. Changing sensors or calibration requires a reviewed plan update.')
         density_increase = bool(recovery) and count>1 and rest < recovery[0]['duration_seconds'] * min(1,seconds / work[0]['duration_seconds'])
         increase = count * seconds > work_seconds(definition) or density_increase or target['upper'] > old_target['upper'] or target['lower'] > old_target['lower']
-        if increase and (not allow_increase or policy['level'] != 'normal' or not policy['quality_allowed']): raise EditError('This raises interval demand. Keep the current dose until two recent, completed sessions of this category have tolerated feedback and recovery permits progression.', 'not_recommended')
-        if count * seconds > work_seconds(definition) * 1.2 or target['upper'] > old_target['upper'] * 1.05 or target['lower'] > old_target['lower'] * 1.05 or density_increase: raise EditError('This exceeds the app’s small-edit limit or compresses recovery. Review a replacement week for this larger progression.', 'not_recommended')
+        old_work=work_seconds(definition);new_work=count*seconds
+        if new_work>old_work*1.2:
+            warning=f'Hard interval work changes from {duration_label(old_work)} to {duration_label(new_work)} (+{(new_work/old_work-1)*100:.1f}%), above the planner’s 20% limit.'
+            if not manual_override:raise EditError(warning+' Review an explicit manual override to proceed.','not_recommended')
+            summary.append('Warning: '+warning+' This may be too much; Save accepts your explicit manual override.')
+        if target['upper'] > old_target['upper'] * 1.05 or target['lower'] > old_target['lower'] * 1.05 or density_increase:raise EditError('This exceeds the target-increase limit or compresses between-effort recovery. Review a larger interval progression separately.','not_recommended')
+        if increase and (not allow_increase or policy['level'] != 'normal' or not policy['quality_allowed']):
+            reasons=[]
+            if not allow_increase:reasons.append('automatic progression requires two recent tolerated completions of this interval category and a suitable training block')
+            if policy['level']!='normal' or not policy['quality_allowed']:reasons.append('current recovery guidance recommends against increasing interval demand'+(': '+'; '.join(policy.get('reasons',[])) if policy.get('reasons') else ''))
+            if not manual_override or policy['level']=='hold':
+                raise EditError('Interval progression blocked: '+'; '.join(reasons)+'.','not_recommended')
+            summary.append('Warning: '+ '; '.join(reason.rstrip('.') for reason in reasons)+'. This is a manual edit, not automatic progression.')
         # Preserve all warm-up/cool-down instructions and adjust only the steady filler.
         filler = [s for s in result['steps'] if s['name'] == 'Steady endurance']
         fixed = [s for s in result['steps'] if not work_step(s) and not s['name'].lower().startswith('recovery') and s not in filler]

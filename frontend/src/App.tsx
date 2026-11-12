@@ -1,5 +1,9 @@
+import RecordedStrengthMuscles from './RecordedStrengthMuscles';
+import ActivityRouteMap from './ActivityRouteMap';
 import {plainChatText} from './chatText';
-import DashboardNutrition from './DashboardNutrition';
+import JournalDashboard from './JournalDashboard';
+import SettingsGroup from './SettingsGroup';
+import {pageIcons, ChatCircle, X} from './JournalIcons';
 import InfoPopover from './InfoPopover';
 import {chatDay as currentChatDay,pendingDraft,newDayNutrition,persistPendingDraft} from './dailyChat';
 import {coalescedFetch,invalidateReadRequests} from './request';
@@ -12,6 +16,8 @@ import WeightEntryDialog from './WeightEntryDialog';
 import TrainingEventProposal,{type EventProposal} from './TrainingEventProposal';
 import TrainingSetupProposal, {type Setup} from './TrainingSetupProposal';
 import TrainingAdjustmentProposal, {type Adjustment} from './TrainingAdjustmentProposal';
+import ChatEvidenceRecords,{evidenceDate,type EvidenceRecord} from './ChatEvidenceRecords';
+import ChatReviewBoundary from './ChatReviewBoundary';
 import FullActivityStats from './FullActivityStats';
 import {RemoveActivity,RemovedActivities} from './ActivityRemoval';
 import GraphCanvas, { api, AssistantPlots, type ChartResult, type ChartSpec } from "./GraphCanvas";
@@ -359,17 +365,7 @@ type ChatEvidence = {
     local_date: string;
     url: string;
   };
-  records?: Array<{
-    id: string;
-    name?: string;
-    activity_type: string;
-    local_date: string;
-    similarity_score?: number;
-    route_overlap_percent?: number;
-    direction?: string;
-    endpoint_distance_meters?: number;
-    url: string;
-  }>;
+  records?: EvidenceRecord[];
   course_progress?: null | {
     attempt_count: number;
     earliest: { id: string; local_date: string; evidence_url: string };
@@ -390,6 +386,7 @@ type ChatEvidence = {
 
 type TaskUsage={reasoning_tokens?:number;model_calls:number;input_estimate:number;output_estimate:number;input_tokens:number;output_tokens:number;usage_reported:number};
 type ChatMessage = {
+  operation_id?: string;
   workflow?:string;usage?:TaskUsage;skills?:string[];
   id: string;
   role: "user" | "assistant";
@@ -403,6 +400,14 @@ type ChatStreamEvent =
   | { type: "delta"; text: string }
   | { type: "complete"; provider: AiProviderName; model: string; evidence: ChatEvidence[];workflow?:string;usage?:TaskUsage;skills?:string[] }
   | { type: "error"; message: string };
+
+export function restoreChatReceipt(message: ChatMessage, events: ChatStreamEvent[]): ChatMessage {
+  const content = events.flatMap(event => event.type === 'delta' ? [event.text] : event.type === 'error' ? [event.message] : []).join('');
+  const evidence = events.flatMap(event => event.type === 'tool' ? [event.evidence] : []);
+  const complete = events.filter(event => event.type === 'complete').at(-1);
+  return {...message, content: content || 'This response was interrupted. Your saved results are retained.', evidence,
+    ...(complete?.type === 'complete' ? {workflow: complete.workflow, usage: complete.usage, skills: complete.skills} : {})};
+}
 
 type AppSettings = {
   profile: UserProfile;
@@ -517,12 +522,7 @@ const formatShortDate = (value: string) =>
     new Date(`${value}T00:00:00`),
   );
 
-const formatLongDate = (value: string) =>
-  new Intl.DateTimeFormat(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(`${value.slice(0, 10)}T00:00:00`));
+const formatLongDate = (value: unknown) => evidenceDate(value)??'Date unavailable';
 
 const formatSyncTime = (value: string) => {
   const timestamp = value.replace(' ', 'T');
@@ -743,6 +743,7 @@ function ActivityDetailPanel({
           </div>
         ))}
       </div>
+      {/strength|weight_training|resistance_training/i.test(activity.activity_type)?<RecordedStrengthMuscles key={activity.id} activityId={activity.id}/>:<ActivityRouteMap key={activity.id} activityId={activity.id} distanceUnit={distanceUnit}/>}
       <FullActivityStats activity={activity} timezone={timezone} refreshToken={refreshToken} footer={<RemoveActivity activity={activity} onChanged={onRemoved}/>}/>
     </div>
   );
@@ -762,6 +763,22 @@ function currentPage() {
 
 export default function App() {
   const [page, setPage] = useState(currentPage);
+  const navigation = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const revealCurrentPage = () => {
+      const nav = navigation.current;
+      const current = nav?.querySelector<HTMLElement>('[aria-current="page"]');
+      if (nav && current) nav.scrollTo({left: window.matchMedia('(max-width:700px)').matches ? Math.max(0,current.offsetLeft-16) : 0, behavior:'instant'});
+    };
+    revealCurrentPage(); window.addEventListener('resize',revealCurrentPage);
+    return () => window.removeEventListener('resize',revealCurrentPage);
+  }, [page]);
+  const [chatOpen, setChatOpen] = useState(false);
+  const chatDialog = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    if (chatOpen && !chatDialog.current?.open) { chatDialog.current?.showModal(); document.getElementById('chat-question')?.focus(); }
+    if (!chatOpen && chatDialog.current?.open) chatDialog.current.close();
+  }, [chatOpen]);
   useLayoutEffect(() => { window.scrollTo({ top: 0, behavior: "instant" }); }, [page]);
   const [graphVersion, setGraphVersion] = useState(0);
   useEffect(() => {
@@ -833,10 +850,39 @@ export default function App() {
   });
   const chatContext = useRef(initialChatContext);
   const [assistantConversationId,setAssistantConversationId]=useState(()=>{try{const key='garmin-assistant-conversation-v2';const previous=localStorage.getItem(key)??sessionStorage.getItem(key);if(previous){localStorage.setItem(key,previous);return previous;}const id=crypto.randomUUID();localStorage.setItem(key,id);return id;}catch{return crypto.randomUUID();}});
+  useEffect(() => {
+    let cancelled = false;
+    let timer: ReturnType<typeof setTimeout>;
+    // Older stored messages use the preceding user message ID as the operation ID.
+    const pending = chatMessages.flatMap((item, index) => item.role === 'assistant' && !item.content.trim()
+      ? [{id: item.id, operation: item.operation_id ?? (chatMessages[index - 1]?.role === 'user' ? chatMessages[index - 1].id : undefined)}]
+      : []).filter(item => item.operation);
+    const recover = async () => {
+      let waiting = false;
+      for (const item of pending) {
+        try {
+          const response = await fetch(`/api/ai/chat/turns/${encodeURIComponent(item.operation!)}?conversation_id=${encodeURIComponent(assistantConversationId)}`);
+          if (!response.ok) continue;
+          const receipt = await response.json() as {status: string; events: ChatStreamEvent[]};
+          if (cancelled) return;
+          if (receipt.status === 'running') { waiting = true; continue; }
+          setChatMessages(current => current.map(message => message.id === item.id && !message.content.trim()
+            ? restoreChatReceipt(message, receipt.events)
+            : message));
+        } catch { /* Retry on focus or the next page load if the local server is unavailable. */ }
+      }
+      if (waiting && !cancelled) timer = setTimeout(recover, 3000);
+    };
+    const wake = () => { clearTimeout(timer); void recover(); };
+    void recover();
+    window.addEventListener('focus', wake);
+    return () => { cancelled = true; clearTimeout(timer); window.removeEventListener('focus', wake); };
+  }, [assistantConversationId]);
   useEffect(()=>{
     const ask=(event:Event)=>{
       const {question,coaching}=(event as CustomEvent<{question:string;coaching:ChatEvidence['coaching']}>).detail;
       if(!question)return;
+      setChatOpen(true);
       chatContext.current.coaching=coaching;
       setChatMessages(current=>current.at(-1)?.role==='assistant'&&current.at(-1)?.content===question?current:[...current,{id:crypto.randomUUID(),role:'assistant',content:question,evidence:coaching?[{tool:'preview_training_plan',coaching}]:[]}]);
       window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});
@@ -980,10 +1026,10 @@ export default function App() {
 
   const statusText =
     connection.kind === "ready"
-      ? `Connected · ${connection.health.schema.tables} database tables`
+      ? `Local workspace ready`
       : connection.kind === "offline"
         ? connection.message ?? "Workspace could not be loaded"
-        : "Checking local backend…";
+        : "Opening your workspace…";
 
   const summary = connection.kind === "ready" ? connection.summary : null;
   const weeklyCalories =
@@ -1243,6 +1289,7 @@ export default function App() {
     const assistantId = crypto.randomUUID();
     const assistantMessage: ChatMessage = {
       id: assistantId,
+      operation_id: userMessage.id,
       role: "assistant",
       content: "",
       evidence: [],
@@ -1369,7 +1416,7 @@ export default function App() {
       chatAbortController.current = null;
     }
   };
-  useEffect(()=>{const open=(event:Event)=>{const detail=(event as CustomEvent<{message?:string;nutrition?:Record<string,unknown>}>).detail;if(detail?.nutrition){nutritionChatContext.current=mergeNutritionEntry(nutritionChatContext.current,detail.nutrition);persistPendingDraft(nutritionChatContext.current);}if(detail?.message)void sendChatMessage(detail.message,nutritionChatContext.current);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
+  useEffect(()=>{const open=(event:Event)=>{setChatOpen(true);const detail=(event as CustomEvent<{message?:string;nutrition?:Record<string,unknown>}>).detail;if(detail?.nutrition){nutritionChatContext.current=mergeNutritionEntry(nutritionChatContext.current,detail.nutrition);persistPendingDraft(nutritionChatContext.current);}if(detail?.message)void sendChatMessage(detail.message,nutritionChatContext.current);else window.requestAnimationFrame(()=>{const input=document.getElementById('chat-question');input?.scrollIntoView({behavior:'instant',block:'center'});input?.focus({preventScroll:true});});};window.addEventListener('open-unified-chat',open);return()=>window.removeEventListener('open-unified-chat',open);});
 
 
   const [savingProposal, setSavingProposal] = useState<string | null>(null);
@@ -1873,19 +1920,19 @@ export default function App() {
 
   return (
     <main className="app-shell command-app">
-      <header className="app-topbar">
-        <a className="app-brand" href="#dashboard" aria-label="Dotan's training and health space"><span className="brand-mark" aria-hidden="true">D</span><span>Dotan's<span className="brand-subtitle">Training and health space</span></span></a>
+      <a className="journal-skip-link" href="#workspace-content" onClick={event=>{event.preventDefault();document.getElementById('workspace-content')?.focus();}}>Skip to content</a>
+      <aside className="journal-sidebar">
+        <header className="app-topbar"><a className="app-brand" href="#dashboard" aria-label="Dotan's training and health space"><span className="brand-mark" aria-hidden="true">D</span><span>Dotan’s<span className="brand-subtitle">Training & Health</span></span></a></header>
+        <nav ref={navigation} className="app-navigation" aria-label="Main navigation">{appPages.map(([id,title])=>{const Icon=pageIcons[id];return <a key={id} href={`#${id}`} aria-current={page===id?'page':undefined}><Icon size={23} aria-hidden="true"/><span>{title}</span></a>;})}</nav>
         <div className={`connection connection--${connection.kind}`}><span aria-hidden="true" />{statusText}</div>
-      </header>
-      <nav className="app-navigation" aria-label="Main navigation">
-        {appPages.map(([id, title]) => <a key={id} href={`#${id}`} aria-current={page === id ? 'page' : undefined}>{title}</a>)}
-      </nav>
+      </aside>
+      <div className="journal-masthead"><span>Training journal</span><button type="button" className="journal-coach-trigger" aria-haspopup="dialog" aria-controls="coach-dialog" onClick={()=>setChatOpen(true)}><ChatCircle size={21}/> Ask coach</button></div>
       {connection.kind==='ready'&&connection.health.preview&&<p role="status" className="preview-data-banner"><strong>TEST PREVIEW — FICTIONAL DATA</strong> · These scores do not describe your Garmin history. Your normal app is on port 8765.</p>}
       <div className="command-workspace">
-        <aside className="command-chat" aria-label="Shared chat">
+        <dialog ref={chatDialog} id="coach-dialog" className="command-chat" aria-label="Training coach" onClose={()=>setChatOpen(false)}>
       <section className="assistant overview-chat" id="assistant" aria-labelledby="assistant-title">
         <div className="simple-chat-heading">
-          <h2 id="assistant-title">Chat</h2>
+          <h2 id="assistant-title">Your coach</h2><button type="button" className="journal-close-chat" aria-label="Close coach" onClick={()=>setChatOpen(false)}><X size={21}/></button>
           <details className="chat-options">
             <summary aria-label="Chat options" title="Chat options">⋯</summary>
             <div className="chat-options-panel">
@@ -1943,7 +1990,7 @@ export default function App() {
                           </div>}
                           {evidence.action_link&&<a href={evidence.action_link.url}>{evidence.action_link.label}</a>}
                           {evidence.training_setup && <TrainingSetupProposal proposal={evidence.training_setup}/>}{evidence.training_event&&<TrainingEventProposal proposal={evidence.training_event}/>}
-                          {evidence.training_adjustment && <TrainingAdjustmentProposal proposal={evidence.training_adjustment}/>}
+                          {evidence.training_adjustment && <ChatReviewBoundary><TrainingAdjustmentProposal proposal={evidence.training_adjustment}/></ChatReviewBoundary>}
                           {evidence.proposal && (
                             <div className="settings-proposal">
                               <strong>{evidence.proposal.status === "saved" ? "Saved locally" : "Review proposed change"}</strong>
@@ -1971,40 +2018,7 @@ export default function App() {
                           {(evidence.freshness?.latest_recorded_at || evidence.freshness?.latest_started_at) && (
                             <small>Fresh through {formatLongDate(evidence.freshness.latest_recorded_at ?? evidence.freshness.latest_started_at ?? "")}</small>
                           )}
-                          {evidence.records && evidence.records.length > 0 && (
-                            <div className="evidence-links">
-                              {evidence.reference_record && (
-                                <span>
-                                  Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
-                                </span>
-                              )}
-                              {evidence.records.slice(0, 6).map((record) => (
-                                <span key={record.id}>
-                                  {record.name ?? record.activity_type.replaceAll("_", " ")} · {formatLongDate(record.local_date)}
-                                  {typeof record.similarity_score === "number" ? ` · ${record.similarity_score.toFixed(0)}% similarity` : ""}
-                                  {typeof record.route_overlap_percent === "number" ? ` · ${record.route_overlap_percent.toFixed(0)}% route overlap` : ""}
-                                  {record.direction ? ` · ${record.direction}` : ""}
-                                </span>
-                              ))}
-                            </div>
-                          )}
-                          {evidence.reference_record && (!evidence.records || evidence.records.length === 0) && (
-                            <div className="evidence-links">
-                              <span>
-                                Reference: {evidence.reference_record.name ?? evidence.reference_record.activity_type.replaceAll("_", " ")} · {formatLongDate(evidence.reference_record.local_date)}
-                              </span>
-                            </div>
-                          )}
-                          {evidence.criteria && evidence.criteria.length > 0 && (
-                            <div className="evidence-criteria">
-                              {evidence.criteria.map((criterion) => (
-                                <small key={criterion.field}>{formatSimilarityCriterion(criterion, preferredDistanceUnit)}</small>
-                              ))}
-                            </div>
-                          )}
-                          {evidence.unavailable_criteria && evidence.unavailable_criteria.length > 0 && (
-                            <small>Not available for matching: {evidence.unavailable_criteria.join(", ")}</small>
-                          )}
+                          <ChatReviewBoundary><ChatEvidenceRecords tool={evidence.tool} records={evidence.records} reference={evidence.reference_record}/></ChatReviewBoundary>
                           {evidence.course_progress && (
                             <div className="course-progress">
                               <strong>
@@ -2076,16 +2090,17 @@ export default function App() {
         </div>
       </section>
 
-        </aside>
-        <SortableCards id={`command-page:${page}`} as="div" className="command-content" pageSections>
+        </dialog>
+        <div className="command-content" id="workspace-content" tabIndex={-1}>
       <header className="page-heading">
 
-        <h1>{appPages.find(([id]) => id === page)?.[1]}</h1>
+        {page==='dashboard'&&<p className="journal-date">{new Date().toLocaleDateString(undefined,{timeZone:browserTimeZone,weekday:'long',day:'numeric',month:'long',year:'numeric'})}<span>{browserTimeZone}</span></p>}
+        <h1>{page==='dashboard'?'Your training, today':appPages.find(([id]) => id === page)?.[1]}</h1>
         <InfoPopover title="This workspace"><p className="intro">{page === 'dashboard' ? 'Build a view of the data that matters to you.' : page === 'assistant' ? 'Ask questions, compare your history, and explore large plots.' : page === 'profile' ? 'Personal details, goals, and dated weight measurements.' : 'Your history, organized in one place.'}</p></InfoPopover>
       </header>
-      <WeightEntryDialog showButton={['dashboard','health','profile'].includes(page)} unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} />
+      <WeightEntryDialog showButton={['health','profile'].includes(page)} unit={settingsDraft?.profile.preferred_weight_unit} onSaved={() => setGraphVersion(v => v + 1)} />
         <AssistantPlots plots={(chatMessages.find(message => message.id === plotMessageId) ?? chatMessages.filter(message => message.evidence.some(e => e.plots?.length)).at(-1))?.evidence.flatMap(evidence => evidence.plots ?? []) ?? []} profile={settingsDraft?.profile} refresh={graphVersion} />
-      <RetainedPage active={page === 'dashboard'}><DashboardNutrition timezone={browserTimeZone} active={page==='dashboard'} refresh={`${graphVersion}`} /><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}`} /></RetainedPage>
+      <RetainedPage active={page === 'dashboard'}><JournalDashboard timezone={browserTimeZone} active={page==='dashboard'} refresh={`${graphVersion}:${activityRevision}:${summary?.metric_count??0}`} latestActivity={summary?.latest_activity??null} distanceUnit={preferredDistanceUnit} onActivityDetails={id=>{window.location.hash='activities';void toggleActivityDetail(id);}}/><GraphCanvas profile={settingsDraft?.profile} refresh={`${graphVersion}`} /></RetainedPage>
       <RetainedPage active={page === 'health'}><GraphCanvas mode="health" profile={settingsDraft?.profile} refresh={`${graphVersion}`} /></RetainedPage>
 
       <section hidden={page !== "data"} className="sync" id="sync" aria-labelledby="sync-title">{dataLoading&&<p role="status">Loading data and sync details…</p>}{dataLoadError&&<p role="alert">{dataLoadError} <button type="button" onClick={()=>setDataLoadRevision(v=>v+1)}>Retry loading</button></p>}
@@ -2201,7 +2216,7 @@ export default function App() {
           </form>
         )}
         {garminConnectionValue?.status === "connected" && (
-          <div className="garmin-connected-actions">
+          <SettingsGroup title="Connection preferences" value={syncStatusValue?.schedule_enabled?'Automatic sync on':'Manual sync'} description="Automatic updates, connection checks and sign-out"><div className="garmin-connected-actions">
             <span>Saved session is available locally.</span>
             <button type="button" onClick={() => void probeGarmin()} disabled={isConnectingGarmin}>
               Run read-only check
@@ -2217,19 +2232,21 @@ export default function App() {
             <button className="secondary-action" type="button" onClick={() => void disconnectGarmin()} disabled={isConnectingGarmin}>
               Sign out
             </button>
-          </div>
+          </div></SettingsGroup>
         )}
         <details className={`sync-summary sync-summary--${syncStatusValue?.last_job?.status ?? 'pending'}`}>
           <summary>
             <strong>{isSyncing || syncStatusValue?.last_job?.status === 'running'
               ? 'Syncing…'
               : syncStatusValue?.last_job && syncStatusValue.last_job.status !== 'completed'
-                ? 'Sync failed'
+                ? (syncStatusValue.last_job.checkpoint?.totals?.received??0)>0 ? 'Partially synced' : 'Sync failed'
                 : 'Sync'}</strong>
             <span>{syncStatusValue?.last_successful_sync_at
               ? `Last successful sync: ${formatSyncTime(syncStatusValue.last_successful_sync_at)}`
               : 'No successful sync yet'}</span>
           </summary>
+          {!!syncStatusValue?.last_job?.checkpoint?.failures?.length&&<div className="sync-issue-details"><p>Completed data remains saved. These items still need attention:</p><ul>{syncStatusValue.last_job.checkpoint.failures.map((failure,index)=><li key={index}><strong>{failure.data_type.replaceAll('_',' ')} · {failure.date}</strong><p>{failure.error}</p></li>)}</ul></div>}
+          {!!syncStatusValue?.last_job?.checkpoint?.qc?.issues?.filter(issue=>issue.status==='missing_measures').length&&<div className="sync-issue-details"><p>Missing source measurements:</p><ul>{syncStatusValue.last_job.checkpoint.qc.issues.filter(issue=>issue.status==='missing_measures').map((issue,index)=><li key={index}>{issue.data_type.replaceAll('_',' ')}: {issue.missing.join(', ').replaceAll('_',' ')}. {issue.detail}</li>)}</ul></div>}
           <div className="sync-component-scroll">
             <div className="sync-checkpoints">
               {syncStatusValue?.checkpoints.map((checkpoint) => (
@@ -2440,20 +2457,7 @@ export default function App() {
       <RetainedPage active={page === "maintenance"}><MaintenancePanel refreshToken={maintenanceVersion} timezone={browserTimeZone} onChanged={() => setMaintenanceVersion((current) => current + 1)} /></RetainedPage>
 
       <section hidden={page !== "data"} className="coverage" id="data" aria-labelledby="coverage-title">
-        <div className="section-heading">
-          <div>
-            <p>Import coverage</p>
-            <h2 id="coverage-title">What is safely loaded</h2>
-          </div>
-          {coverage && (
-            <div
-              className={`coverage-overall ${coverage.summary.attention_categories ? "coverage-overall--attention" : ""}`}
-            >
-              {coverage.summary.complete_categories} of {coverage.summary.categories} complete
-            </div>
-          )}
-        </div>
-
+        <details><summary id="coverage-title">Import coverage</summary>
         {!coverage && (
           <p className="import-copy">Waiting for the local coverage report…</p>
         )}
@@ -2505,6 +2509,7 @@ export default function App() {
             )}
           </>
         )}
+        </details>
       </section>
 
       <section hidden={page !== "data"} className="exports" aria-labelledby="exports-title">
@@ -2696,6 +2701,7 @@ export default function App() {
           <p className="settings-message">Settings are available when the local backend is running.</p>
         ) : (
           <SortableCards id={`settings-layout:${page}`} className="settings-layout">
+            <SettingsGroup hidden={page!=="profile"} title="Personal details" value={`${settingsDraft.profile.display_name||'Your profile'} · ${settingsDraft.profile.preferred_distance_unit} / ${settingsDraft.profile.preferred_weight_unit}`} description="Measurements, units and reference population">
             <form
               hidden={page !== "profile"}
               className="settings-panel"
@@ -2816,8 +2822,9 @@ export default function App() {
                   />
                 </label>
               </div>
-            </form>
+            </form></SettingsGroup>
 
+            <SettingsGroup hidden={page!=="settings"} title="Assistant connection" value={activeAiProvider==='chatgpt'?'ChatGPT account':activeAiProvider==='openai'?'OpenAI API':'Qwen / Ollama'} description="Provider, model and account preferences">
             <form
               hidden={page !== "settings"} className="settings-panel settings-panel--ai"
               onSubmit={(event) => {
@@ -2947,8 +2954,9 @@ export default function App() {
                 OpenAI keys are read from <code>OPENAI_API_KEY</code> in the backend environment
                 and are never saved in this database or displayed here.
               </p>}
-            </form>
+            </form></SettingsGroup>
 
+            <SettingsGroup hidden={page!=="profile"} title="Training goals" value={`${settingsDraft.goals.length} saved goals`} description="Your optional long-term direction">
             <form
               hidden={page !== "profile"} className="settings-panel settings-panel--goals"
               onSubmit={(event) => {
@@ -3026,13 +3034,13 @@ export default function App() {
                   <button className="remove-goal" type="button" onClick={() => removeGoal(index)}>Remove goal</button>
                 </fieldset>
               ))}
-            </form>
+            </form></SettingsGroup>
           </SortableCards>
         )}
         {settingsMessage && <p className="settings-message" role="status">{settingsMessage}</p>}
       </section>
 
-      <section hidden={page !== "settings"} className="foundation" aria-labelledby="foundation-title">
+      <details hidden={page !== "settings"} className="foundation journal-about"><summary>About this workspace <span className="settings-current-value">Local storage & technical details</span></summary>
         <div className="section-heading">
           <p>Foundation 01</p>
           <h2 id="foundation-title">Local by design</h2>
@@ -3047,8 +3055,8 @@ export default function App() {
             </article>
           ))}
         </SortableCards>
-      </section>
-        </SortableCards>
+      </details>
+        </div>
       </div>
     </main>
   );

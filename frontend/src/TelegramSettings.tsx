@@ -1,3 +1,4 @@
+import SettingsGroup from './SettingsGroup';
 import {useEffect, useState} from 'react';
 import {requestJson} from './request';
 
@@ -38,7 +39,7 @@ export default function TelegramSettings({active,timezone}:{active:boolean;timez
     catch(e){setError(e instanceof Error?e.message:'Could not retry credential access.');}
     finally{setBusy(false);}
   };
-  return <section id="telegram-settings" hidden={!active} className="settings-panel" aria-labelledby="telegram-title">
+  return <SettingsGroup title="Telegram" value={!status?'Loading…':status.paired?`Connected · @${status.bot_username}`:'Not connected'} description="Questions and meal logging from your phone"><section id="telegram-settings" hidden={!active} className="settings-panel" aria-labelledby="telegram-title">
     <div className="settings-panel-heading"><div><span>Phone access</span><h3 id="telegram-title">Telegram</h3></div></div>
     <p>Ask questions and log meals through the app’s nutrition chat. Describe what you ate and the amounts; saved meals and calories appear in Nutrition. You can correct a recent food’s gram amount in the same conversation. Uses your selected AI provider.</p>
     <p>Plan and nutrition-target changes, charts, photos and voice still require the browser app.</p>
@@ -53,5 +54,5 @@ export default function TelegramSettings({active,timezone}:{active:boolean;timez
     {status?.enabled&&<button type="button" disabled={busy} onClick={()=>void unlink()}>Disable and unlink</button>}
     {pairing&&<p><a href={pairing.url} target="_blank" rel="noreferrer">Open bot and tap Start to pair your account</a>. This private link expires at {new Date(pairing.expires_at).toLocaleTimeString()}. Keep it private.</p>}
     {error&&<p role="alert">{error}</p>}
-  </section>;
+  </section></SettingsGroup>;
 }

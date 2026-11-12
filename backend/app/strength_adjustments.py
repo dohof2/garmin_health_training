@@ -9,7 +9,7 @@ from .training_constraints import optional_cap,day_limit
 
 def sets_request(message):
  text=message.lower()
- count=re.search(r'\b(\d+)\s+sets?\b',text)
+ count=re.search(r'\b(\d+)\s+(?:total\s+)?sets?\b',text)
  broad=re.search(r'\b(all|every|each)\b|from each|of each',text)
  if not count or not broad or not re.search(r'\b(strength|strengh|strntgh|exercises?|workout)\b',text):return None
  if re.search(r"\b(don't|do not|without|what (?:is|are|does))\b",text):return None
@@ -18,11 +18,13 @@ def sets_request(message):
 
 def apply_policy(definition,policy,phase=None):
  result=copy.deepcopy(definition)
- if result.get('sport')!='strength' or phase in ('Recovery / review','Race week','Freshen up','Post-event recovery'):return result
+ if result.get('sport')!='strength' or not policy.get('sets'):return result
  for exercise in result.get('exercises',[]):exercise['sets']=max(exercise['sets'],policy['sets'])
  if policy.get('reference_total_sets') and {e['id']:e['repetitions'] for e in result.get('exercises',[])}==policy.get('reference_repetitions'):
   result['duration_minutes']=max(1,math.ceil(policy['duration_reference_minutes']*sum(e['sets'] for e in result['exercises'])/policy['reference_total_sets']))
  result.update(user_adjusted=True,strength_set_policy=policy)
+ from .training_notes import strength_timing
+ strength_timing(result,policy)
  return result
 
 
@@ -33,6 +35,7 @@ def propose(message,program,path,now,*,selected_id=None):
  def reject(reason):return {**base,'message':reason}
  if not 1<=count<=5:return reject('Choose 1–5 sets per exercise; larger changes need a separate progression review.')
  from .active_training import _program_workouts
+ from .training_accounting import counts_toward_plan
  from .training_prescriptions import validate_workout
  tz=program['state']['timezone'];today=now.astimezone(ZoneInfo(tz)).date()
  with connect(path) as c:
@@ -76,6 +79,10 @@ def propose(message,program,path,now,*,selected_id=None):
    replacement.update(duration_minutes=estimate,user_adjusted=True)
    if selected_id:replacement.pop('strength_set_policy',None)
    else:replacement['strength_set_policy']={'sets':count,'duration_reference_minutes':round(minutes,2),'reference_workout_id':previous['id'],'reference_total_sets':old_sets,'reference_repetitions':{e['id']:e['repetitions'] for e in old.get('exercises',[])}}
+   from .training_notes import strength_timing
+   strength_timing(replacement,{'duration_reference_minutes':minutes,'reference_total_sets':old_sets,'reference_repetitions':{e['id']:e['repetitions'] for e in old.get('exercises',[])}})
+   estimate=replacement['duration_minutes']
+   if estimate>day_limit(context['answers']['week_schedule'],day.weekday()):return reject(f'The requested sets and rests need about {estimate} minutes, beyond the saved availability for {day}. Review that slot first.')
    validate_workout(replacement)
    changes.append({'workout_id':row['id'],'expected_revision':row['revision'],'title':row['title'],'date':day.isoformat(),
     'summary':[f"{e['name']}: {before['sets']} → {count} sets; reps, rest and load retained" for e,before in zip(replacement['exercises'],exercises)]+[f'Estimated duration: {estimate} minutes, using the recorded {minutes:.1f}-minute session as a timing reference.'],
@@ -85,7 +92,7 @@ def propose(message,program,path,now,*,selected_id=None):
    day=datetime.fromisoformat(item['date']).date();week=day.toordinal()-day.weekday();weeks[week]=weeks.get(week,0)+item['changes']['definition']['duration_minutes']
   if selected_id:
    for peer in rows:
-    if peer['id']==selected_id or peer['sport']!='strength' or peer['completion_status'] not in ('planned','completed'):continue
+    if peer['id']==selected_id or peer['sport']!='strength' or not counts_toward_plan(peer,today,tz):continue
     day=datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date();week=day.toordinal()-day.weekday()
     if week in weeks:weeks[week]+=json.loads(peer['definition_json'])['duration_minutes']
   cap,_=optional_cap(prefs['answers'],'strength')
@@ -95,5 +102,6 @@ def propose(message,program,path,now,*,selected_id=None):
  proposal={**base,'status':'proposal','root_plan_id':program['plan_id'],'program_revision':program['revision'],'adjustments':changes,
   'message':f'Review {count} sets for every exercise, starting with the next planned strength session and continuing in this programme. Reps, lifting loads and rest stay unchanged. Timing is estimated from your recorded {minutes:.1f}-minute session, not the old planned duration; the historical weekly estimate is a reference, not an explicit cap. Readiness is rechecked before training. Save applies this progression locally; published sessions then need Garmin instruction updates.'}
  proposal['fingerprint']=hashlib.sha256(encoded({key:proposal[key] for key in ('root_plan_id','program_revision','adjustments')}).encode()).hexdigest()
+ proposal['strength_policy_update']=not selected_id
  if selected_id:proposal['message']=f'Review {count} sets per exercise for this selected strength session only. Nothing is saved yet; the recurring progression remains unchanged.'
  return proposal

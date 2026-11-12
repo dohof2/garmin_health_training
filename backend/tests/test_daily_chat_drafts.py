@@ -22,10 +22,10 @@ class DailyDraftTests(unittest.TestCase):
  def test_telegram_new_day_uses_shared_conversation_and_current_date(self):
   from app.telegram_chat import conversation_reply
   import json
-  from types import SimpleNamespace
+  from test_skill_agent import NativeProviderFixture
   with tempfile.TemporaryDirectory() as tmp:
    path=Path(tmp)/'test.sqlite';migrate(path)
-   with patch('app.ai_providers._active_provider',return_value=SimpleNamespace(generate=lambda *a,**k:json.dumps({'reply':'Use the saved plan.'}))):
+   with patch('app.ai_providers._active_provider',return_value=NativeProviderFixture(lambda *a,**k:json.dumps({'reply':'Use the saved plan.'}))):
     result=conversation_reply('Show my training plan',[{'role':'user','content':'old discussion'}],TZ,path,operation_id='daily-test',context={'chat_day':'2026-10-24','role':'trainer'},sent_at=NOW.timestamp())
   self.assertNotIn('role',result['context']);self.assertEqual(result['reply'],'Use the saved plan.')
 

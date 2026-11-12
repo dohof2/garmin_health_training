@@ -55,13 +55,14 @@ class DatabaseMigrationTests(unittest.TestCase):
                     '036_permanent_nutrition_deletion.sql',
                     '037_assistant_workflow.sql',
                     '038_assistant_batch_receipts.sql',
-                    '039_skill_agent.sql',
+                '039_skill_agent.sql',
+                '040_training_notes.sql',
                 ],
             )
             self.assertEqual(migrate(database), [])
 
             status = schema_status(database)
-            self.assertEqual(status["migrations"], 39)
+            self.assertEqual(status["migrations"], 40)
             self.assertGreaterEqual(status["tables"], 15)
 
             with closing(sqlite3.connect(database)) as connection:

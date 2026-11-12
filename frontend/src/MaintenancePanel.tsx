@@ -133,6 +133,17 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
     setDecisions(Object.fromEntries(result.rows.map((row) => [String(row.row), row.status === "new" ? "create" : "skip"])));
   };
 
+  const renderField = (field: typeof fields[number]) => <label key={field}>{labels[field]}
+        {field === "category" ? <select value={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })}>
+          {categories.map((category) => <option key={category}>{category}</option>)}</select>
+        : field === "details" ? <textarea value={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} maxLength={2000} />
+        : <input type={field === "event_date" ? "date" : numericFields.has(field) ? "number" : "text"}
+            list={field === "equipment_label" ? "maintenance-equipment-labels" : undefined}
+            required={["equipment_label", "action", "event_date"].includes(field)}
+            min={field === "quantity" ? 0.0001 : numericFields.has(field) ? 0 : undefined} step="any"
+            maxLength={field === "cost_currency" ? 3 : undefined} value={draft[field]}
+            onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} />}
+      </label>;
   return <SortableCards id="maintenance:cards" className="maintenance" pageSections>
     <div className="section-heading"><div><p>Maintenance and replacements</p><h2 id="maintenance-title">Keep your equipment history</h2></div>
       <a className="export-link" href="/api/maintenance/export.csv">Export current history CSV</a></div>
@@ -144,23 +155,13 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
 
     <form className="maintenance-form" onSubmit={(event) => { event.preventDefault(); void save(); }}>
       <h3>{editing ? "Edit maintenance event" : "Log completed work"}</h3>
-      <div className="maintenance-fields">{fields.map((field) => <label key={field}>{labels[field]}
-        {field === "category" ? <select value={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })}>
-          {categories.map((category) => <option key={category}>{category}</option>)}</select>
-        : field === "details" ? <textarea value={draft[field]} onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} maxLength={2000} />
-        : <input type={field === "event_date" ? "date" : numericFields.has(field) ? "number" : "text"}
-            list={field === "equipment_label" ? "maintenance-equipment-labels" : undefined}
-            required={["equipment_label", "action", "event_date"].includes(field)}
-            min={field === "quantity" ? 0.0001 : numericFields.has(field) ? 0 : undefined} step="any"
-            maxLength={field === "cost_currency" ? 3 : undefined} value={draft[field]}
-            onChange={(event) => setDraft({ ...draft, [field]: event.target.value })} />}
-      </label>)}</div>
+      <div className="maintenance-fields">{fields.slice(0,3).map(renderField)}</div><details className="maintenance-extra-fields"><summary>Part, cost & other details <span className="settings-current-value">Optional</span></summary><div className="maintenance-fields">{fields.slice(3).map(renderField)}</div></details>
       <datalist id="maintenance-equipment-labels">{history?.equipment?.map((item) => <option key={item.id} value={item.label} />)}</datalist>
       <div className="maintenance-actions"><button type="submit" disabled={busy}>{busy ? "Saving…" : editing ? "Save correction" : "Save completed work"}</button>
         {editing && <button type="button" onClick={() => { setEditing(null); setDraft(emptyDraft(timezone)); }}>Cancel edit</button>}</div>
     </form>
 
-    <div className="maintenance-filters" aria-label="Maintenance filters">
+    <details className="maintenance-filter-options"><summary>Filter history <span className="settings-current-value">Equipment, dates and removed records</span></summary><div className="maintenance-filters" aria-label="Maintenance filters">
       <label>Equipment<select value={filters.equipment} onChange={(event) => setFilters({ ...filters, equipment: event.target.value })}>
         <option value="">All equipment</option>{history?.equipment?.map((item) => <option key={item.id}>{item.label}</option>)}</select></label>
       <label>Search work or part<input value={filters.query} onChange={(event) => setFilters({ ...filters, query: event.target.value })} /></label>
@@ -170,7 +171,7 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
       <label>To<input type="date" value={filters.end_date} onChange={(event) => setFilters({ ...filters, end_date: event.target.value })} /></label>
       <label><input type="checkbox" checked={filters.include_deleted} onChange={(event) => setFilters({ ...filters, include_deleted: event.target.checked })} /> Include removed events</label>
     </div>
-    <div className="maintenance-totals">{history?.cost_totals?.map((total) => <span key={total.currency ?? "unknown"}>{total.amount.toLocaleString()} {total.currency ?? "currency not recorded"} · {total.event_count} events</span>)}</div>
+    </details><div className="maintenance-totals">{history?.cost_totals?.map((total) => <span key={total.currency ?? "unknown"}>{total.amount.toLocaleString()} {total.currency ?? "currency not recorded"} · {total.event_count} events</span>)}</div>
     {!history ? <p>Loading maintenance history…</p> : !history.events?.length ? <p>No matching maintenance records. Start with an equipment label, completed work and date.</p> : <>
       <p>{history.total_matches} matching events{history.truncated ? ` · ${history.events.length} shown; narrow the filters to see other records` : ""}. Cost totals exclude removed events.</p>
       <div className="maintenance-table"><table><thead><tr><th>Date</th><th>Equipment / work</th><th>Cost</th><th>Actions</th></tr></thead><tbody>
@@ -194,7 +195,7 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
       {revisions.revisions.map((revision) => <details key={revision.revision}><summary>Revision {revision.revision} · {revision.event_date} · {revision.action}{revision.deleted_at ? " · removed" : ""}</summary><EventDetails event={revision} /></details>)}
     </div>}
 
-    <div className="maintenance-csv"><h3>Import a CSV snapshot</h3>
+    <details className="maintenance-csv"><summary>Import a CSV snapshot <span className="settings-current-value">Preview before saving</span></summary>
       <p>UTF-8 CSV. Map your columns, preview all rows, and choose how to handle conflicts. Unchanged and duplicate rows are skipped.</p>
       <label>Choose maintenance CSV<input type="file" accept=".csv,text/csv" disabled={busy} onChange={(event) => {
         const file = event.target.files?.[0]; if (!file) return;
@@ -223,6 +224,6 @@ export default function MaintenancePanel({ refreshToken, timezone, onChanged }: 
           setMessage(`${result.events?.length ?? 0} maintenance rows imported. Unchanged and skipped rows were preserved.`); setPreview(null); setCSVContent("");
         })}>Import reviewed rows</button>
       </>}
-    </div>
+    </details>
   </SortableCards>;
 }

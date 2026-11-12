@@ -15,6 +15,27 @@ def compact_json(value):
     return json.dumps(value,ensure_ascii=False,separators=(',',':'),default=str)
 
 
+def compact_training_proposal(proposal):
+    """Retain proposal identity and changes without repeating complete prescriptions."""
+    if not isinstance(proposal, dict):
+        return proposal
+    result = {key: proposal[key] for key in ('status', 'kind', 'request', 'message', 'fingerprint',
+              'root_plan_id', 'program_revision', 'workout_id', 'expected_revision') if key in proposal}
+    if isinstance(proposal.get('adjustments'), list):
+        result['adjustments'] = []
+        for row in proposal['adjustments']:
+            item = {key: row[key] for key in ('workout_id', 'expected_revision', 'title', 'date', 'summary') if key in row}
+            changes = row.get('changes') or {}
+            item['changes'] = {key: value for key, value in changes.items() if key != 'definition'}
+            if isinstance(changes.get('definition'), dict):
+                definition = changes['definition']
+                item['changes']['definition'] = {key: definition[key] for key in
+                    ('title', 'sport', 'workout_kind', 'duration_minutes', 'edit_summary') if key in definition}
+            result['adjustments'].append(item)
+    result['detail_note'] = 'Retained proposal summary. Read selected workouts for complete current instructions; refresh the proposal before saving.'
+    return result
+
+
 def compact_active_plan(result, message='', today=None):
     """Remove duplicate SQL/JSON snapshots; expose grounded session summaries."""
     import re
@@ -24,7 +45,7 @@ def compact_active_plan(result, message='', today=None):
     def workout(row):
         definition=row.get('definition') or {}
         return {**{key:row[key] for key in ('id','title','sport','scheduled_for','completion_status','publish_status','revision') if key in row},
-                **{key:definition[key] for key in ('scheduled_date','duration_minutes','workout_kind','effort_target','training_block','review_hold','schedule_override') if key in definition}}
+                **{key:definition[key] for key in ('scheduled_date','duration_minutes','workout_kind','effort_target','training_block','review_hold','schedule_override','duration_setting') if key in definition}}
     rows=sorted(result.get('workouts') or [],key=lambda w:w.get('scheduled_for',''))
     dates=set(re.findall(r'\b\d{4}-\d{2}-\d{2}\b',message))
     if dates:
@@ -35,7 +56,7 @@ def compact_active_plan(result, message='', today=None):
     review=result.get('latest_review') or {}
     return {'tool':result.get('tool','get_active_training_plan'),
             'program':{**{key:program[key] for key in ('plan_id','root_plan_id','name','status','revision','plan_revision') if key in program},
-                       'state':{**{key:state[key] for key in ('timezone','starts_on','ends_on','brief') if key in state},'blocks':[{key:block[key] for key in ('week','starts_on','phase','focus') if key in block} for block in state.get('blocks',[])]}},
+                       'state':{**{key:state[key] for key in ('timezone','starts_on','ends_on','brief','duration_settings','duration_week_allowances') if key in state},'blocks':[{key:block[key] for key in ('week','starts_on','phase','focus') if key in block} for block in state.get('blocks',[])]}},
             'workouts':[workout(w) for w in chosen],
             'planned_workout_count':len(rows),'workouts_truncated':len(chosen)<len(rows),
             'completed_workouts':[workout(w) for w in (result.get('completed_workouts') or [])[-5:]],

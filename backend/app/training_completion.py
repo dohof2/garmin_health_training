@@ -10,23 +10,43 @@ def sport(value):
     return 'cycling' if any(k in value for k in ('cycl','bik','virtual_ride')) else 'running' if 'run' in value else 'strength' if 'strength' in value else value
 
 
+def recorded_workout_id(activity):
+    try:
+        raw=json.loads(activity.get('raw_json') or '{}')
+    except (TypeError,ValueError):
+        return None
+    if not isinstance(raw,dict):return None
+    metadata=raw.get('metadataDTO') or {}
+    value=raw.get('workoutId') or (metadata.get('workoutId') if isinstance(metadata,dict) else None)
+    return str(value) if type(value) in (str,int) and str(value).strip() else None
+
+
 def reconcile(c,workouts,tz,now):
     zone=ZoneInfo(tz);linked={r[0] for r in c.execute('SELECT activity_id FROM training_feedback WHERE activity_id IS NOT NULL')}
     recordings=[dict(r) for r in c.execute("SELECT * FROM activities WHERE deleted_at IS NULL AND source_name!='synthetic_fixture'") if r['id'] not in linked]
-    candidates={};by_workout={w['id']:w for w in workouts}
+    candidates={};by_workout={w['id']:w for w in workouts};direct_matches=set()
+    remote_ids={str(w['garmin_workout_id']) for w in workouts if w.get('garmin_workout_id')}
     for w in workouts:
-        if w['completion_status']!='planned':continue
+        if w['completion_status'] not in ('planned','missed'):continue
         d=json.loads(w['definition_json']);start=datetime.fromisoformat(w['scheduled_for']);day=d.get('scheduled_date') or start.astimezone(zone).date().isoformat()
         if day>now.astimezone(zone).date().isoformat():continue
-        possible=[]
+        possible=[];direct=[]
         for a in recordings:
             began=datetime.fromisoformat(a['started_at'].replace('Z','+00:00'))
             if began>=now or began.astimezone(zone).date().isoformat()!=day or sport(a['activity_type'])!=w['sport']:continue
             # Do not mark a recording still in progress as complete.
             if a['duration_seconds'] is None or began.timestamp()+a['duration_seconds']>now.timestamp():continue
+            recorded_id=recorded_workout_id(a)
+            same_workout=bool(recorded_id and w.get('garmin_workout_id') and recorded_id==str(w['garmin_workout_id']))
+            # A known Garmin identity belongs to that workout, not another
+            # same-day slot. Date/sport/finished and one-to-one checks still apply.
+            if recorded_id in remote_ids and not same_workout:continue
+            if same_workout:
+                direct.append(a['id']);continue
             if not d.get('time_unspecified') and abs((began-start).total_seconds())>3600:continue
             possible.append(a['id'])
-        candidates[w['id']]=possible
+        candidates[w['id']]=direct or possible
+        if direct:direct_matches.add(w['id'])
     changes=[];warnings=[]
     for identifier,possible in candidates.items():
         w=by_workout[identifier]
@@ -37,7 +57,14 @@ def reconcile(c,workouts,tz,now):
         c.execute("UPDATE planned_workouts SET completion_status='completed',revision=revision+1 WHERE id=?",(identifier,))
         c.execute('INSERT INTO training_feedback(workout_id,pain_or_illness,activity_id,updated_at) VALUES(?,0,?,?) ON CONFLICT(workout_id) DO UPDATE SET activity_id=excluded.activity_id,updated_at=excluded.updated_at',(identifier,activity_id,now.isoformat()))
         _revision(c,_snapshot(c,identifier))
-        changes.append({'workout_id':identifier,'title':w['title'],'action':'Matched completed activity','reason':'A unique one-to-one recording matches the local day, sport and any specified clock time. Completion does not prove the intended stimulus was achieved.'})
+        reason='A unique completed recording matches the Garmin workout ID, local day and sport; its actual start time may differ from the plan.' if identifier in direct_matches else 'A unique one-to-one recording matches the local day, sport and any specified clock time.'
+        changes.append({'workout_id':identifier,'title':w['title'],'action':'Matched completed activity','reason':reason+' Completion does not prove the intended stimulus was achieved.'})
+    from .training_accounting import session_day
+    completed_ids={change['workout_id'] for change in changes}
+    for w in workouts:
+        if w['completion_status']=='planned' and w['id'] not in completed_ids and not candidates.get(w['id']) and session_day(w,tz)<now.astimezone(zone).date():
+            c.execute("UPDATE planned_workouts SET completion_status='missed',revision=revision+1 WHERE id=?",(w['id'],))
+            _revision(c,_snapshot(c,w['id']))
     return changes,warnings
 
 
@@ -118,7 +145,8 @@ def adapt_missed_stimulus(c,workouts,state,today,now,policy,answers):
                 # to a completed or planned quality session, even after a mismatch.
                 nearby=False
                 for peer in workouts:
-                    if peer['id']==w['id'] or peer['completion_status'] not in ('planned','completed'):continue
+                    from .training_accounting import counts_toward_plan
+                    if peer['id']==w['id'] or not counts_toward_plan(peer,today,tz):continue
                     pd=json.loads(peer['definition_json']);pday=datetime.fromisoformat(peer['scheduled_for']).astimezone(ZoneInfo(tz)).date()
                     if pd.get('workout_kind') in quality and abs((pday-day).days)<2:nearby=True
                 if nearby:continue

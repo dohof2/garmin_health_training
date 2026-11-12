@@ -1972,3 +1972,26 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
 
 .workout-day[data-movable="true"] { touch-action:none; user-select:none; }
 .workout-day--dragging { opacity:.55; }
+
+/* Activity course and anatomical exercise references. */
+.activity-route { margin: 1.25rem 0; }
+.route-heading { display:flex; align-items:center; gap:1rem; flex-wrap:wrap; margin-bottom:.65rem; }
+.route-heading h3 { margin:0; margin-right:auto; }
+.route-heading label { display:flex; align-items:center; gap:.5rem; }
+.activity-route-map { height:360px; width:100%; border-radius:12px; background:#e9eef1; z-index:0; }
+.route-legend { display:flex; align-items:center; flex-wrap:wrap; gap:.6rem; font-size:.8rem; padding:.6rem 0; }
+.route-gradient { width:150px; height:8px; border-radius:4px; background:linear-gradient(90deg,hsl(220,85%,46%),hsl(110,85%,46%),hsl(0,85%,46%)); }
+.strength-exercise-detail { display:flex; align-items:flex-start; flex-wrap:wrap; gap:1.5rem; padding:1rem 0; border-bottom:1px solid #dce2e7; }
+.strength-exercise-detail > p { flex:1; min-width:180px; }
+.muscle-diagram { margin:0; width:250px; max-width:100%; }
+.muscle-diagram svg { display:block; width:100%; height:auto; }
+.muscle-diagram figcaption { font-size:.75rem; line-height:1.6; }
+.muscle-primary::before,.muscle-secondary::before { content:'';display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:4px; }
+.muscle-primary::before { background:#e84949; }.muscle-secondary::before { background:#f3cd43; }
+@media(max-width:600px) { .activity-route-map { height:280px; } }
+
+.route-power-bands { display:flex; gap:.5rem 1rem; flex-wrap:wrap; font-size:.78rem; margin:.6rem 0; }
+.route-power-bands span { display:inline-flex;align-items:center;gap:.35rem; }
+.route-power-bands i { display:inline-block;width:16px;height:8px;border-radius:3px; }
+.workout-muscle-summary { padding:1rem 0; }
+.workout-muscle-summary .muscle-diagram { width:300px; margin:0 auto; }

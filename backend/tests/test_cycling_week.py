@@ -39,7 +39,10 @@ class CyclingWeekTests(unittest.TestCase):
  def test_recovery_readiness_and_limited_slots_reduce_aim(self):
   with connect(self.path) as c:
    targets,_=self.assign(c,block={'phase':'Recovery / review'})
-   self.assertFalse(any(k in QUALITY for k in targets.values()))
+   self.assertTrue(all(k=='endurance' for k in targets.values()))
+   targets,_=self.assign(c,block={'phase':'Recovery / review'},recovery={**NORMAL,'level':'recovery','quality_allowed':False})
+   self.assertEqual(targets['0'],'recovery')
+   self.assertEqual(targets['2'],'endurance')
    targets,_=self.assign(c,recovery={**NORMAL,'level':'easy','quality_allowed':False})
    self.assertNotIn(targets['0'],QUALITY)
    targets,_=self.assign(c,recovery={**NORMAL,'adverse_feedback':True})

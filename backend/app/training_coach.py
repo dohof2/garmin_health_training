@@ -197,7 +197,7 @@ def roadmap(b,week_start,answers):
         if goal in ('ftp','endurance','race') and phase=='Build specificity':focus+=' Choose threshold, sprint, anaerobic and other interval sessions using recent riding and current Garmin load focus.'
         if b.get('strength_role')=='primary':focus='Prioritize strength development: record actual load, clean repetitions and repetitions in reserve; progress only after tolerated completion. Cycling supports recovery and general aerobic fitness.'
         elif b.get('strength_purpose')=='cycling_support':focus+=' Secondary strength supports squat/hinge/core capacity around key rides.'
-        if recovery: phase='Recovery / review';focus='Reduce generated volume and review effort, soreness and completed sessions.'
+        if recovery: phase='Recovery / review';focus='Reduce hard interval demand: preserve base ride duration; omit VO₂, threshold and sprint intervals; review effort, soreness and completed sessions.'
         if target and start<=target<=start+timedelta(days=6): phase='Race week';focus='Keep surrounding sessions short and easy; protect the event day.'
         elif target and 0<(target-start).days<=14: phase='Freshen up';focus='Reduce generated volume approaching the event. Fixed commitments remain visible.'
         elif target and start>target: phase='Post-event recovery';focus='Easy activity or rest; review the event before another build.'
@@ -263,6 +263,8 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
     from .training import validate_answers
     patch=validate_answers(candidate_answers or {})
     context=_context(c,now,patch,{**b,'_planning_day':week_start.isoformat()},tz)
+    program=c.execute("SELECT state_json FROM active_training_program WHERE id=1 AND status='active'").fetchone()
+    policy=json.loads(program[0]).get('strength_set_policy',{}) if program else {}
     answers=context['answers'];questions=[];warnings=[]
     if answers.get('pain_or_illness'):questions.append('Resolve current pain or illness before approving training')
     if answers.get('restrictions_notes'):questions.append('Review training restrictions before approval')
@@ -297,7 +299,8 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
         replaceable=[w for w in existing if w['training_plan_id'] in replace_ids and w['completion_status']=='planned' and (datetime.fromisoformat(w['scheduled_for'])>=now or json.loads(w['definition_json']).get('time_unspecified') and datetime.fromisoformat(w['scheduled_for']).astimezone(ZoneInfo(tz)).date()>=today)]
         if any(w['garmin_workout_id'] or w['publish_status']!='local' for w in replaceable):raise ValueError('Published sessions cannot be replaced locally')
     excluded={w['id'] for w in replaceable}
-    active=[w for w in existing if w['id'] not in excluded]
+    from .training_accounting import counts_toward_plan
+    active=[w for w in existing if w['id'] not in excluded and counts_toward_plan(w,today,tz)]
     import statistics
     for event in b['fixed_events']:
         if event['duration_minutes'] is None and event.get('distance_km') and event['sport'] in ('cycling','running'):
@@ -447,7 +450,7 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                 minutes=min(minutes,session_ceiling)
                 if sport=='cycling':minutes=min(minutes,cycling_targets.get(slot['slot_id'],0))
                 if protected_day:minutes=min(minutes,30)
-                if reduced:minutes=min(minutes,30) if sport=='cycling' else round(minutes*.7)
+                if reduced and sport!='cycling':minutes=max(20,round(minutes*.7)) if sport=='strength' and minutes>=20 else round(minutes*.7)
                 if adverse_feedback: minutes=min(minutes,45)
                 # History-derived ceilings may contain fractional minutes. The
                 # template contract uses whole minutes; floor within that cap.
@@ -456,12 +459,21 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
                 definition=workout_definition(template,minutes,answers)
                 from .training_prescriptions import endurance, strength
                 if sport=='strength':
+                    from .training_notes import strength_budget
+                    required=strength_budget(context['training_notes'],b,policy,minutes)
+                    if required>minutes:definition=workout_definition(template,required,answers)
                     try:definition=strength(definition,{**b,'strength_performance':strength_performance},answers,week_index,tolerated,now)
                     except ValueError as error:questions.append(str(error));continue
+                    from .training_notes import apply_definition as apply_notes
+                    definition=apply_notes(definition,context['training_notes'],policy)
+                    minutes=definition['duration_minutes']
+                    if minutes>min(slot['minutes'],day_limit(schedule_days,day.weekday())-used_on(key),answers['weekly_minutes'][sport]-allocated[sport]):
+                        questions.append(f'{key}: the saved strength prescription needs {minutes:g} minutes; review availability or the weekly allowance.');continue
                 elif sport=='cycling':
                     kind='endurance'
                     if slot['slot_id']==long_slot_id and minutes>=60:kind='long_endurance'
-                    if reduced or protected_day:kind='recovery'
+                    if reduced:kind='endurance'
+                    if protected_day:kind='recovery'
                     from .cycling_variants import select
                     variant,variant_evidence=select(c,kind,today,tz,recovery_context['quality_allowed'] and not reduced)
                     definition=endurance(kind,minutes,b,sport,today=today,variant=variant)
@@ -497,6 +509,9 @@ def _preview(c,brief,week_start,tz,now,replace_plan_id,candidate_answers=None,se
             session['definition']=apply_definition(c,session['definition'],targets[str(i)],b,today,tz,focus,mix_evidence)
             session['title']=session['definition']['title']
     sessions.sort(key=lambda session:session['scheduled_for'])
+    from .training_notes import apply_definition as apply_training_notes
+    for session in sessions:
+        session['definition']=apply_training_notes(session['definition'],context['training_notes'],policy if session['sport']=='strength' else None)
     for index,session in enumerate(sessions):session['candidate_index']=index
     changes=session_changes or []
     if not isinstance(changes,list) or len(changes)>20:raise ValueError('Use at most twenty session changes')
@@ -647,6 +662,7 @@ def save_setup(answers,brief,expected_preference_revision,expected_brief_revisio
         from .training_ftp import resolve
         with connect(path) as ftp_connection:ftp=resolve(ftp_connection,now.date())
         b['ftp_watts']=ftp['watts'];b['calibration']['ftp_confirmed_on']=ftp['measurement_date'];b['calibration']['ftp_source']=ftp['source'] or 'Garmin cycling FTP'
+    updated_workouts=0
     with connect(path) as c:
         c.execute('BEGIN IMMEDIATE');current=_preferences(c)
         stored=c.execute('SELECT revision FROM training_coach_brief WHERE id=1').fetchone()
@@ -658,10 +674,14 @@ def save_setup(answers,brief,expected_preference_revision,expected_brief_revisio
             confirmed={**current['confirmed_at'],**{k:now.isoformat() for k in patch}};revision=current['revision']+1
             c.execute('INSERT INTO training_preferences(id,revision,answers_json,confirmed_json) VALUES(1,?,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,answers_json=excluded.answers_json,confirmed_json=excluded.confirmed_json',(revision,encoded(merged),encoded(confirmed)))
             c.execute('INSERT INTO training_preference_revisions(revision,answers_json,confirmed_json) VALUES(?,?,?)',(revision,encoded(merged),encoded(confirmed)))
+            if 'week_schedule' in patch:
+                from .workout_duration import sync_schedule
+                updated_workouts=sync_schedule(c,current['answers'],merged,now)
         _store_brief(c,b,expected_brief_revision+1)
     saved=read_brief(path)
     current=training_context_for_setup(path)
-    return {'status':'saved','message':'Training preferences, calibration and direction saved. No workout schedule has been activated.','brief':saved['brief'],'brief_revision':saved['revision'],'preferences':current,'next_action':'review_plan','schedule_activated':False}
+    message=(f'Training settings saved. Updated {updated_workouts} scheduled workouts and their time settings for future workouts in this plan. Published workouts need a Garmin update.' if updated_workouts else 'Training preferences, calibration and direction saved. No workout schedule has been activated.')
+    return {'status':'saved','message':message,'updated_workouts':updated_workouts,'brief':saved['brief'],'brief_revision':saved['revision'],'preferences':current,'next_action':'review_plan','schedule_activated':False}
 
 
 def approve(brief,week_start,tz,fingerprint,path=None,now=None,replace_plan_id=None,candidate_answers=None,session_changes=None):

@@ -3,13 +3,13 @@ import {api} from './GraphCanvas';
 import InfoPopover from './InfoPopover';
 
 type Nutrient='calories_kcal'|'protein_grams'|'carbohydrate_grams'|'fat_grams';
-type Intake={date:string;totals:Record<Nutrient,{known_total:number;missing_items:number}>;target:Record<Nutrient,number|null>|null};
+type Intake={date:string;totals:Record<Nutrient,{known_total:number;missing_items:number}>;meals:Array<{deleted_at:string|null;items:unknown[]}>;target:Record<Nutrient,number|null>|null};
 const macros=[['protein_grams','Protein'],['carbohydrate_grams','Carbs'],['fat_grams','Fat']] as const;
 const dayIn=(timezone:string)=>new Intl.DateTimeFormat('en-CA',{timeZone:timezone,year:'numeric',month:'2-digit',day:'2-digit'}).format(new Date());
 const amount=(value:number)=>new Intl.NumberFormat(undefined,{maximumFractionDigits:0}).format(value);
 const fraction=(value:number,target:number|null|undefined)=>target!=null&&target>0?Math.min(1,Math.max(0,value/target)):0;
 
-export default function DashboardNutrition({timezone,refresh,active}:{timezone:string;refresh?:string|number;active:boolean}) {
+export default function DashboardNutrition({timezone,refresh,active,compact=false}:{timezone:string;refresh?:string|number;active:boolean;compact?:boolean}) {
   const [day,setDay]=useState(()=>dayIn(timezone));
   const [revision,setRevision]=useState(0);
   const [data,setData]=useState<Intake|null>(null),[error,setError]=useState('');
@@ -31,6 +31,7 @@ export default function DashboardNutrition({timezone,refresh,active}:{timezone:s
   },[day,timezone,refresh,revision,active]);
   const calories=data?.totals.calories_kcal, target=data?.target?.calories_kcal;
   const hasTarget=target!=null&&target>0;
+  if(compact)return <section className="journal-nutrition" aria-label="Today’s nutrition"><div><h3>Nutrition</h3>{error?<p role="alert">{error} <button type="button" onClick={()=>setRevision(v=>v+1)}>Retry</button></p>:!data||data.date!==day?<p role="status">Loading food log…</p>:<><p>{!data.meals.some(meal=>!meal.deleted_at&&meal.items.length)?'No food logged today':`${calories?.missing_items?'At least ':''}${amount(calories?.known_total??0)} kcal logged`}</p>{data.meals.some(meal=>!meal.deleted_at&&meal.items.length)&&<small>{hasTarget?`Daily target ${amount(target)} kcal`:'No calorie target set'}{calories?.missing_items?' · partial total':''}</small>}</>}</div><a className="journal-text-action" href="#nutrition">Log meal</a></section>;
   return <section className="dashboard-nutrition" aria-labelledby="dashboard-nutrition-title">
     <div className="dashboard-nutrition-heading"><h2 id="dashboard-nutrition-title">Nutrition <InfoPopover title="Today's nutrition"><p>Today's logged food compared with your saved daily targets. The calorie bar ends at the calorie target; any excess is stated separately. Missing nutrient values make totals partial. Goals and the meal log use the same Nutrition data.</p></InfoPopover></h2><a href="#nutrition">Open meal log →</a></div>
     {error?<p role="alert">{error} <button type="button" onClick={()=>setRevision(value=>value+1)}>Retry</button></p>:!data||data.date!==day?<p role="status">Loading today’s nutrition…</p>:<>

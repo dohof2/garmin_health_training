@@ -29,7 +29,7 @@ def preferences():
 
 def rows():
     return [{'id':str(day),'scheduled_for':f'2026-10-{19+day:02d}T12:00:00+03:00',
-        'completion_status':'planned','publish_status':'published' if day==2 else 'local',
+        'completion_status':'completed' if day in (0,2) else 'planned','publish_status':'published' if day==2 else 'local',
         'garmin_workout_id':'remote-test' if day==2 else None,
         'definition_json':encoded({'duration_minutes':minutes,'workout_kind':'endurance',
             'planning_policy_version':'cycling-dose-v1'})}
@@ -44,7 +44,7 @@ class LongRideTargets(unittest.TestCase):
     def targets(self,workouts=None,other_rows=()):
         return _cycling_review_targets(workouts or rows(),self.answers,self.estimate,date(2026,10,22),TZ,other_rows)
 
-    def test_restore_friday_and_hour_weekday_reserving_past_published_ride(self):
+    def test_restore_friday_and_hour_weekday_reserving_completed_ride(self):
         targets,long_id,slots=self.targets()
         self.assertEqual(targets,{'4':84,'6':60})
         self.assertEqual(long_id,'4')
@@ -80,10 +80,10 @@ class LongRideTargets(unittest.TestCase):
         self.assertNotIn('4',targets)
         self.assertEqual(targets['6'],60)
 
-    def test_recovery_week_does_not_restore_long_dose(self):
+    def test_recovery_week_preserves_base_duration(self):
         self.estimate['progression']={'recovery_week':True}
         targets,_,_=self.targets()
-        self.assertTrue(all(minutes<=30 for minutes in targets.values()))
+        self.assertEqual(targets,{'4':84,'6':60})
 
     def test_insufficient_budget_omits_filler_instead_of_shortening_long_day(self):
         self.estimate['effective_ceiling_minutes']=222
@@ -161,15 +161,18 @@ class PersistedLongRideReview(unittest.TestCase):
         result=self.run_review()
         friday=next(row for row in result['workouts'] if row['scheduled_for'][:10]=='2026-10-23')
         sunday=next(row for row in result['workouts'] if row['scheduled_for'][:10]=='2026-10-25')
-        self.assertEqual(friday['definition']['duration_minutes'],84)
+        self.assertEqual(friday['definition']['duration_minutes'],132)
         self.assertEqual(friday['definition']['workout_kind'],'long_endurance')
         self.assertEqual(sunday['definition']['duration_minutes'],60)
         self.assertEqual(friday['definition']['duration_guidance']['weekly_reference']['as_of'],'2026-10-19')
-        self.assertEqual(sum(step['duration_seconds']*step.get('repetitions',1) for step in friday['definition']['steps']),84*60)
+        self.assertEqual(sum(step['duration_seconds']*step.get('repetitions',1) for step in friday['definition']['steps']),132*60)
         with connect(self.path) as connection:
-            self.assertEqual(_snapshot(connection,self.published_id),self.published)
+            missed=_snapshot(connection,self.published_id)
+            self.assertEqual(missed['completion_status'],'missed')
+            for key in ('garmin_workout_id','publish_status','definition_json','scheduled_for'):
+                self.assertEqual(missed[key],self.published[key])
             rides=[row for row in _program_workouts(connection,self.root) if row['sport']=='cycling' and row['scheduled_for'][:10]<'2026-10-26' and row['completion_status']=='planned']
-            self.assertEqual(sum(json.loads(row['definition_json'])['duration_minutes'] for row in rides),264)
+            self.assertEqual(sum(json.loads(row['definition_json'])['duration_minutes'] for row in rides),192)
         again=self.run_review()
         self.assertEqual([(row['id'],row['revision']) for row in result['workouts']],[(row['id'],row['revision']) for row in again['workouts']])
 
@@ -178,7 +181,7 @@ class PersistedLongRideReview(unittest.TestCase):
         friday=next(row for row in result['workouts'] if row['scheduled_for'][:10]=='2026-10-23')
         self.assertEqual(friday['definition']['duration_minutes'],60)
         guidance=friday['definition']['duration_guidance']
-        self.assertEqual(guidance['allocated_minutes'],84)
+        self.assertEqual(guidance['allocated_minutes'],132)
         self.assertEqual(guidance['recovery_adjustment']['reasons'],['Recovery concern'])
 
     def test_future_friday_keeps_long_kind_and_slot_through_volume_reconciliation(self):
